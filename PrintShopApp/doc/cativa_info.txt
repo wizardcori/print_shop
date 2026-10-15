@@ -1,0 +1,8 @@
+Windows 기본 Mobile Hotspot에서는 완전한 개방 Wi‑Fi를 지원하지 않습니다. WinRT API의 Passphrase는 8~63자의 비밀번호가 필수입니다. Microsoft 문서
+
+따라서 현재 구조에서 가능한 방식은:
+
+Wi‑Fi: WPA2 비밀번호로 접속
+접속 후 captive portal에서 인터넷 사용 인증
+linkshare_app.py의 DNS/HTTP 리다이렉트로 /scan 표시
+진짜 “비밀번호 없는 개방 Wi‑Fi + captive 인증”을 사용하려면 Windows Mobile Hotspot 대신 공유기 또는 Linux hostapd/dnsmasq 기반 AP가 필요합니다.
