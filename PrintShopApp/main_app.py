@@ -22,6 +22,7 @@ import hashlib
 import sqlite3
 import re
 import filecmp
+from create_admin_shortcut import set_startup_registration
 from db import AppDatabase
 try:
     import winsound
@@ -292,6 +293,7 @@ def load_app_settings():
         'hotspot_network': config.get('Network', 'hotspot_network', fallback=DEFAULT_HOTSPOT_NETWORK),
         'hotspot_gateway': config.get('Network', 'hotspot_gateway', fallback=DEFAULT_HOTSPOT_GATEWAY),
         'linkshare_splitter_sizes': linkshare_splitter_sizes,
+        'startup_enabled': config.getboolean('Settings', 'startup_enabled', fallback=False),
     }
 
 
@@ -306,6 +308,7 @@ def save_app_settings(settings):
             config.add_section(section)
 
     config.set('Settings', 'hotspot_ssid', settings.get('ssid', DEFAULT_HOTSPOT_SSID))
+    config.set('Settings', 'startup_enabled', str(bool(settings.get('startup_enabled', False))))
     config.set('Settings', 'hotspot_password', settings.get('hotspot_password', DEFAULT_HOTSPOT_PASSWORD))
     config.set(
         'Settings', 'hotspot_password_user_set',
@@ -696,6 +699,7 @@ web_app = Flask(__name__, template_folder=os.path.join(resource_linkshare_path, 
 shared_sessions = {}
 client_identity_map = {}
 client_metadata_map = {}
+session_identity_lock = threading.RLock()
 usage_history = []
 status_condition = threading.Condition()
 runtime_settings = {'max_connections': DEFAULT_MAX_CONNECTIONS, 'internet_fares': DEFAULT_INTERNET_FARES}
@@ -713,12 +717,25 @@ def get_client_identity():
         token = secrets.token_urlsafe(24)
     token_id = hashlib.sha256(token.encode('utf-8')).hexdigest()
     client_ip = request.remote_addr or '-'
-    previous_ip = client_identity_map.get(token_id)
-    if previous_ip and previous_ip != client_ip and previous_ip in shared_sessions:
-        session = shared_sessions.pop(previous_ip)
-        session['client_ip'] = client_ip
-        shared_sessions[client_ip] = session
-    client_identity_map[token_id] = client_ip
+    with session_identity_lock:
+        previous_ip = client_identity_map.get(token_id)
+        if not previous_ip:
+            for candidate_ip, candidate in shared_sessions.items():
+                if candidate.get('client_token_id') == token_id:
+                    previous_ip = candidate_ip
+                    break
+        if previous_ip and previous_ip != client_ip and previous_ip in shared_sessions:
+            session = shared_sessions.pop(previous_ip)
+            existing = shared_sessions.get(client_ip)
+            if existing and existing.get('client_token_id') == token_id:
+                # Prefer the newer record while preserving the active timer.
+                if str(session.get('last_seen', '')) > str(existing.get('last_seen', '')):
+                    existing.update(session)
+                existing['client_ip'] = client_ip
+            else:
+                session['client_ip'] = client_ip
+                shared_sessions[client_ip] = session
+        client_identity_map[token_id] = client_ip
     user_agent = (request.headers.get('User-Agent') or '').strip()[:500]
     if 'Android' in user_agent:
         device_type, operating_system = 'Mobile', 'Android'
@@ -1216,7 +1233,7 @@ class IntegratedSettingsDialog(QDialog):
                  current_internet_nic, current_hotspot_nic, current_hotspot_image,
                  current_hotspot_network, current_hotspot_gateway, current_max_connections,
                  current_windows_hotspot_limit, approval_sound_enabled,
-                 approval_sounds, approval_sound_dir, parent=None):
+                 approval_sounds, approval_sound_dir, startup_enabled=False, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Integrated Environment Settings")
         self.resize(520, 650)
@@ -1240,6 +1257,10 @@ class IntegratedSettingsDialog(QDialog):
         self.ssid_input.setMaxLength(32)
         self.ssid_input.setPlaceholderText(DEFAULT_HOTSPOT_SSID)
         layout.addWidget(self.ssid_input)
+        self.startup_checkbox = QCheckBox("Windows 시작프로그램에 자동 등록")
+        self.startup_checkbox.setChecked(startup_enabled)
+        self.startup_checkbox.setToolTip("Windows 로그인 시 PrintShopApp을 자동으로 관리자 권한 실행합니다.")
+        layout.addWidget(self.startup_checkbox)
 
         layout.addWidget(QLabel("<b>🔒 Hotspot password:</b>"))
         password_layout = QHBoxLayout()
@@ -1372,10 +1393,10 @@ class IntegratedSettingsDialog(QDialog):
         # Keep both adapter selectors together on the Network tab.
         # Item ranges: hotspot identity/limits/range (0:14), NICs (14:18),
         # image/log storage (18:22), and table/zone controls (22:).
-        append_settings_items(category_layouts["핫스팟"], general_items[0:14])
-        append_settings_items(category_layouts["네트워크"], general_items[14:18])
-        append_settings_items(category_layouts["저장/표시"], general_items[18:22])
-        append_settings_items(category_layouts["테이블·구역"], general_items[22:])
+        append_settings_items(category_layouts["핫스팟"], general_items[0:15])
+        append_settings_items(category_layouts["네트워크"], general_items[15:19])
+        append_settings_items(category_layouts["저장/표시"], general_items[19:23])
+        append_settings_items(category_layouts["테이블·구역"], general_items[23:])
         for tab_title, category_layout in category_layouts.items():
             category_layout.insertWidget(0, QLabel(f"<h3>{tab_title} 설정</h3>"))
             category_layout.addStretch()
@@ -1581,6 +1602,9 @@ class IntegratedSettingsDialog(QDialog):
         ssid = self.ssid_input.text().strip()
         return ssid or DEFAULT_HOTSPOT_SSID
 
+    def get_startup_enabled(self):
+        return self.startup_checkbox.isChecked()
+
     def get_hotspot_password(self):
         password = self.password_input.text().strip()
         return password or DEFAULT_HOTSPOT_PASSWORD
@@ -1650,6 +1674,16 @@ class IntegratedSettingsDialog(QDialog):
         else:
             QMessageBox.warning(self, "Windows limit not applied", message)
 
+def is_running_as_administrator():
+    """Return the actual Windows elevation state of this process."""
+    if os.name != 'nt':
+        return False
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except (AttributeError, OSError):
+        return False
+
+
 # --- Main Application Window ---
 class IntegratedManagerApp(QMainWindow):
     file_signal = Signal(list, str, str)
@@ -1659,7 +1693,8 @@ class IntegratedManagerApp(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("PrintShop Integrated Manager (HTTPS)")
+        privilege_label = "관리자 권한" if is_running_as_administrator() else "일반 권한"
+        self.setWindowTitle(f"PrintShop Integrated Manager (HTTPS) - {privilege_label}")
 
         app_settings = load_app_settings()
         detected_hotspot_info = get_current_hotspot_wifi_info()
@@ -1691,6 +1726,7 @@ class IntegratedManagerApp(QMainWindow):
             'expiration_check_interval', DEFAULT_EXPIRATION_CHECK_INTERVAL
         )
         self.windows_hotspot_limit = app_settings['windows_hotspot_limit']
+        self.startup_enabled = app_settings.get('startup_enabled', False)
         self.approval_sound_enabled = app_settings.get('approval_sound_enabled', DEFAULT_APPROVAL_SOUND_ENABLED)
         self.approval_sounds = app_settings.get('approval_sounds', DEFAULT_APPROVAL_SOUNDS)
         self.approval_sound_index = 0
@@ -1784,7 +1820,20 @@ class IntegratedManagerApp(QMainWindow):
 
     @Slot(object, object)
     def apply_database_state(self, sessions, history):
-        shared_sessions.update(sessions)
+        with session_identity_lock:
+            for client_ip, session in sessions.items():
+                token_id = session.get('client_token_id')
+                if token_id:
+                    duplicate_ip = next(
+                        (ip for ip, current in shared_sessions.items()
+                         if current.get('client_token_id') == token_id and ip != client_ip),
+                        None,
+                    )
+                    if duplicate_ip:
+                        current = shared_sessions.pop(duplicate_ip)
+                        if str(current.get('last_seen', '')) > str(session.get('last_seen', '')):
+                            session.update(current)
+                shared_sessions[client_ip] = session
         usage_history.extend(history)
         for client_ip, session in sessions.items():
             token_id = session.get('client_token_id')
@@ -1887,7 +1936,7 @@ class IntegratedManagerApp(QMainWindow):
             self.internet_nic['display'], self.hotspot_nic['display'], self.hotspot_image_path,
             self.hotspot_network, self.hotspot_gateway, self.max_connections,
             self.windows_hotspot_limit, self.approval_sound_enabled,
-            self.approval_sounds, approval_sound_dir, self
+            self.approval_sounds, approval_sound_dir, self.startup_enabled, self
         )
         if dialog.exec() == QDialog.Accepted:
             DEFAULT_ZONES = dialog.zones
@@ -1911,6 +1960,11 @@ class IntegratedManagerApp(QMainWindow):
             self.windows_hotspot_limit = dialog.get_windows_hotspot_limit()
             self.approval_sound_enabled = dialog.get_approval_sound_enabled()
             self.approval_sounds = dialog.get_approval_sounds()
+            self.startup_enabled = dialog.get_startup_enabled()
+            try:
+                set_startup_registration(application_dir, self.startup_enabled)
+            except (OSError, RuntimeError) as exc:
+                QMessageBox.warning(self, "시작프로그램 등록 실패", str(exc))
             runtime_settings['internet_fares'] = dialog.get_internet_fares()
             runtime_settings['max_connections'] = self.max_connections
 
@@ -2045,19 +2099,42 @@ class IntegratedManagerApp(QMainWindow):
         if not hasattr(self, 'usage_history_tables'):
             return
 
+        def deduplicate_events(records):
+            unique = {}
+            for record in records:
+                identity = record.get('client_token_id') or f"ip:{record.get('client_ip', '-')}"
+                event_key = (
+                    identity,
+                    record.get('log_type', ''),
+                    record.get('request_time', ''),
+                    record.get('approval_time', ''),
+                    record.get('completed_time', ''),
+                    record.get('requested_minutes', ''),
+                    record.get('usage_approval', ''),
+                )
+                unique[event_key] = record
+            return list(unique.values())
+
+        request_records = deduplicate_events(
+            [record for record in usage_history if record.get('log_type') == 'request']
+        )
+        approval_records = deduplicate_events(
+            [record for record in usage_history if record.get('log_type') == 'approval']
+        )
+
         table_records = {
             '연결상태': (usage_history, [
-                'connection_status', 'request_time', 'start_time', 'end_time', 'remaining', 'client_ip', 'user_info'
+                'connection_status', 'request_time', 'start_time', 'end_time', 'remaining', 'client_ip', 'client_token_id', 'user_info'
             ]),
-            '사용요청': ([record for record in usage_history if record.get('log_type') == 'request'], [
-                'usage_request', 'request_time', 'client_ip', 'user_info'
+            '사용요청': (request_records, [
+                'usage_request', 'request_time', 'client_ip', 'client_token_id', 'user_info'
             ]),
             '사용허가': (
-                [record for record in usage_history if record.get('log_type') == 'approval'],
-                ['usage_approval', 'approval_time', 'requested_time', 'client_ip', 'user_info']
+                approval_records,
+                ['usage_approval', 'approval_time', 'requested_time', 'client_ip', 'client_token_id', 'user_info']
             ),
         }
-        history_records = list(reversed(usage_history))
+        history_records = list(reversed(deduplicate_events(usage_history)))
         if hasattr(self, 'usage_history_filter'):
             filter_name = self.usage_history_filter.currentText()
             today = datetime.date.today()
@@ -2095,24 +2172,30 @@ class IntegratedManagerApp(QMainWindow):
                 f'사용시간 누적: {total_minutes}분                         금액 누적: {total_amount:g} PHP'
             )
         table_records['사용내역'] = (approved_history, [
-            'request_time', 'approval_time', 'requested_time', 'requested_price', 'user_info'
+            'request_time', 'approval_time', 'requested_time', 'requested_price', 'client_token_id', 'user_info'
         ])
         connection_tab_name = next(iter(table_records))
         latest_by_client = {}
         requested_seconds_by_client = {}
         for record in usage_history:
             client_ip = record.get('client_ip', '-')
-            latest_by_client[client_ip] = record
+            identity_key = record.get('client_token_id') or f'ip:{client_ip}'
+            previous = latest_by_client.get(identity_key)
+            if previous is None or str(record.get('last_seen', record.get('request_time', ''))) >= str(
+                previous.get('last_seen', previous.get('request_time', ''))
+            ):
+                latest_by_client[identity_key] = record
             if record.get('log_type') == 'request':
                 requested_seconds_by_client[client_ip] = requested_seconds_by_client.get(client_ip, 0) + (
                     int(record.get('requested_minutes', 0)) * 60
                 )
         for client_ip, session in shared_sessions.items():
-            latest_by_client[client_ip] = session
+            identity_key = session.get('client_token_id') or f'ip:{client_ip}'
+            latest_by_client[identity_key] = session
         table_records[connection_tab_name] = (
             list(latest_by_client.values()),
             ['connection_status', 'usage_approval', 'internet_status',
-             'request_time', 'start_time', 'end_time', 'total_requested', 'remaining', 'client_ip', 'user_info']
+             'request_time', 'start_time', 'end_time', 'total_requested', 'remaining', 'client_ip', 'client_token_id', 'user_info']
         )
 
         for tab_name, (records, fields) in table_records.items():
@@ -2157,6 +2240,7 @@ class IntegratedManagerApp(QMainWindow):
                     'total_requested': total_requested_text,
                     'remaining': remaining_text,
                     'client_ip': record.get('client_ip', '-'),
+                    'client_token_id': record.get('client_token_id', '-') or '-',
                 }
                 for column, field in enumerate(fields):
                     table.setItem(row, column, QTableWidgetItem(str(values[field])))
@@ -2284,6 +2368,7 @@ class IntegratedManagerApp(QMainWindow):
             'qr_output_scales': self.qr_output_scales,
             'qr_output_dirs': self.qr_output_dirs,
             'windows_hotspot_limit': self.windows_hotspot_limit,
+            'startup_enabled': self.startup_enabled,
             'linkshare_splitter_sizes': self.linkshare_splitter_sizes,
         })
 

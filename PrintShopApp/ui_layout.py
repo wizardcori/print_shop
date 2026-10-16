@@ -404,7 +404,7 @@ def setup_integrated_ui(window, current_upload_folder, current_zones, current_sa
     approval_tab_name = list(usage_tabs)[2]
     usage_tabs[approval_tab_name] = ["사용허가", "승인시간", "요청사용시간", "IP 주소"]
     for tab_name, headers in usage_tabs.items():
-        headers = headers + ["사용자정보"]
+        headers = headers + ["쿠키", "사용자정보"]
         usage_tab = QWidget()
         usage_tab_layout = QVBoxLayout(usage_tab)
         table = QTableWidget(0, len(headers))
@@ -437,8 +437,8 @@ def setup_integrated_ui(window, current_upload_folder, current_zones, current_sa
     history_layout.addLayout(history_filter_layout)
     window.usage_history_total_label = QLabel("사용시간 누적: 0분                         금액 누적: 0 PHP")
     history_layout.addWidget(window.usage_history_total_label)
-    history_table = QTableWidget(0, 5)
-    history_table.setHorizontalHeaderLabels(["요청시간", "승인시간", "사용시간", "금액", "사용자정보"])
+    history_table = QTableWidget(0, 6)
+    history_table.setHorizontalHeaderLabels(["요청시간", "승인시간", "사용시간", "금액", "쿠키", "사용자정보"])
     history_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
     history_table.horizontalHeader().setStretchLastSection(True)
     history_table.setEditTriggers(QTableWidget.NoEditTriggers)

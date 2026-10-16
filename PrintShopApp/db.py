@@ -33,11 +33,18 @@ class AppDatabase:
                     event_time TEXT NOT NULL,
                     log_type TEXT,
                     client_ip TEXT,
+                    client_token_id TEXT,
                     data_json TEXT NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_usage_events_id ON usage_events(id);
                 CREATE INDEX IF NOT EXISTS idx_usage_events_client_ip ON usage_events(client_ip);
             ''')
+            columns = {
+                row['name']
+                for row in connection.execute('PRAGMA table_info(usage_events)')
+            }
+            if 'client_token_id' not in columns:
+                connection.execute('ALTER TABLE usage_events ADD COLUMN client_token_id TEXT')
 
     def load(self):
         with self._lock, self._connect() as connection:
@@ -75,9 +82,9 @@ class AppDatabase:
     def save_event(self, record):
         with self._lock, self._connect() as connection:
             connection.execute(
-                'INSERT INTO usage_events(event_time, log_type, client_ip, data_json) VALUES (?, ?, ?, ?)',
+                'INSERT INTO usage_events(event_time, log_type, client_ip, client_token_id, data_json) VALUES (?, ?, ?, ?, ?)',
                 (str(record.get('request_time') or record.get('approval_time') or ''),
-                 record.get('log_type'), record.get('client_ip'),
+                 record.get('log_type'), record.get('client_ip'), record.get('client_token_id'),
                  json.dumps(record, ensure_ascii=False)),
             )
 

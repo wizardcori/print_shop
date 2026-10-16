@@ -2,12 +2,26 @@
 chcp 65001 > nul
 title PrintShopApp Runner
 
+rem Always run the application elevated.  The shortcut already contains the
+rem RunAs flag, but this also covers direct execution of run.bat.
+fltmc >nul 2>&1
+if errorlevel 1 (
+    echo [INFO] Administrator permission is required. Requesting UAC approval...
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%ComSpec%' -Verb RunAs -ArgumentList '/c ""%~f0""'"
+    exit /b
+)
+
 echo ===================================================
 echo   Starting PrintShopApp...
 echo ===================================================
 echo.
 
 cd /d "%~dp0"
+if exist ".venv\Scripts\python.exe" (
+    ".venv\Scripts\python.exe" "%~dp0create_admin_shortcut.py"
+) else if exist "main_app.exe" (
+    powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& { $p = Join-Path '%~dp0' 'create_admin_shortcut.py'; if (Get-Command py -ErrorAction SilentlyContinue) { py $p } }"
+)
 if exist "main_app.exe" goto run_exe
 set "PYTHON_EXE=.venv\Scripts\python.exe"
 if not exist "%PYTHON_EXE%" goto missing_venv
