@@ -39,11 +39,11 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QLineEdit, QPushButton, 
     QTableWidget, QTableWidgetItem, QComboBox, QMessageBox, QFileDialog,
     QCheckBox, QMenu, QDialog, QListWidget, QTabWidget, QGridLayout, QSpinBox,
-    QRadioButton, QButtonGroup
+    QRadioButton, QButtonGroup, QDateEdit
 )
 from PySide6.QtGui import QPixmap, QImage, QColor, QAction, QPainter, QFont, QFontMetrics, QPageSize
 from PySide6.QtPrintSupport import QPrinter, QPrintDialog
-from PySide6.QtCore import Qt, QThread, Signal, Slot, QTimer, QObject
+from PySide6.QtCore import Qt, QThread, Signal, Slot, QTimer, QObject, QDate
 
 # --- Path and Subfolder Integration ---
 # Source mode uses the project folder.  Frozen deployments use the executable
@@ -112,6 +112,22 @@ if not wifi_logger.handlers:
 DEFAULT_UPLOAD_FOLDER = os.path.join(data_dir, "LinkBox_Files")
 os.makedirs(DEFAULT_UPLOAD_FOLDER, exist_ok=True)
 
+
+def format_size(size_bytes):
+    """Format a received file size for the file-transfer table."""
+    if size_bytes < 1024:
+        return f"{size_bytes} Bytes"
+    if size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    return f"{size_bytes / (1024 * 1024):.1f} MB"
+
+
+def safe_folder_part(value, fallback='Unknown'):
+    """Make a user-controlled value safe and readable in a Windows path."""
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', str(value or '').strip())
+    cleaned = cleaned.rstrip('. ')
+    return cleaned[:80] or fallback
+
 DEFAULT_ZONES = ["Counter", "Table01", "Table02", "VIP_Room"]
 DEFAULT_SAVE_TABS = ["DefaultTab"]
 DEFAULT_ACTIVE_MAIN_TAB = "file_receiver"
@@ -123,12 +139,14 @@ DEFAULT_MAX_CONNECTIONS = 250
 DEFAULT_WINDOWS_HOTSPOT_LIMIT = 8
 DEFAULT_STATUS_POLL_INTERVAL = 60.0
 DEFAULT_EXPIRATION_CHECK_INTERVAL = 60
+DEFAULT_FILE_TRANSFER_MINUTES = 10
 DEFAULT_INTERNET_FARES = [
     {'minutes': 30, 'price': 5}, {'minutes': 60, 'price': 10},
     {'minutes': 90, 'price': 15}, {'minutes': 120, 'price': 20},
     {'minutes': 180, 'price': 30}, {'minutes': 240, 'price': 40},
     {'minutes': 480, 'price': 80},
 ]
+DEFAULT_COLOR_OPTIONS = ['Color', 'B&W']
 DEFAULT_APPROVAL_SOUND_ENABLED = True
 DEFAULT_APPROVAL_SOUNDS = ['', '', '', '', '']
 DEFAULT_QR_OUTPUT_FORMAT = 'PDF'
@@ -222,6 +240,12 @@ def load_app_settings():
     except ValueError:
         expiration_check_interval = DEFAULT_EXPIRATION_CHECK_INTERVAL
     try:
+        file_transfer_minutes = max(5, min(15, config.getint(
+            'Settings', 'file_transfer_minutes', fallback=DEFAULT_FILE_TRANSFER_MINUTES
+        )))
+    except ValueError:
+        file_transfer_minutes = DEFAULT_FILE_TRANSFER_MINUTES
+    try:
         internet_fares = json.loads(config.get('Settings', 'internet_fares', fallback=''))
         if not isinstance(internet_fares, list) or not internet_fares:
             internet_fares = DEFAULT_INTERNET_FARES
@@ -231,6 +255,12 @@ def load_app_settings():
         ] or DEFAULT_INTERNET_FARES
     except (TypeError, ValueError, KeyError, json.JSONDecodeError):
         internet_fares = DEFAULT_INTERNET_FARES
+    try:
+        color_options = [str(item).strip() for item in json.loads(
+            config.get('Settings', 'color_options', fallback='["Color", "B&W"]')
+        ) if str(item).strip()] or DEFAULT_COLOR_OPTIONS
+    except (TypeError, ValueError, json.JSONDecodeError):
+        color_options = DEFAULT_COLOR_OPTIONS
     approval_sounds = [
         config.get('Settings', f'approval_sound_{index}', fallback=DEFAULT_APPROVAL_SOUNDS[index - 1])
         for index in range(1, 6)
@@ -257,6 +287,33 @@ def load_app_settings():
         linkshare_splitter_sizes = [max(100, int(size)) for size in linkshare_splitter_sizes]
     except (TypeError, ValueError, json.JSONDecodeError):
         linkshare_splitter_sizes = [520, 260]
+    try:
+        file_receiver_splitter_sizes = json.loads(
+            config.get('Settings', 'file_receiver_splitter_sizes', fallback='[520, 420]')
+        )
+        if not isinstance(file_receiver_splitter_sizes, list) or len(file_receiver_splitter_sizes) != 2:
+            raise ValueError
+        file_receiver_splitter_sizes = [max(200, int(size)) for size in file_receiver_splitter_sizes]
+    except (TypeError, ValueError, json.JSONDecodeError):
+        file_receiver_splitter_sizes = [520, 420]
+    try:
+        main_splitter_sizes = json.loads(
+            config.get('Settings', 'main_splitter_sizes', fallback='[520, 420]')
+        )
+        if not isinstance(main_splitter_sizes, list) or len(main_splitter_sizes) != 2:
+            raise ValueError
+        main_splitter_sizes = [max(200, int(size)) for size in main_splitter_sizes]
+    except (TypeError, ValueError, json.JSONDecodeError):
+        main_splitter_sizes = [520, 420]
+    try:
+        qr_location_splitter_sizes = json.loads(
+            config.get('Settings', 'qr_location_splitter_sizes', fallback='[260, 520]')
+        )
+        if not isinstance(qr_location_splitter_sizes, list) or len(qr_location_splitter_sizes) != 2:
+            raise ValueError
+        qr_location_splitter_sizes = [max(180, int(size)) for size in qr_location_splitter_sizes]
+    except (TypeError, ValueError, json.JSONDecodeError):
+        qr_location_splitter_sizes = [260, 520]
 
     saved_ssid = config.get('Settings', 'hotspot_ssid', fallback=DEFAULT_HOTSPOT_SSID).strip()
     # Migrate the former built-in default without altering other user-defined SSIDs.
@@ -274,7 +331,12 @@ def load_app_settings():
         'windows_hotspot_limit': windows_hotspot_limit,
         'status_poll_interval': status_poll_interval,
         'expiration_check_interval': expiration_check_interval,
+        'file_transfer_minutes': file_transfer_minutes,
+        'provide_internet_for_file_transfer': config.getboolean(
+            'Settings', 'provide_internet_for_file_transfer', fallback=True
+        ),
         'internet_fares': internet_fares,
+        'color_options': color_options,
         'approval_sound_enabled': config.getboolean(
             'Settings', 'approval_sound_enabled', fallback=DEFAULT_APPROVAL_SOUND_ENABLED
         ),
@@ -293,6 +355,9 @@ def load_app_settings():
         'hotspot_network': config.get('Network', 'hotspot_network', fallback=DEFAULT_HOTSPOT_NETWORK),
         'hotspot_gateway': config.get('Network', 'hotspot_gateway', fallback=DEFAULT_HOTSPOT_GATEWAY),
         'linkshare_splitter_sizes': linkshare_splitter_sizes,
+        'file_receiver_splitter_sizes': file_receiver_splitter_sizes,
+        'main_splitter_sizes': main_splitter_sizes,
+        'qr_location_splitter_sizes': qr_location_splitter_sizes,
         'startup_enabled': config.getboolean('Settings', 'startup_enabled', fallback=False),
     }
 
@@ -328,9 +393,17 @@ def save_app_settings(settings):
     config.set('Settings', 'expiration_check_interval', str(max(
         30, min(300, int(settings.get('expiration_check_interval', DEFAULT_EXPIRATION_CHECK_INTERVAL)))
     )))
+    config.set('Settings', 'file_transfer_minutes', str(max(
+        5, min(15, int(settings.get('file_transfer_minutes', DEFAULT_FILE_TRANSFER_MINUTES)))
+    )))
+    config.set('Settings', 'provide_internet_for_file_transfer', str(bool(
+        settings.get('provide_internet_for_file_transfer', True)
+    )))
     config.set('Settings', 'internet_fares', json.dumps(
         settings.get('internet_fares', DEFAULT_INTERNET_FARES), ensure_ascii=False
     ))
+    color_options = [str(item).strip() for item in settings.get('color_options', DEFAULT_COLOR_OPTIONS) if str(item).strip()]
+    config.set('Settings', 'color_options', json.dumps(color_options or DEFAULT_COLOR_OPTIONS, ensure_ascii=False))
     config.set('Settings', 'approval_sound_enabled', str(bool(
         settings.get('approval_sound_enabled', DEFAULT_APPROVAL_SOUND_ENABLED)
     )))
@@ -352,6 +425,18 @@ def save_app_settings(settings):
         config.set('Settings', f'{qr_type}_qr_output_dir', qr_dirs.get(qr_type, DEFAULT_QR_OUTPUT_DIR))
     splitter_sizes = settings.get('linkshare_splitter_sizes', [520, 260])
     config.set('Settings', 'linkshare_splitter_sizes', json.dumps([int(size) for size in splitter_sizes]))
+    file_receiver_splitter_sizes = settings.get('file_receiver_splitter_sizes', [520, 420])
+    config.set('Settings', 'file_receiver_splitter_sizes', json.dumps(
+        [max(200, int(size)) for size in file_receiver_splitter_sizes]
+    ))
+    main_splitter_sizes = settings.get('main_splitter_sizes', [520, 420])
+    config.set('Settings', 'main_splitter_sizes', json.dumps(
+        [max(200, int(size)) for size in main_splitter_sizes]
+    ))
+    qr_location_splitter_sizes = settings.get('qr_location_splitter_sizes', [260, 520])
+    config.set('Settings', 'qr_location_splitter_sizes', json.dumps(
+        [max(180, int(size)) for size in qr_location_splitter_sizes]
+    ))
     config.set('Network', 'internet_nic', settings.get('internet_nic', ''))
     config.set('Network', 'internet_ip', settings.get('internet_ip', ''))
     config.set('Network', 'hotspot_nic', settings.get('hotspot_nic', ''))
@@ -702,7 +787,11 @@ client_metadata_map = {}
 session_identity_lock = threading.RLock()
 usage_history = []
 status_condition = threading.Condition()
-runtime_settings = {'max_connections': DEFAULT_MAX_CONNECTIONS, 'internet_fares': DEFAULT_INTERNET_FARES}
+runtime_settings = {
+    'max_connections': DEFAULT_MAX_CONNECTIONS,
+    'internet_fares': DEFAULT_INTERNET_FARES,
+    'color_options': DEFAULT_COLOR_OPTIONS,
+}
 _upstream_dns_cache = {'timestamp': 0.0, 'servers': []}
 CLIENT_COOKIE_NAME = 'printshop_client_token'
 def get_client_identity():
@@ -758,6 +847,7 @@ def get_client_identity():
     else:
         browser = 'Unknown'
     client_metadata_map[token_id] = {
+        'user_name': (request.headers.get('X-Client-Name') or '').strip()[:80],
         'device_name': (request.headers.get('X-Client-Device') or '').strip()[:120],
         'device_type': device_type,
         'operating_system': operating_system,
@@ -971,8 +1061,16 @@ class CaptivePortalDNSServer(socketserver.ThreadingUDPServer):
 
 class ServerSignals(QObject):
     approval_requested = Signal(str, int, str)
+    transfer_updated = Signal(str, str, int, str)
 
 signals = ServerSignals()
+file_transfer_callback = None
+transfer_records_by_client = {}
+transfer_records_lock = threading.RLock()
+transfer_change_versions = {}
+transfer_ack_versions = {}
+transfer_change_condition = threading.Condition(transfer_records_lock)
+processed_uploads = {}
 
 @web_app.route('/')
 def portal_root():
@@ -1019,7 +1117,206 @@ def app_icon():
 
 @web_app.route('/file_share')
 def file_share_page():
-    return render_template('file_share.html')
+    zone = request.args.get('zone', 'Default')
+    return render_template(
+        'file_share.html', zone=zone,
+        color_options=runtime_settings.get('color_options', DEFAULT_COLOR_OPTIONS)
+    )
+
+
+@web_app.route('/upload', methods=['POST'])
+def file_share_upload():
+    zone = request.args.get('zone', 'Default')
+    files = [item for item in request.files.getlist('file') if item and item.filename]
+    if not files:
+        return {'error': 'No files selected'}, 400
+    try:
+        requested_copies = json.loads(request.form.get('copies', '[]'))
+        if not isinstance(requested_copies, list):
+            requested_copies = []
+    except (TypeError, ValueError, json.JSONDecodeError):
+        requested_copies = []
+    try:
+        requested_colors = json.loads(request.form.get('colors', '[]'))
+        if not isinstance(requested_colors, list):
+            requested_colors = []
+    except (TypeError, ValueError, json.JSONDecodeError):
+        requested_colors = []
+    token, token_id, client_ip, device_name = get_client_identity()
+    upload_id = (request.headers.get('X-Upload-Id') or '').strip()[:100]
+    if upload_id:
+        with transfer_records_lock:
+            previous = processed_uploads.get((token_id, upload_id))
+        if previous is not None:
+            response = make_response(previous['payload'], previous['status'])
+            response.set_cookie(CLIENT_COOKIE_NAME, token, max_age=60 * 60 * 24 * 30,
+                                httponly=True, samesite='Lax')
+            return response
+    metadata = client_metadata_map.get(token_id, {})
+    user_name = metadata.get('user_name', '').strip() or device_name or 'Guest'
+    user_info = ' / '.join(filter(None, [
+        metadata.get('device_type'), metadata.get('operating_system'),
+        metadata.get('browser'), metadata.get('device_name'),
+    ])) or 'Unknown'
+    cookie_id = token_id[:12]
+    transfer_id = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
+    safe_zone = safe_folder_part(zone, 'Default')
+    safe_user = safe_folder_part(user_name, 'Guest')
+    safe_ip = safe_folder_part(client_ip, 'UnknownIP')
+    safe_identity = re.sub(r'[^A-Za-z0-9_.-]', '_', token_id or client_ip)
+    target_folder = os.path.join(
+        DEFAULT_UPLOAD_FOLDER,
+        f'{safe_zone}_{safe_user}_{safe_ip}_{transfer_id}'
+    )
+    os.makedirs(target_folder, exist_ok=True)
+    received = []
+    client_transfer_records = []
+    failed_count = 0
+    for index, uploaded in enumerate(files):
+        try:
+            copy_count = max(1, min(999, int(requested_copies[index])))
+        except (IndexError, TypeError, ValueError):
+            copy_count = 1
+        color_value = str(requested_colors[index]).strip() if index < len(requested_colors) else DEFAULT_COLOR_OPTIONS[0]
+        if color_value not in runtime_settings.get('color_options', DEFAULT_COLOR_OPTIONS):
+            color_value = DEFAULT_COLOR_OPTIONS[0]
+        filename = os.path.basename(uploaded.filename)
+        path = os.path.join(target_folder, filename)
+        try:
+            uploaded.save(path)
+            file_size = format_size(os.path.getsize(path))
+        except OSError:
+            failed_count += 1
+            continue
+        received.append((user_name, user_info, cookie_id, zone, filename, copy_count,
+                         file_size,
+                         datetime.datetime.now().strftime('%H:%M:%S'),
+                         'Completed (100%)', color_value))
+        client_transfer_records.append({
+            'folder': target_folder,
+            'filename': filename,
+            'copies': copy_count,
+            'user_name': user_name,
+            'user_info': user_info,
+            'cookie': cookie_id,
+            'zone': zone,
+            'size': file_size,
+            'received_time': datetime.datetime.now().strftime('%H:%M:%S'),
+            'status': 'Completed (100%)',
+            'color': color_value,
+            'task_completed': False,
+        })
+    with transfer_records_lock:
+        transfer_records_by_client.setdefault(token_id, []).extend(client_transfer_records)
+        transfer_change_versions[token_id] = transfer_change_versions.get(token_id, 0) + 1
+        transfer_change_condition.notify_all()
+    if file_transfer_callback:
+        file_transfer_callback(received, target_folder, safe_identity)
+    response_status = 200 if received else 500
+    response = make_response({'ok': bool(received), 'count': len(received),
+                              'failed_count': failed_count, 'folder': target_folder,
+                              'records': client_transfer_records,
+                              'error': 'All files failed to upload' if not received else ''}, response_status)
+    if upload_id:
+        with transfer_records_lock:
+            processed_uploads[(token_id, upload_id)] = {
+                'payload': response.get_json(), 'status': response_status
+            }
+    response.set_cookie(CLIENT_COOKIE_NAME, token, max_age=60 * 60 * 24 * 30,
+                        httponly=True, samesite='Lax')
+    return response
+
+
+@web_app.route('/transfer_status')
+def transfer_status():
+    _token, token_id, _client_ip, _device_name = get_client_identity()
+    try:
+        since = int(request.args.get('since', 0))
+    except (TypeError, ValueError):
+        since = 0
+    with transfer_change_condition:
+        # After a server restart, restore this client's persisted transfer
+        # list before answering the QR page's long-poll request.
+        if not transfer_records_by_client.get(token_id):
+            persisted = app_database.load_transfer_logs_for_identity(
+                re.sub(r'[^A-Za-z0-9_.-]', '_', token_id or _client_ip)
+            )
+            restored = []
+            for folder, records in persisted.items():
+                for record in records:
+                    restored.append({
+                        'folder': folder,
+                        'filename': record.get('filename', ''),
+                        'copies': record.get('copies', 1),
+                        'user_name': record.get('user_name', 'Guest'),
+                        'user_info': record.get('user_info', 'Unknown'),
+                        'cookie': record.get('cookie', token_id[:12]),
+                        'zone': record.get('zone', 'Default'),
+                        'size': record.get('size', ''),
+                        'received_time': record.get('received_time', ''),
+                        'status': record.get('status', 'Completed (100%)'),
+                        'color': record.get('color', DEFAULT_COLOR_OPTIONS[0]),
+                        'task_completed': bool(record.get('task_completed', False)),
+                    })
+            if restored:
+                transfer_records_by_client[token_id] = restored
+                transfer_change_versions[token_id] = max(
+                    transfer_change_versions.get(token_id, 0), 1
+                )
+        version = transfer_change_versions.get(token_id, 0)
+        if version <= since:
+            transfer_change_condition.wait(timeout=25)
+        version = transfer_change_versions.get(token_id, 0)
+        records = [dict(record) for record in transfer_records_by_client.get(token_id, [])]
+    response = make_response({'version': version, 'changed': version != since, 'records': records})
+    response.set_cookie(CLIENT_COOKIE_NAME, _token, max_age=60 * 60 * 24 * 30,
+                        httponly=True, samesite='Lax')
+    return response
+
+
+@web_app.route('/transfer_ack', methods=['POST'])
+def transfer_ack():
+    _token, token_id, _client_ip, _device_name = get_client_identity()
+    payload = request.get_json(silent=True) or {}
+    try:
+        version = int(payload.get('version', 0))
+    except (TypeError, ValueError):
+        version = 0
+    with transfer_records_lock:
+        transfer_ack_versions[token_id] = max(transfer_ack_versions.get(token_id, 0), version)
+    return {'ok': True, 'version': transfer_ack_versions[token_id]}
+
+
+@web_app.route('/transfer_update', methods=['POST'])
+def transfer_update():
+    _token, token_id, _client_ip, _device_name = get_client_identity()
+    payload = request.get_json(silent=True) or {}
+    filename = str(payload.get('filename', ''))
+    folder = str(payload.get('folder', ''))
+    try:
+        copies = max(1, min(999, int(payload.get('copies', 1))))
+    except (TypeError, ValueError):
+        copies = 1
+    color = str(payload.get('color', '')).strip()
+    if color not in runtime_settings.get('color_options', DEFAULT_COLOR_OPTIONS):
+        color = DEFAULT_COLOR_OPTIONS[0]
+    with transfer_change_condition:
+        updated = False
+        for record in transfer_records_by_client.get(token_id, []):
+            if record.get('folder') == folder and record.get('filename') == filename:
+                record['copies'] = copies
+                record['color'] = color
+                updated = True
+        if updated:
+            app_database.update_transfer_log(folder, filename, copies=copies, color=color)
+            transfer_update_event = (folder, filename, copies, color)
+            transfer_change_versions[token_id] = transfer_change_versions.get(token_id, 0) + 1
+            transfer_change_condition.notify_all()
+        else:
+            transfer_update_event = None
+    if transfer_update_event:
+        signals.transfer_updated.emit(*transfer_update_event)
+    return {'ok': updated}
 
 @web_app.route('/request')
 def customer_request():
@@ -1233,12 +1530,15 @@ class IntegratedSettingsDialog(QDialog):
                  current_internet_nic, current_hotspot_nic, current_hotspot_image,
                  current_hotspot_network, current_hotspot_gateway, current_max_connections,
                  current_windows_hotspot_limit, approval_sound_enabled,
-                 approval_sounds, approval_sound_dir, startup_enabled=False, parent=None):
+                 approval_sounds, approval_sound_dir, startup_enabled=False,
+                 file_transfer_minutes=DEFAULT_FILE_TRANSFER_MINUTES,
+                 provide_internet_for_file_transfer=True, color_options=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Integrated Environment Settings")
         self.resize(520, 650)
         
         self.zones = current_zones.copy()
+        self.color_options = list(color_options or DEFAULT_COLOR_OPTIONS)
         root_layout = QVBoxLayout(self)
         settings_tabs = QTabWidget()
         root_layout.addWidget(settings_tabs)
@@ -1261,6 +1561,18 @@ class IntegratedSettingsDialog(QDialog):
         self.startup_checkbox.setChecked(startup_enabled)
         self.startup_checkbox.setToolTip("Windows 로그인 시 PrintShopApp을 자동으로 관리자 권한 실행합니다.")
         layout.addWidget(self.startup_checkbox)
+        self.file_transfer_minutes_input = QSpinBox()
+        self.file_transfer_minutes_input.setRange(5, 15)
+        self.file_transfer_minutes_input.setValue(file_transfer_minutes)
+        self.file_transfer_minutes_input.setSuffix(" 분")
+        layout.addWidget(QLabel("파일전송 연결 유지시간 (5~15분):"))
+        layout.addWidget(self.file_transfer_minutes_input)
+        self.file_transfer_internet_checkbox = QCheckBox("파일전송 중 인터넷 사용 허용")
+        self.file_transfer_internet_checkbox.setChecked(provide_internet_for_file_transfer)
+        self.file_transfer_internet_checkbox.setToolTip(
+            "파일전송 연결은 별도로 기록되며 인터넷 사용요금에 포함되지 않습니다."
+        )
+        layout.addWidget(self.file_transfer_internet_checkbox)
 
         layout.addWidget(QLabel("<b>🔒 Hotspot password:</b>"))
         password_layout = QHBoxLayout()
@@ -1393,10 +1705,10 @@ class IntegratedSettingsDialog(QDialog):
         # Keep both adapter selectors together on the Network tab.
         # Item ranges: hotspot identity/limits/range (0:14), NICs (14:18),
         # image/log storage (18:22), and table/zone controls (22:).
-        append_settings_items(category_layouts["핫스팟"], general_items[0:15])
-        append_settings_items(category_layouts["네트워크"], general_items[15:19])
-        append_settings_items(category_layouts["저장/표시"], general_items[19:23])
-        append_settings_items(category_layouts["테이블·구역"], general_items[23:])
+        append_settings_items(category_layouts["핫스팟"], general_items[0:17])
+        append_settings_items(category_layouts["네트워크"], general_items[17:21])
+        append_settings_items(category_layouts["저장/표시"], general_items[21:25])
+        append_settings_items(category_layouts["테이블·구역"], general_items[25:])
         for tab_title, category_layout in category_layouts.items():
             category_layout.insertWidget(0, QLabel(f"<h3>{tab_title} 설정</h3>"))
             category_layout.addStretch()
@@ -1426,6 +1738,18 @@ class IntegratedSettingsDialog(QDialog):
             button = QPushButton(text); button.clicked.connect(slot); fare_buttons.addWidget(button)
         fare_layout.addLayout(fare_buttons); settings_tabs.addTab(fare_tab, '인터넷 요금')
         self.refresh_fare_list()
+        color_tab = QWidget(); color_layout = QVBoxLayout(color_tab)
+        color_layout.addWidget(QLabel('<h3>컬러 출력 옵션</h3>'))
+        self.color_list = QListWidget(); self.color_list.addItems(self.color_options)
+        color_layout.addWidget(self.color_list)
+        color_input = QHBoxLayout(); self.color_input = QLineEdit()
+        self.color_input.setPlaceholderText('예: Color, B&W, Grayscale')
+        color_input.addWidget(self.color_input)
+        add_color = QPushButton('추가'); add_color.clicked.connect(self.add_color_option)
+        edit_color = QPushButton('수정'); edit_color.clicked.connect(self.edit_color_option)
+        remove_color = QPushButton('삭제'); remove_color.clicked.connect(self.remove_color_option)
+        color_input.addWidget(add_color); color_input.addWidget(edit_color); color_input.addWidget(remove_color)
+        color_layout.addLayout(color_input); settings_tabs.addTab(color_tab, '컬러 출력')
         self.sound_radio_group = QButtonGroup(self)
         self.sound_radio_group.setExclusive(True)
         self.sound_radios = []
@@ -1554,6 +1878,29 @@ class IntegratedSettingsDialog(QDialog):
         row = self.fare_list.currentRow()
         if row >= 0: self.internet_fares.pop(row); self.refresh_fare_list()
 
+    def refresh_color_list(self):
+        self.color_list.clear(); self.color_list.addItems(self.color_options)
+
+    def add_color_option(self):
+        value = self.color_input.text().strip()
+        if value and value not in self.color_options:
+            self.color_options.append(value); self.refresh_color_list(); self.color_input.clear()
+
+    def edit_color_option(self):
+        row = self.color_list.currentRow(); value = self.color_input.text().strip()
+        if 0 <= row < len(self.color_options) and value:
+            self.color_options[row] = value; self.refresh_color_list(); self.color_list.setCurrentRow(row)
+
+    def remove_color_option(self):
+        row = self.color_list.currentRow()
+        if len(self.color_options) <= 1:
+            return
+        if 0 <= row < len(self.color_options):
+            self.color_options.pop(row); self.refresh_color_list()
+
+    def get_color_options(self):
+        return self.color_options or DEFAULT_COLOR_OPTIONS
+
     def get_internet_fares(self):
         return sorted(self.internet_fares, key=lambda item: item['minutes']) or DEFAULT_INTERNET_FARES
 
@@ -1604,6 +1951,10 @@ class IntegratedSettingsDialog(QDialog):
 
     def get_startup_enabled(self):
         return self.startup_checkbox.isChecked()
+
+    def get_file_transfer_settings(self):
+        return (self.file_transfer_minutes_input.value(),
+                self.file_transfer_internet_checkbox.isChecked())
 
     def get_hotspot_password(self):
         password = self.password_input.text().strip()
@@ -1688,7 +2039,7 @@ def is_running_as_administrator():
 class IntegratedManagerApp(QMainWindow):
     file_signal = Signal(list, str, str)
     delete_signal = Signal(str, list)
-    database_loaded = Signal(object, object)
+    database_loaded = Signal(object, object, object)
     qr_export_completed = Signal(str, bool, str)
 
     def __init__(self):
@@ -1720,6 +2071,9 @@ class IntegratedManagerApp(QMainWindow):
             app_settings['hotspot_network'], app_settings['hotspot_gateway']
         )
         self.linkshare_splitter_sizes = app_settings.get('linkshare_splitter_sizes', [520, 260])
+        self.file_receiver_splitter_sizes = app_settings.get('file_receiver_splitter_sizes', [520, 420])
+        self.main_splitter_sizes = app_settings.get('main_splitter_sizes', [520, 420])
+        self.qr_location_splitter_sizes = app_settings.get('qr_location_splitter_sizes', [260, 520])
         self.max_connections = app_settings['max_connections']
         self.status_poll_interval = app_settings.get('status_poll_interval', DEFAULT_STATUS_POLL_INTERVAL)
         self.expiration_check_interval = app_settings.get(
@@ -1727,6 +2081,10 @@ class IntegratedManagerApp(QMainWindow):
         )
         self.windows_hotspot_limit = app_settings['windows_hotspot_limit']
         self.startup_enabled = app_settings.get('startup_enabled', False)
+        self.file_transfer_minutes = app_settings.get('file_transfer_minutes', DEFAULT_FILE_TRANSFER_MINUTES)
+        self.provide_internet_for_file_transfer = app_settings.get(
+            'provide_internet_for_file_transfer', True
+        )
         self.approval_sound_enabled = app_settings.get('approval_sound_enabled', DEFAULT_APPROVAL_SOUND_ENABLED)
         self.approval_sounds = app_settings.get('approval_sounds', DEFAULT_APPROVAL_SOUNDS)
         self.approval_sound_index = 0
@@ -1746,6 +2104,8 @@ class IntegratedManagerApp(QMainWindow):
         runtime_settings['max_connections'] = self.max_connections
         runtime_settings['status_poll_interval'] = self.status_poll_interval
         runtime_settings['internet_fares'] = app_settings.get('internet_fares', DEFAULT_INTERNET_FARES)
+        self.color_options = app_settings.get('color_options', DEFAULT_COLOR_OPTIONS)
+        runtime_settings['color_options'] = self.color_options
         self.internet_nic = {'display': app_settings['internet_nic'], 'ip': app_settings['internet_ip']}
         self.hotspot_nic = {'display': app_settings['hotspot_nic'], 'ip': app_settings['hotspot_ip']}
         self.load_saved_defaults(app_settings)
@@ -1799,9 +2159,14 @@ class IntegratedManagerApp(QMainWindow):
 
         self.file_signal.connect(self.handle_incoming_files)
         self.delete_signal.connect(self.handle_deleted_files)
+        # Forward Flask worker-thread uploads through Qt so the GUI log is
+        # updated safely on the GUI thread.
+        global file_transfer_callback
+        file_transfer_callback = self.file_signal.emit
         # HTTP /request 응답을 승인 팝업의 exec()가 붙잡지 않도록
         # 승인 처리는 GUI 이벤트 큐에서 비동기로 실행한다.
         signals.approval_requested.connect(self.handle_customer_request, Qt.QueuedConnection)
+        signals.transfer_updated.connect(self.handle_remote_transfer_update, Qt.QueuedConnection)
 
         self.server_thread = threading.Thread(target=self.run_server, daemon=True)
         self.server_thread.start()
@@ -1816,10 +2181,10 @@ class IntegratedManagerApp(QMainWindow):
     def load_database_state(self):
         """Load persisted sessions/history off the GUI thread so startup remains responsive."""
         sessions, history = app_database.load()
-        self.database_loaded.emit(sessions, history)
+        self.database_loaded.emit(sessions, history, app_database.load_transfer_logs())
 
     @Slot(object, object)
-    def apply_database_state(self, sessions, history):
+    def apply_database_state(self, sessions, history, transfer_logs):
         with session_identity_lock:
             for client_ip, session in sessions.items():
                 token_id = session.get('client_token_id')
@@ -1835,6 +2200,27 @@ class IntegratedManagerApp(QMainWindow):
                             session.update(current)
                 shared_sessions[client_ip] = session
         usage_history.extend(history)
+        for (target_folder, identity), records in transfer_logs.items():
+            if os.path.isdir(target_folder) and records:
+                file_list = [(
+                    record.get('user_name', 'Guest'), record.get('user_info', 'Unknown'),
+                    record.get('cookie', ''), record.get('zone', 'Default'),
+                    record.get('filename', ''), record.get('copies', 1),
+                    record.get('size', ''), record.get('received_time', ''),
+                    record.get('status', 'Completed (100%)'), record.get('color', DEFAULT_COLOR_OPTIONS[0])
+                ) for record in records]
+                self.handle_incoming_files(file_list, target_folder, identity, persist=False)
+                table = next((candidate for candidate in self.tab_tables.values()
+                              if any(candidate.item(row, 3) and
+                                     str(candidate.item(row, 3).data(Qt.UserRole) or '') == target_folder
+                                     for row in range(candidate.rowCount()))), None)
+                if table is not None:
+                    for record in records:
+                        for row in range(table.rowCount()):
+                            item = table.item(row, 3)
+                            if item and item.text() == record.get('filename', '') and \
+                                    str(item.data(Qt.UserRole) or '') == target_folder:
+                                self.set_file_task_completed(table, row, record.get('task_completed', False))
         for client_ip, session in sessions.items():
             token_id = session.get('client_token_id')
             if token_id:
@@ -1936,7 +2322,9 @@ class IntegratedManagerApp(QMainWindow):
             self.internet_nic['display'], self.hotspot_nic['display'], self.hotspot_image_path,
             self.hotspot_network, self.hotspot_gateway, self.max_connections,
             self.windows_hotspot_limit, self.approval_sound_enabled,
-            self.approval_sounds, approval_sound_dir, self.startup_enabled, self
+            self.approval_sounds, approval_sound_dir, self.startup_enabled,
+            self.file_transfer_minutes, self.provide_internet_for_file_transfer,
+            self.color_options, self
         )
         if dialog.exec() == QDialog.Accepted:
             DEFAULT_ZONES = dialog.zones
@@ -1961,6 +2349,10 @@ class IntegratedManagerApp(QMainWindow):
             self.approval_sound_enabled = dialog.get_approval_sound_enabled()
             self.approval_sounds = dialog.get_approval_sounds()
             self.startup_enabled = dialog.get_startup_enabled()
+            (self.file_transfer_minutes,
+             self.provide_internet_for_file_transfer) = dialog.get_file_transfer_settings()
+            self.color_options = dialog.get_color_options()
+            runtime_settings['color_options'] = self.color_options
             try:
                 set_startup_registration(application_dir, self.startup_enabled)
             except (OSError, RuntimeError) as exc:
@@ -2342,6 +2734,12 @@ class IntegratedManagerApp(QMainWindow):
     def persist_settings(self):
         if hasattr(self, 'linkshare_splitter'):
             self.linkshare_splitter_sizes = self.linkshare_splitter.sizes()
+        if hasattr(self, 'top_splitter'):
+            self.file_receiver_splitter_sizes = self.top_splitter.sizes()
+        if hasattr(self, 'main_splitter'):
+            self.main_splitter_sizes = self.main_splitter.sizes()
+        if hasattr(self, 'qr_location_splitter'):
+            self.qr_location_splitter_sizes = self.qr_location_splitter.sizes()
         save_app_settings({
             'ssid': self.hotspot_ssid,
             'hotspot_password': self.hotspot_password,
@@ -2369,7 +2767,13 @@ class IntegratedManagerApp(QMainWindow):
             'qr_output_dirs': self.qr_output_dirs,
             'windows_hotspot_limit': self.windows_hotspot_limit,
             'startup_enabled': self.startup_enabled,
+            'file_transfer_minutes': self.file_transfer_minutes,
+            'provide_internet_for_file_transfer': self.provide_internet_for_file_transfer,
+            'color_options': self.color_options,
             'linkshare_splitter_sizes': self.linkshare_splitter_sizes,
+            'file_receiver_splitter_sizes': self.file_receiver_splitter_sizes,
+            'main_splitter_sizes': self.main_splitter_sizes,
+            'qr_location_splitter_sizes': self.qr_location_splitter_sizes,
         })
 
     def update_zone_combo_items(self):
@@ -2399,6 +2803,123 @@ class IntegratedManagerApp(QMainWindow):
                 break
         self.tab_widget.removeTab(index)
 
+    def apply_transfer_tab_filter(self, *_args):
+        period = self.transfer_period_combo.currentText()
+        today = datetime.date.today()
+        start = end = None
+        if period == '오늘':
+            start = end = today
+        elif period == '이번 달':
+            start = today.replace(day=1)
+            end = (start.replace(day=28) + datetime.timedelta(days=4)).replace(day=1) - datetime.timedelta(days=1)
+        elif period == '기간':
+            start = self.transfer_start_date.date().toPython()
+            end = self.transfer_end_date.date().toPython()
+            if start > end:
+                start, end = end, start
+        show_completed = self.completed_only_checkbox.isChecked()
+        for index in range(self.tab_widget.count()):
+            table = self.tab_widget.widget(index)
+            visible = True
+            if isinstance(table, QTableWidget) and not show_completed:
+                visible = any(
+                    not bool(table.item(row, 6).data(Qt.UserRole + 3))
+                    for row in range(table.rowCount()) if table.item(row, 6)
+                )
+            if start is not None and isinstance(table, QTableWidget):
+                folder_date = None
+                for row in range(table.rowCount()):
+                    item = table.item(row, 3)
+                    if item:
+                        match = re.search(r'_(\d{8})-\d{6}$', os.path.basename(str(item.data(Qt.UserRole) or '')))
+                        if match:
+                            folder_date = datetime.datetime.strptime(match.group(1), '%Y%m%d').date()
+                            break
+                visible = visible and folder_date is not None and start <= folder_date <= end
+            self.tab_widget.setTabVisible(index, visible)
+        self.update_transfer_tab_colors()
+
+    def update_transfer_tab_colors(self, *_args):
+        current_index = self.tab_widget.currentIndex()
+        for index in range(self.tab_widget.count()):
+            self.tab_widget.tabBar().setTabTextColor(
+                index, QColor('#1565c0' if index == current_index else '#455a64')
+            )
+
+    def set_file_task_completed(self, table, row, completed):
+        completion_item = table.item(row, 6)
+        file_item = table.item(row, 3)
+        if completion_item is None or file_item is None:
+            return
+        completed = bool(completed)
+        completion_item.setBackground(QColor('#80cbc4' if completed else '#eaf4ff'))
+        completion_item.setData(Qt.UserRole + 3, completed)
+        toggle = table.cellWidget(row, 6)
+        if isinstance(toggle, QPushButton):
+            toggle.blockSignals(True)
+            toggle.setChecked(completed)
+            toggle.blockSignals(False)
+            self.style_completion_toggle(toggle, completed)
+        app_database.update_transfer_completed(
+            str(file_item.data(Qt.UserRole) or ''), file_item.text(), completed
+        )
+        with transfer_records_lock:
+            changed_clients = set()
+            for client_id, records in transfer_records_by_client.items():
+                for record in records:
+                    if record.get('folder') == str(file_item.data(Qt.UserRole) or '') \
+                            and record.get('filename') == file_item.text():
+                        record['task_completed'] = completed
+                        changed_clients.add(client_id)
+            for client_id in changed_clients:
+                transfer_change_versions[client_id] = transfer_change_versions.get(client_id, 0) + 1
+            if changed_clients:
+                transfer_change_condition.notify_all()
+
+    def set_completion_checkbox(self, table, row, completed=False):
+        toggle = QPushButton(table)
+        toggle.setCheckable(True)
+        toggle.setChecked(bool(completed))
+        self.style_completion_toggle(toggle, completed)
+        toggle.toggled.connect(
+            lambda checked: self.set_file_task_completed(table, row, checked)
+        )
+        table.setCellWidget(row, 6, toggle)
+
+    @staticmethod
+    def style_completion_toggle(toggle, completed):
+        background = '#4db6ac' if completed else '#f1f5f9'
+        border = '#00695c' if completed else '#607d8b'
+        text_color = '#003c36' if completed else '#263238'
+        toggle.setText('완료' if completed else '미완료')
+        toggle.setStyleSheet(
+            f"QPushButton {{ color: {text_color}; background-color: {background}; "
+            f"border: 3px solid {border}; border-radius: 5px; padding: 5px 8px; "
+            "font-size: 14px; font-weight: bold; }"
+            " QPushButton:hover { border-color: #1565c0; }"
+        )
+
+    def set_tab_tasks_completed(self, table, completed):
+        for row in range(table.rowCount()):
+            self.set_file_task_completed(table, row, completed)
+        self.apply_transfer_tab_filter()
+
+    def show_tab_context_menu(self, pos):
+        index = self.tab_widget.tabBar().tabAt(pos)
+        if index < 0:
+            return
+        table = self.tab_widget.widget(index)
+        if not isinstance(table, QTableWidget):
+            return
+        menu = QMenu(self.tab_widget)
+        complete = menu.addAction('작업완료')
+        incomplete = menu.addAction('작업미완료')
+        chosen = menu.exec(self.tab_widget.tabBar().mapToGlobal(pos))
+        if chosen == complete:
+            self.set_tab_tasks_completed(table, True)
+        elif chosen == incomplete:
+            self.set_tab_tasks_completed(table, False)
+
     def on_save_tab_changed(self, tab_name):
         pass
 
@@ -2412,7 +2933,14 @@ class IntegratedManagerApp(QMainWindow):
         max_cols = 3
         for index, zone_name in enumerate(DEFAULT_ZONES):
             btn = QPushButton(zone_name)
-            btn.setStyleSheet("QPushButton { background-color: #f8f9fa; border: 1px solid #ced4da; padding: 6px; font-weight: bold; }")
+            btn.setMinimumHeight(34)
+            btn.setStyleSheet("""
+                QPushButton { background-color: #f8f9fa; color: #17202a;
+                              border: 1px solid #6c757d; border-radius: 4px;
+                              padding: 6px; font-weight: bold; }
+                QPushButton:hover { background-color: #dbeafe; color: #0b3d91; }
+                QPushButton:pressed { background-color: #93c5fd; color: #102a43; }
+            """)
             btn.clicked.connect(lambda checked, z=zone_name: self.select_zone_from_button(z))
             row = index // max_cols
             col = index % max_cols
@@ -2461,7 +2989,10 @@ class IntegratedManagerApp(QMainWindow):
         if hotspot_status['active']:
             ip = self.hotspot_gateway
         zone = self.zone_input.text().strip() or "Default"
-        target_url = f"http://{ip}:5000/?zone={zone}"
+        # The file-transfer QR must open the upload page directly.  The root
+        # route is the LinkShare portal and redirects to /scan, so using it
+        # here makes the QR appear to work while never showing file upload.
+        target_url = f"http://{ip}:5000/file_share?{urllib.parse.urlencode({'zone': zone})}"
         self.url_label.setText(f"Generated URL: {target_url}")
         if hasattr(self, 'hotspot_url_label'):
             self.hotspot_url_label.setText(f"Generated URL: {target_url}")
@@ -2779,21 +3310,428 @@ class IntegratedManagerApp(QMainWindow):
         self.print_qr_pixmap(self.hotspot_qr_pixmap, "Captive Portal QR", scale)
 
     @Slot(list, str, str)
-    def handle_incoming_files(self, file_list, target_folder, identity):
-        pass
+    def handle_incoming_files(self, file_list, target_folder, identity, persist=True):
+        self.last_target_folder = target_folder
+        transfer_started = datetime.datetime.now()
+        transfer_record = {
+            'transfer_key': f"{identity}:{transfer_started.isoformat()}",
+            'client_ip': '-',
+            'client_token_id': identity,
+            'started_at': transfer_started.strftime('%Y-%m-%d %H:%M:%S'),
+            'expires_at': (transfer_started + datetime.timedelta(
+                minutes=self.file_transfer_minutes
+            )).strftime('%Y-%m-%d %H:%M:%S'),
+            'file_count': len(file_list),
+            # File transfer is not internet usage and is never charged.  The
+            # setting only controls whether internet access may be granted
+            # alongside a transfer; a successful transfer needs no grant.
+            'internet_granted': self.provide_internet_for_file_transfer,
+            'charged': False,
+        }
+        try:
+            app_database.save_file_transfer(transfer_record)
+        except (OSError, sqlite3.Error):
+            logging.getLogger(__name__).exception("Failed to save file transfer record")
+        if persist:
+            for record in file_list:
+                if len(record) >= 10:
+                    app_database.save_transfer_log(target_folder, identity, {
+                        'user_name': record[0], 'user_info': record[1], 'cookie': record[2],
+                        'zone': record[3], 'filename': record[4], 'copies': record[5],
+                        'size': record[6], 'received_time': record[7],
+                        'status': record[8], 'color': record[9], 'task_completed': False,
+                    })
+        first_record = list(file_list[0]) if file_list else ['Guest']
+        tab_user = safe_folder_part(first_record[0] if first_record else 'Guest', 'Guest')
+        folder_match = re.search(r'_(\d{1,3}(?:\.\d{1,3}){3})_\d{8}-\d{6}$', os.path.basename(target_folder))
+        tab_ip = folder_match.group(1) if folder_match else safe_folder_part(identity, 'UnknownIP')
+        tab_name = f'{safe_folder_part(first_record[3] if len(first_record) > 3 else "Default", "Default")}_{tab_user}_{tab_ip}'
+        table = self.get_or_create_file_table(tab_name)
+        sorting_enabled = table.isSortingEnabled()
+        table.setSortingEnabled(False)
+        # Remove incomplete rows left by the pre-metadata table format.
+        for old_row in range(table.rowCount() - 1, -1, -1):
+            old_file = table.item(old_row, 4)
+            if old_file is None or not old_file.text().strip():
+                table.removeRow(old_row)
+
+        # If a client or an older upload path reports fewer records than were
+        # physically saved, rebuild the missing rows from the target folder.
+        reported_names = {
+            str(record[4]) for record in file_list if len(record) >= 9 and record[4]
+        }
+        template_record = list(file_list[0]) if file_list else ['Guest', 'Unknown', '', zone, '', 1, '', '', 'Completed (100%)']
+        for saved_name in os.listdir(target_folder):
+            saved_path = os.path.join(target_folder, saved_name)
+            if (os.path.isfile(saved_path) and not saved_name.startswith('summary_')
+                    and saved_name != 'transfer_summary.txt' and saved_name not in reported_names):
+                file_list.append((
+                    template_record[0], template_record[1], template_record[2], zone,
+                    saved_name, 1, DEFAULT_COLOR_OPTIONS[0],
+                    format_size(os.path.getsize(saved_path)),
+                    datetime.datetime.now().strftime('%H:%M:%S'), 'Completed (100%)'
+                ))
+        for file_info in file_list:
+            # Keep every received row aligned with the nine-column table,
+            # including records produced by older clients.
+            if len(file_info) == 6:
+                # Legacy tuple: user, zone, filename, size, time, status.
+                values = [file_info[0], 'Unknown', '', file_info[1], file_info[2], 1,
+                          DEFAULT_COLOR_OPTIONS[0], file_info[3], file_info[4], file_info[5]]
+            else:
+                values = list(file_info[:10])
+                # Normalize the previous server tuple order
+                # (..., copies, size, received_time, status, color) to the
+                # current table order (..., copies, color, size, time, status).
+                if len(values) >= 10:
+                    values[6:10] = [values[9], values[6], values[7], values[8]]
+                elif len(values) >= 9:
+                    values[6:9] = [DEFAULT_COLOR_OPTIONS[0], values[6], values[7]]
+            while len(values) < 11:
+                values.append('')
+            values = [values[0], values[1], values[3], values[4], values[5],
+                      values[6], values[10], values[7], values[8], values[9], values[2]]
+            if not values[4]:
+                values[4] = 1
+            row = table.rowCount()
+            table.insertRow(row)
+            row_color = QColor('#f7fbff' if row % 2 else '#eaf4ff')
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(str(value))
+                item.setBackground(QColor('#c9f0d2') if column == 9 else row_color)
+                item.setData(Qt.UserRole, target_folder)
+                item.setData(Qt.UserRole + 2, identity)
+                table.setItem(row, column, item)
+            table.item(row, 6).setData(Qt.UserRole + 3, False)
+            self.set_copy_controls(table, row, int(values[4]) or 1)
+            self.set_color_control(table, row, str(values[5] or DEFAULT_COLOR_OPTIONS[0]))
+            self.set_completion_checkbox(table, row, False)
+            if persist:
+                self.pending_batch_files.append(file_info)
+        table.setSortingEnabled(sorting_enabled)
+        if persist:
+            self.batch_timer.start()
+
+    def get_or_create_file_table(self, tab_name):
+        table = self.tab_tables.get(tab_name)
+        if table is not None:
+            return table
+        table = QTableWidget(0, 11, self)
+        table.setHorizontalHeaderLabels([
+            "사용자명", "사용자 부가정보", "쿠키", "구역", "파일명",
+            "카피수", "컬러", "크기", "수신시간", "상태"
+        ])
+        table.setHorizontalHeaderItem(10, QTableWidgetItem("완료"))
+        table.setHorizontalHeaderLabels([
+            "사용자명", "사용자 부가정보", "구역", "파일명", "카피수", "컬러",
+            "완료", "크기", "수신시간", "상태", "쿠키"
+        ])
+        table.setAlternatingRowColors(True)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setContextMenuPolicy(Qt.CustomContextMenu)
+        table.customContextMenuRequested.connect(lambda pos, t=table: self.show_context_menu(pos, t))
+        table.cellDoubleClicked.connect(self.on_row_double_clicked)
+        table.setSortingEnabled(True)
+        table.setWordWrap(True)
+        table.setStyleSheet(
+            "QTableWidget { font-size: 13px; color: #263238; background-color: #ffffff; gridline-color: #78909c; }"
+            " QTableWidget::item { color: #263238; padding: 4px; }"
+            " QTableWidget::item:selected { color: #102a43; background-color: #b3d7ff; }"
+            " QHeaderView::section { color: #102a43; background-color: #d7e7f7; font-size: 13px; font-weight: bold; padding: 7px; }"
+        )
+        table.verticalHeader().setDefaultSectionSize(38)
+        table.horizontalHeader().setMinimumSectionSize(80)
+        for column, width in enumerate((140, 240, 120, 110, 280, 90, 100, 100, 110, 150, 90)):
+            table.setColumnWidth(column, width)
+        table.horizontalHeader().setStretchLastSection(True)
+        self.tab_tables[tab_name] = table
+        self.tab_widget.addTab(table, tab_name)
+        self.tab_widget.setTabToolTip(self.tab_widget.indexOf(table), tab_name)
+        self.update_transfer_tab_colors()
+        self.apply_transfer_tab_filter()
+        return table
+
+    def set_copy_controls(self, table, row, count):
+        """Install administrator-only copy count controls in one row."""
+        container = QWidget(table)
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(2, 1, 2, 1)
+        layout.setSpacing(3)
+        down = QPushButton("−")
+        value = QLabel(str(max(1, min(999, int(count)))))
+        up = QPushButton("+")
+        container.setStyleSheet(
+            "QWidget { background-color: #eaf4ff; border-radius: 5px; }"
+            " QLabel { color: #102a43; font-size: 14px; font-weight: bold; }"
+            " QPushButton { background-color: #1976d2; color: white; font-weight: bold;"
+            " border: 0; border-radius: 4px; }"
+            " QPushButton:hover { background-color: #0d47a1; }"
+        )
+        for button in (down, up):
+            button.setFixedSize(28, 28)
+        value.setAlignment(Qt.AlignCenter)
+        value.setMinimumWidth(28)
+        down.clicked.connect(lambda: self.change_copy_count(table, row, value, -1))
+        up.clicked.connect(lambda: self.change_copy_count(table, row, value, 1))
+        layout.addWidget(down)
+        layout.addWidget(value)
+        layout.addWidget(up)
+        table.setCellWidget(row, 4, container)
+        item = table.item(row, 3)
+        if item is not None:
+            item.setText('')
+            item.setData(Qt.UserRole + 1, int(count))
+
+    def set_color_control(self, table, row, color):
+        combo = QComboBox(table)
+        combo.addItems(runtime_settings.get('color_options', DEFAULT_COLOR_OPTIONS))
+        combo.setCurrentText(color if color in [combo.itemText(i) for i in range(combo.count())]
+                             else DEFAULT_COLOR_OPTIONS[0])
+        combo.setStyleSheet(
+            "QComboBox { background: #ffd166; color: #102a43; padding: 4px; border: 1px solid #e09f00; }"
+            " QComboBox QAbstractItemView { color: #102a43; background: white; }"
+        )
+        combo.currentTextChanged.connect(
+            lambda value: self.change_color_value(table, row, value)
+        )
+        table.setCellWidget(row, 5, combo)
+        item = table.item(row, 5)
+        if item is not None:
+            item.setText('')
+
+    def change_color_value(self, table, row, color):
+        file_item = table.item(row, 3)
+        if file_item is None:
+            return
+        target_folder = str(file_item.data(Qt.UserRole) or '')
+        filename = file_item.text()
+        app_database.update_transfer_log(target_folder, filename, color=color)
+        with transfer_change_condition:
+            changed_clients = set()
+            for client_id, records in transfer_records_by_client.items():
+                for record in records:
+                    if record.get('folder') == target_folder and record.get('filename') == filename:
+                        if record.get('color') != color:
+                            record['color'] = color
+                            changed_clients.add(client_id)
+            for client_id in changed_clients:
+                transfer_change_versions[client_id] = transfer_change_versions.get(client_id, 0) + 1
+            if changed_clients:
+                transfer_change_condition.notify_all()
+        if changed_clients:
+            signals.transfer_updated.emit(
+                target_folder, filename,
+                int(table.item(row, 4).data(Qt.UserRole + 1) or 1), color
+            )
+
+    def change_copy_count(self, table, row, value_label, delta):
+        count = max(1, min(999, int(value_label.text()) + delta))
+        value_label.setText(str(count))
+        item = table.item(row, 4)
+        if item is None:
+            item = QTableWidgetItem()
+            table.setItem(row, 4, item)
+        original = item.data(Qt.UserRole + 1) or count
+        if count != int(original):
+            value_label.parentWidget().setStyleSheet(
+                "QWidget { background-color: #ffd166; border: 2px solid #e09f00; border-radius: 5px; }"
+                " QLabel { color: #5d3a00; font-size: 14px; font-weight: bold; }"
+                " QPushButton { background-color: #d97706; color: white; font-weight: bold; border: 0; border-radius: 4px; }"
+            )
+        else:
+            value_label.parentWidget().setStyleSheet(
+                "QWidget { background-color: #eaf4ff; border-radius: 5px; }"
+                " QLabel { color: #102a43; font-size: 14px; font-weight: bold; }"
+                " QPushButton { background-color: #1976d2; color: white; font-weight: bold; border: 0; border-radius: 4px; }"
+            )
+        item.setText('')
+        self.update_transfer_copy_count(
+            str(table.item(row, 3).data(Qt.UserRole) or ''),
+            str(table.item(row, 3).text()), count
+        )
+
+    def update_transfer_copy_count(self, target_folder, filename, count):
+        app_database.update_transfer_log(target_folder, filename, copies=count)
+        with transfer_records_lock:
+            changed_clients = set()
+            for records in transfer_records_by_client.values():
+                for record in records:
+                    if record.get('folder') == target_folder and record.get('filename') == filename:
+                        if record.get('copies') != count:
+                            record['copies'] = count
+                            for client_id, client_records in transfer_records_by_client.items():
+                                if record in client_records:
+                                    changed_clients.add(client_id)
+            for client_id in changed_clients:
+                transfer_change_versions[client_id] = transfer_change_versions.get(client_id, 0) + 1
+            if changed_clients:
+                transfer_change_condition.notify_all()
+
+    @Slot(str, str, int, str)
+    def handle_remote_transfer_update(self, target_folder, filename, copies, color):
+        for table in self.tab_tables.values():
+            for row in range(table.rowCount()):
+                file_item = table.item(row, 3)
+                if not file_item or file_item.text() != filename:
+                    continue
+                if str(file_item.data(Qt.UserRole) or '') != target_folder:
+                    continue
+                copy_item = table.item(row, 4)
+                if copy_item:
+                    copy_item.setData(Qt.UserRole + 1, copies)
+                container = table.cellWidget(row, 4)
+                if container:
+                    labels = container.findChildren(QLabel)
+                    if labels:
+                        labels[0].setText(str(copies))
+                color_item = table.item(row, 5)
+                if color_item:
+                    color_item.setText('')
+                    color_item.setBackground(QColor('#ffd166'))
+                color_combo = table.cellWidget(row, 5)
+                if isinstance(color_combo, QComboBox):
+                    color_combo.blockSignals(True)
+                    color_combo.setCurrentText(color)
+                    color_combo.blockSignals(False)
 
     @Slot(str, list)
     def handle_deleted_files(self, identity, file_names):
-        pass
+        tab_name = os.path.basename(identity)
+        table = self.tab_tables.get(tab_name)
+        if table is None:
+            return
+        for row in range(table.rowCount() - 1, -1, -1):
+            item = table.item(row, 3)
+            if item and item.text() in file_names:
+                table.removeRow(row)
 
     def show_batch_notification(self):
-        pass
+        if not self.pending_batch_files:
+            return
+        count = len(self.pending_batch_files)
+        self.pending_batch_files.clear()
+        QMessageBox.information(self, "파일 수신 완료", f"파일 {count}개를 수신했습니다.")
 
     def on_row_double_clicked(self, row, col):
-        pass
+        table = self.sender()
+        if not isinstance(table, QTableWidget):
+            return
+        item = table.item(row, 3)
+        if item is None:
+            return
+        target_folder = item.data(Qt.UserRole)
+        if not target_folder:
+            return
+        target_folder = str(target_folder)
+        self.create_transfer_summary(table, target_folder)
+        if os.path.isdir(target_folder):
+            subprocess.Popen(['explorer.exe', os.path.normpath(target_folder)])
 
     def show_context_menu(self, pos, table):
-        pass
+        index = table.indexAt(pos)
+        if not index.isValid():
+            return
+        row = index.row()
+        table.selectRow(row)
+        menu = QMenu(table)
+        delete_action = menu.addAction("삭제")
+        summary_action = menu.addAction("요약정보 표시")
+        menu.addSeparator()
+        complete_action = menu.addAction("작업완료")
+        incomplete_action = menu.addAction("작업미완료")
+        chosen = menu.exec(table.viewport().mapToGlobal(pos))
+        if chosen == delete_action:
+            self.delete_transfer_row(table, row)
+        elif chosen == summary_action:
+            self.write_transfer_summary(table, row)
+        elif chosen == complete_action:
+            self.set_file_task_completed(table, row, True)
+            self.apply_transfer_tab_filter()
+        elif chosen == incomplete_action:
+            self.set_file_task_completed(table, row, False)
+            self.apply_transfer_tab_filter()
+
+    def delete_transfer_row(self, table, row):
+        item = table.item(row, 3)
+        if item is None:
+            return
+        file_path = os.path.join(str(item.data(Qt.UserRole) or ''), item.text())
+        answer = QMessageBox.question(
+            self, "삭제 확인", f"파일을 삭제할까요?\n{item.text()}",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if answer != QMessageBox.Yes:
+            return
+        try:
+            if os.path.isfile(file_path):
+                os.remove(file_path)
+            table.removeRow(row)
+        except OSError as exc:
+            QMessageBox.warning(self, "삭제 실패", str(exc))
+
+    def write_transfer_summary(self, table, row):
+        item = table.item(row, 4)
+        if item is None:
+            return
+        target_folder = str(item.data(Qt.UserRole) or '')
+        if not target_folder:
+            return
+        summary_path = self.create_transfer_summary(table, target_folder)
+        if not summary_path:
+            return
+        try:
+            # Do not depend on the .txt file association. Some Windows
+            # installations have no registered text editor for os.startfile.
+            subprocess.Popen(['notepad.exe', os.path.normpath(summary_path)])
+        except (OSError, subprocess.SubprocessError) as exc:
+            QMessageBox.warning(self, "요약정보 열기 실패", str(exc))
+
+    def create_transfer_summary(self, table, target_folder):
+        """Write the current transfer table rows to the target folder."""
+        if not target_folder:
+            return ''
+        folder_name = os.path.basename(os.path.normpath(target_folder))
+        summary_path = os.path.join(target_folder, f'summary_{folder_name}.txt')
+        try:
+            os.makedirs(target_folder, exist_ok=True)
+            records = []
+            user_name = user_info = cookie = zone = ''
+            for row in range(table.rowCount()):
+                file_item = table.item(row, 3)
+                if file_item is None or str(file_item.data(Qt.UserRole) or '') != str(target_folder):
+                    continue
+                cells = [table.item(row, column) for column in range(table.columnCount())]
+                values = [cell.text() if cell else '' for cell in cells]
+                if not user_name:
+                    user_name, user_info, zone, cookie = values[0], values[1], values[2], values[10]
+                if table.cellWidget(row, 4) is not None:
+                    labels = table.cellWidget(row, 4).findChildren(QLabel)
+                    values[4] = labels[0].text() if labels else values[4]
+                color_combo = table.cellWidget(row, 5)
+                if isinstance(color_combo, QComboBox):
+                    values[5] = color_combo.currentText()
+                records.append((values[3], values[4], values[5] if len(values) > 5 else DEFAULT_COLOR_OPTIONS[0]))
+            records.sort(key=lambda record: record[0].lower())
+            with open(summary_path, 'w', encoding='utf-8') as summary:
+                summary.write(f'사용자명: {user_name}\n')
+                summary.write(f'사용자 부가정보: {user_info}\n')
+                summary.write(f'쿠키: {cookie}\n')
+                summary.write(f'구역: {zone}\n\n')
+                filename_width = max([len('파일명')] + [len(str(record[0])) for record in records])
+                color_width = max([len('컬러유무')] + [len(str(record[2])) for record in records])
+                summary.write(
+                    f'{"파일명":<{filename_width}}  {"카피수":>6}  {"컬러유무":<{color_width}}\n'
+                )
+                summary.write(f'{"-" * filename_width}  {"-" * 6}  {"-" * color_width}\n')
+                for filename, copy_count, color_value in records:
+                    summary.write(
+                        f'{str(filename):<{filename_width}}  {str(copy_count):>6}  '
+                        f'{str(color_value):<{color_width}}\n'
+                    )
+            return summary_path
+        except OSError as exc:
+            QMessageBox.warning(self, "요약정보 실패", str(exc))
+            return ''
 
     def handle_customer_request(self, client_ip, minutes, dur_str):
         self.bring_to_front()

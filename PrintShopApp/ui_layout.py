@@ -2,9 +2,9 @@ import os
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, 
     QPushButton, QTableWidget, QComboBox, QGroupBox, 
-    QTabWidget, QHeaderView, QSplitter, QGridLayout, QSizePolicy
+    QTabWidget, QHeaderView, QSplitter, QGridLayout, QSizePolicy, QDateEdit, QCheckBox
 )
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QDate
 from PySide6.QtGui import QColor, QPixmap, QAction, QFontMetrics
 
 
@@ -152,10 +152,7 @@ def setup_integrated_ui(window, current_upload_folder, current_zones, current_sa
 
     window.top_splitter.addWidget(group_box)
 
-    # 2. Right Area: [QR Location] + [QR Code]
-    right_container = QWidget()
-    right_container_layout = QHBoxLayout(right_container)
-
+    # 2. Right Area: [QR Code] | splitter | [QR Location & Table]
     zone_group_box = QGroupBox("QR Location & Table Selection")
     zone_group_box.setStyleSheet("QGroupBox { font-weight: bold; border: 2px solid #ccc; border-radius: 6px; margin-top: 6px; padding-top: 10px; }")
     zone_group_layout = QVBoxLayout(zone_group_box)
@@ -178,8 +175,6 @@ def setup_integrated_ui(window, current_upload_folder, current_zones, current_sa
     window.update_zone_buttons()
     zone_group_layout.addWidget(window.zone_buttons_widget)
 
-    right_container_layout.addWidget(zone_group_box)
-
     right_widget = QWidget()
     right_layout = QVBoxLayout(right_widget)
     right_layout.setAlignment(Qt.AlignCenter)
@@ -196,20 +191,73 @@ def setup_integrated_ui(window, current_upload_folder, current_zones, current_sa
     window.url_label.setStyleSheet("font-size: 11px; font-weight: bold; color: #007BFF; margin-top: 8px;")
     right_layout.addWidget(window.url_label)
 
-    right_container_layout.addWidget(right_widget)
-    window.top_splitter.addWidget(right_container)
+    window.qr_location_splitter = QSplitter(Qt.Horizontal)
+    window.qr_location_splitter.setHandleWidth(8)
+    window.qr_location_splitter.setChildrenCollapsible(False)
+    window.qr_location_splitter.addWidget(right_widget)
+    window.qr_location_splitter.addWidget(zone_group_box)
+    window.qr_location_splitter.setSizes(
+        getattr(window, 'qr_location_splitter_sizes', [260, 520])
+    )
+    window.qr_location_splitter_save_timer = QTimer(window)
+    window.qr_location_splitter_save_timer.setSingleShot(True)
+    window.qr_location_splitter_save_timer.setInterval(250)
+    window.qr_location_splitter.splitterMoved.connect(
+        lambda _pos, _index: window.qr_location_splitter_save_timer.start()
+    )
+    window.qr_location_splitter_save_timer.timeout.connect(window.persist_settings)
+    window.top_splitter.addWidget(window.qr_location_splitter)
+    window.top_splitter.setSizes(getattr(window, 'file_receiver_splitter_sizes', [520, 420]))
+    window.file_receiver_splitter_save_timer = QTimer(window)
+    window.file_receiver_splitter_save_timer.setSingleShot(True)
+    window.file_receiver_splitter_save_timer.setInterval(250)
+    window.top_splitter.splitterMoved.connect(
+        lambda _pos, _index: window.file_receiver_splitter_save_timer.start()
+    )
+    window.file_receiver_splitter_save_timer.timeout.connect(window.persist_settings)
 
     # 3. Bottom Area (Log Table)[cite: 1, 2]
     bottom_container = QWidget()
     bottom_layout = QVBoxLayout(bottom_container)
     bottom_layout.addWidget(QLabel("📂 LinkBox Received Transfer Log:"))
     
+    transfer_filter_layout = QHBoxLayout()
+    window.completed_only_checkbox = QCheckBox("완료된 것")
+    transfer_filter_layout.addWidget(window.completed_only_checkbox)
+    transfer_filter_layout.addWidget(QLabel("표시기간:"))
+    window.transfer_period_combo = QComboBox()
+    window.transfer_period_combo.addItems(["전체", "오늘", "이번 달", "기간"])
+    transfer_filter_layout.addWidget(window.transfer_period_combo)
+    window.transfer_start_date = QDateEdit(QDate.currentDate())
+    window.transfer_start_date.setCalendarPopup(True)
+    window.transfer_end_date = QDateEdit(QDate.currentDate())
+    window.transfer_end_date.setCalendarPopup(True)
+    transfer_filter_layout.addWidget(window.transfer_start_date)
+    transfer_filter_layout.addWidget(QLabel("~"))
+    transfer_filter_layout.addWidget(window.transfer_end_date)
+    transfer_filter_layout.addStretch()
+    bottom_layout.addLayout(transfer_filter_layout)
+    window.transfer_period_combo.currentTextChanged.connect(window.apply_transfer_tab_filter)
+    window.transfer_start_date.dateChanged.connect(window.apply_transfer_tab_filter)
+    window.transfer_end_date.dateChanged.connect(window.apply_transfer_tab_filter)
+    window.completed_only_checkbox.stateChanged.connect(window.apply_transfer_tab_filter)
     window.tab_widget = QTabWidget()
+    window.tab_widget.currentChanged.connect(window.update_transfer_tab_colors)
+    window.tab_widget.tabBar().setContextMenuPolicy(Qt.CustomContextMenu)
+    window.tab_widget.tabBar().customContextMenuRequested.connect(window.show_tab_context_menu)
     window.tab_widget.setTabsClosable(True)
     window.tab_widget.tabCloseRequested.connect(window.close_tab)
     bottom_layout.addWidget(window.tab_widget)
     
     window.main_splitter.addWidget(bottom_container)
+    window.main_splitter.setSizes(getattr(window, 'main_splitter_sizes', [520, 420]))
+    window.main_splitter_save_timer = QTimer(window)
+    window.main_splitter_save_timer.setSingleShot(True)
+    window.main_splitter_save_timer.setInterval(250)
+    window.main_splitter.splitterMoved.connect(
+        lambda _pos, _index: window.main_splitter_save_timer.start()
+    )
+    window.main_splitter_save_timer.timeout.connect(window.persist_settings)
     window.main_tabs.addTab(tab1_widget, "📦 File Receiver (LinkBox)")
 
     # ==========================================

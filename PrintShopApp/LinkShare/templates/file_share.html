@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta charset="utf-8">
+  <title>파일 전송</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #f3f6f8; }
+    main { max-width: 620px; margin: auto; background: white; padding: 22px; border-radius: 12px; box-shadow: 0 2px 12px #0002; }
+    h2 { color: #1565c0; margin-top: 0; }
+    label { display: block; margin-top: 14px; color: #455a64; font-weight: bold; }
+    input, button { width: 100%; box-sizing: border-box; margin-top: 7px; padding: 13px; font-size: 16px; }
+    .file-actions { display: flex; gap: 8px; align-items: center; }
+    .file-actions input { flex: 1; }
+    .file-actions button { width: auto; margin-top: 7px; white-space: nowrap; }
+    #transferResult { margin-top: 7px; font-weight: bold; color: #1565c0; }
+    #transferResult.failed { color: #c62828; }
+    #selectionCount { color: #455a64; font-size: 13px; margin-top: 5px; }
+    button { border: 0; border-radius: 6px; background: #1565c0; color: white; font-weight: bold; }
+    #message { margin-top: 14px; font-weight: bold; }
+    #fileList { margin: 10px 0 0; padding: 10px 10px 10px 28px; background: #f5f8fa; border-radius: 6px; color: #37474f; }
+    #fileList:empty { display: none; }
+    #fileList li { display: flex; align-items: center; gap: 8px; margin: 7px 0; word-break: break-all; }
+    .file-name { flex: 1; }
+    .copy-controls { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+    .copy-button { width: 32px; margin: 0; padding: 5px; font-size: 18px; line-height: 1; }
+    .copy-count { min-width: 24px; text-align: center; font-weight: bold; }
+    .file-item.completed { background: #d9f2df; border-radius: 5px; padding: 5px; }
+    .file-item.task-completed { background: #80cbc4; color: #073b3a; border: 2px solid #16817a; border-radius: 5px; padding: 5px; }
+    .user-group { list-style: none; margin: 12px 0 4px -28px; padding: 8px 10px; background: #d7e7f7; color: #102a43; font-weight: bold; border-radius: 6px; }
+  </style>
+</head>
+<body>
+<main>
+  <h2>파일 전송</h2>
+  <div>구역: <b>{{ zone }}</b></div>
+  <form id="uploadForm">
+    <label for="userName">사용자명 (선택)</label>
+    <input id="userName" name="userName" type="text" maxlength="80" placeholder="예: 홍길동">
+    <label for="files">전송할 파일</label>
+    <div class="file-actions">
+      <button id="transferButton" type="submit">파일 전송</button>
+      <input id="files" type="file" name="file" multiple required>
+    </div>
+    <div id="selectionCount">선택 파일 0개</div>
+    <ul id="fileList" aria-live="polite"></ul>
+    <div id="transferResult" aria-live="polite"></div>
+  </form>
+  <div id="message"></div>
+</main>
+<script>
+const transferButton = document.getElementById('transferButton');
+const resultLabel = document.getElementById('transferResult');
+const userNameInput = document.getElementById('userName');
+const fileInput = document.getElementById('files');
+const selectionCount = document.getElementById('selectionCount');
+document.getElementById('uploadForm').addEventListener('submit', async function(event) {
+  event.preventDefault();
+  const message = document.getElementById('message');
+  const files = fileInput.files;
+  if (!files.length) return;
+  transferButton.disabled = true;
+  resultLabel.className = '';
+  resultLabel.textContent = '전송 중...';
+  const data = new FormData();
+  for (const file of files) data.append('file', file);
+  const copyCounts = Array.from(document.querySelectorAll('.copy-count')).map(item => Number(item.textContent) || 1);
+  data.append('copies', JSON.stringify(copyCounts));
+  const colorValues = Array.from(document.querySelectorAll('.color-choice')).map(item => item.value);
+  data.append('colors', JSON.stringify(colorValues));
+  const userName = userNameInput.value.trim();
+  const uploadId = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
+  message.textContent = '전송 중...';
+  try {
+    const response = await fetch('/upload?zone={{ zone|urlencode }}', { method: 'POST', headers: { 'X-Client-Name': userName, 'X-Upload-Id': uploadId }, body: data });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || '전송 실패');
+    message.textContent = `파일 ${result.count}개 전송 완료`;
+    if (result.failed_count) {
+      resultLabel.className = 'failed';
+      resultLabel.textContent = `성공 ${result.count}개 / 실패 ${result.failed_count}개`;
+      transferButton.disabled = false;
+    } else {
+      resultLabel.textContent = `파일 ${result.count}개 전송 완료`;
+    }
+    message.textContent = resultLabel.textContent;
+    document.querySelectorAll('.file-item').forEach(item => item.classList.add('completed'));
+    fileInput.value = '';
+    selectionCount.textContent = '선택 파일 0개';
+    transferButton.disabled = true;
+    // The active long-poll request refreshes the complete user-scoped list.
+  } catch (error) {
+    resultLabel.className = 'failed';
+    resultLabel.textContent = `전송 실패 ${files.length}개`;
+    transferButton.disabled = false;
+    message.textContent = error.message;
+  }
+});
+
+document.getElementById('files').addEventListener('change', function() {
+  const fileList = document.getElementById('fileList');
+  fileList.replaceChildren();
+  selectionCount.textContent = `선택 파일 ${this.files.length}개`;
+  updateTransferButton();
+  Array.from(this.files).forEach(file => {
+    const item = document.createElement('li');
+    item.className = 'file-item';
+    const name = document.createElement('span');
+    name.className = 'file-name';
+    name.textContent = `${file.name} (${formatFileSize(file.size)})`;
+    const controls = document.createElement('span');
+    controls.className = 'copy-controls';
+    const down = document.createElement('button');
+    down.type = 'button';
+    down.className = 'copy-button';
+    down.textContent = '−';
+    const count = document.createElement('span');
+    count.className = 'copy-count';
+    count.textContent = '1';
+    const up = document.createElement('button');
+    up.type = 'button';
+    up.className = 'copy-button';
+    up.textContent = '+';
+    down.addEventListener('click', () => { count.textContent = String(Math.max(1, Number(count.textContent) - 1)); });
+    up.addEventListener('click', () => { count.textContent = String(Math.min(999, Number(count.textContent) + 1)); });
+    controls.append(down, count, up);
+    const color = document.createElement('select');
+    color.className = 'color-choice';
+    for (const option of {{ color_options|tojson }}) {
+      const choice = document.createElement('option'); choice.value = option; choice.textContent = option;
+      color.appendChild(choice);
+    }
+    item.append(name, color, controls);
+    fileList.appendChild(item);
+  });
+});
+
+userNameInput.addEventListener('input', updateTransferButton);
+
+function updateTransferButton() {
+  // 사용자명은 선택 입력이며, 파일이 선택된 경우 전송할 수 있다.
+  transferButton.disabled = !fileInput.files.length;
+}
+
+updateTransferButton();
+
+function formatFileSize(bytes) {
+  if (bytes < 1024) return `${bytes} Bytes`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function renderTransferRecords(records) {
+  const fileList = document.getElementById('fileList');
+  fileList.replaceChildren();
+  const groups = new Map();
+  for (const record of records) {
+    const userName = record.user_name || 'Guest';
+    if (!groups.has(userName)) groups.set(userName, []);
+    groups.get(userName).push(record);
+  }
+  for (const [userName, userRecords] of groups) {
+    const groupTitle = document.createElement('li');
+    groupTitle.className = 'user-group';
+    groupTitle.textContent = `사용자명: ${userName}`;
+    fileList.appendChild(groupTitle);
+    for (const record of userRecords) {
+      const item = document.createElement('li');
+      item.className = `file-item completed${record.task_completed ? ' task-completed' : ''}`;
+      const name = document.createElement('span');
+      name.className = 'file-name';
+      name.textContent = `${record.filename} (${record.size})`;
+      const color = document.createElement('span');
+      color.textContent = record.color || 'Color';
+      const copies = document.createElement('span');
+      copies.className = 'copy-count';
+      copies.textContent = `${record.copies || 1}카피`;
+      const colorChoice = document.createElement('select');
+      colorChoice.className = 'color-choice';
+      for (const option of {{ color_options|tojson }}) {
+        const choice = document.createElement('option'); choice.value = option; choice.textContent = option;
+        if (option === (record.color || 'Color')) choice.selected = true;
+        colorChoice.appendChild(choice);
+      }
+      copies.textContent = String(record.copies || 1);
+      const down = document.createElement('button'); down.type = 'button'; down.className = 'copy-button'; down.textContent = '−';
+      const up = document.createElement('button'); up.type = 'button'; up.className = 'copy-button'; up.textContent = '+';
+      let updateQueue = Promise.resolve();
+      const update = () => {
+        const payload = {folder: record.folder, filename: record.filename,
+          copies: Number(copies.textContent), color: colorChoice.value};
+        updateQueue = updateQueue.then(async () => {
+          const response = await fetch('/transfer_update', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+          });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok || !result.ok) throw new Error('서버 동기화 실패');
+          record.copies = payload.copies;
+          record.color = payload.color;
+        }).catch(error => {
+          resultLabel.className = 'failed';
+          resultLabel.textContent = error.message;
+        });
+        return updateQueue;
+      };
+      down.addEventListener('click', () => { copies.textContent = String(Math.max(1, Number(copies.textContent) - 1)); update(); });
+      up.addEventListener('click', () => { copies.textContent = String(Math.min(999, Number(copies.textContent) + 1)); update(); });
+      colorChoice.addEventListener('change', update);
+      item.append(name, colorChoice, down, copies, up);
+      fileList.appendChild(item);
+    }
+  }
+}
+
+let transferVersion = 0;
+let transferPollActive = true;
+
+async function waitForTransferChanges() {
+  if (!transferPollActive) return;
+  try {
+    const response = await fetch(`/transfer_status?since=${transferVersion}`, { cache: 'no-store' });
+    if (response.ok) {
+      const result = await response.json();
+      if (result.version !== transferVersion) {
+        transferVersion = result.version;
+        renderTransferRecords(result.records || []);
+        await fetch('/transfer_ack', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ version: transferVersion })
+        });
+      }
+    }
+  } catch (_) { /* Reconnect after a network interruption. */ }
+  setTimeout(waitForTransferChanges, 100);
+}
+
+waitForTransferChanges();
+</script>
+</body>
+</html>
