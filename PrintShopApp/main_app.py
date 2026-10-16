@@ -21,6 +21,7 @@ import secrets
 import hashlib
 import sqlite3
 import re
+import filecmp
 from db import AppDatabase
 try:
     import winsound
@@ -113,7 +114,8 @@ os.makedirs(DEFAULT_UPLOAD_FOLDER, exist_ok=True)
 DEFAULT_ZONES = ["Counter", "Table01", "Table02", "VIP_Room"]
 DEFAULT_SAVE_TABS = ["DefaultTab"]
 DEFAULT_ACTIVE_MAIN_TAB = "file_receiver"
-DEFAULT_HOTSPOT_SSID = "hb_wifi"
+DEFAULT_HOTSPOT_SSID = "hbwifi"
+DEFAULT_HOTSPOT_PASSWORD = "hbwifihb"
 DEFAULT_HOTSPOT_NETWORK = "192.168.137.0/24"
 DEFAULT_HOTSPOT_GATEWAY = "192.168.137.1"
 DEFAULT_MAX_CONNECTIONS = 250
@@ -255,8 +257,16 @@ def load_app_settings():
     except (TypeError, ValueError, json.JSONDecodeError):
         linkshare_splitter_sizes = [520, 260]
 
+    saved_ssid = config.get('Settings', 'hotspot_ssid', fallback=DEFAULT_HOTSPOT_SSID).strip()
+    # Migrate the former built-in default without altering other user-defined SSIDs.
+    if saved_ssid == 'hb_wifi':
+        saved_ssid = DEFAULT_HOTSPOT_SSID
     return {
-        'ssid': config.get('Settings', 'hotspot_ssid', fallback=DEFAULT_HOTSPOT_SSID),
+        'ssid': saved_ssid,
+        'hotspot_password': config.get('Settings', 'hotspot_password', fallback=DEFAULT_HOTSPOT_PASSWORD),
+        'hotspot_password_user_set': config.getboolean(
+            'Settings', 'hotspot_password_user_set', fallback=False
+        ),
         'hotspot_image': config.get('Settings', 'hotspot_image', fallback=''),
         'fare_dir': config.get('Settings', 'fare_dir', fallback=os.path.join(linkshare_path, 'fare')),
         'max_connections': max_connections,
@@ -296,6 +306,11 @@ def save_app_settings(settings):
             config.add_section(section)
 
     config.set('Settings', 'hotspot_ssid', settings.get('ssid', DEFAULT_HOTSPOT_SSID))
+    config.set('Settings', 'hotspot_password', settings.get('hotspot_password', DEFAULT_HOTSPOT_PASSWORD))
+    config.set(
+        'Settings', 'hotspot_password_user_set',
+        str(bool(settings.get('hotspot_password_user_set', False)))
+    )
     config.set('Settings', 'hotspot_image', settings.get('hotspot_image', ''))
     config.set('Settings', 'fare_dir', settings.get('fare_dir', os.path.join(linkshare_path, 'fare')))
     config.set('Settings', 'max_connections', str(max(1, int(settings.get('max_connections', DEFAULT_MAX_CONNECTIONS)))))
@@ -375,7 +390,7 @@ def escape_wifi_qr_field(value):
     )
 
 # --- Mobile Hotspot Auto-Start ---
-def enable_mobile_hotspot(ssid_name="hb_wifi"):
+def enable_mobile_hotspot(ssid_name="hbwifi"):
     try:
         # Opening the Settings URI is only a fallback prompt.  Do not wait for
         # the Settings app from the application startup thread.
@@ -409,8 +424,8 @@ def get_current_hotspot_ssid():
     return get_current_hotspot_wifi_info()['ssid']
 
 
-def set_current_hotspot_ssid(ssid):
-    """Apply the program-defined SSID while preserving the existing hotspot password."""
+def set_current_hotspot_ssid(ssid, password=None):
+    """Apply the program-defined SSID and optional password via Windows WinRT."""
     try:
         import asyncio
         from winrt.windows.networking.connectivity import NetworkInformation
@@ -423,12 +438,22 @@ def set_current_hotspot_ssid(ssid):
         access_point = manager.get_current_access_point_configuration()
         previous_ssid = (access_point.ssid or '').strip()
         access_point.ssid = ssid
+        if password:
+            access_point.passphrase = password
 
         async def configure():
             await manager.configure_access_point_async(access_point)
 
         asyncio.run(configure())
-        return True, f"Hotspot SSID changed from '{previous_ssid}' to '{ssid}'"
+        verified = get_current_hotspot_wifi_info()
+        verified_ssid = verified.get('ssid', '').strip()
+        verified_password = verified.get('passphrase', '').strip()
+        if verified_ssid != ssid or (password and verified_password != password):
+            return False, (
+                "Windows did not retain the requested hotspot credentials; "
+                f"actual SSID='{verified_ssid}', password verification failed"
+            )
+        return True, f"Hotspot credentials updated for '{ssid}'"
     except Exception as exc:
         return False, f"Hotspot SSID change failed: {exc}"
 
@@ -1187,7 +1212,7 @@ def report_internet_status():
 
 # --- Integrated Settings Dialog ---
 class IntegratedSettingsDialog(QDialog):
-    def __init__(self, current_zones, current_fare_dir, current_ssid, interfaces,
+    def __init__(self, current_zones, current_fare_dir, current_ssid, current_password, interfaces,
                  current_internet_nic, current_hotspot_nic, current_hotspot_image,
                  current_hotspot_network, current_hotspot_gateway, current_max_connections,
                  current_windows_hotspot_limit, approval_sound_enabled,
@@ -1211,9 +1236,31 @@ class IntegratedSettingsDialog(QDialog):
         settings_tabs.addTab(general_tab, "일반")
         
         layout.addWidget(QLabel("<b>📶 Hotspot SSID (Name):</b>"))
-        self.ssid_input = QLineEdit(DEFAULT_HOTSPOT_SSID)
-        self.ssid_input.setReadOnly(True)
+        self.ssid_input = QLineEdit(current_ssid or DEFAULT_HOTSPOT_SSID)
+        self.ssid_input.setMaxLength(32)
+        self.ssid_input.setPlaceholderText(DEFAULT_HOTSPOT_SSID)
         layout.addWidget(self.ssid_input)
+
+        layout.addWidget(QLabel("<b>🔒 Hotspot password:</b>"))
+        password_layout = QHBoxLayout()
+        self.password_input = QLineEdit(current_password or DEFAULT_HOTSPOT_PASSWORD)
+        self.password_input.setEchoMode(QLineEdit.Password)
+        self.password_input.setMaxLength(63)
+        self.password_input.setPlaceholderText(DEFAULT_HOTSPOT_PASSWORD)
+        password_layout.addWidget(self.password_input)
+        self.show_password_btn = QPushButton("보기")
+        self.show_password_btn.setCheckable(True)
+        self.show_password_btn.toggled.connect(self.toggle_password_visibility)
+        password_layout.addWidget(self.show_password_btn)
+        default_password_btn = QPushButton("기본값")
+        default_password_btn.clicked.connect(
+            lambda: self.password_input.setText(DEFAULT_HOTSPOT_PASSWORD)
+        )
+        password_layout.addWidget(default_password_btn)
+        random_password_btn = QPushButton("무작위")
+        random_password_btn.clicked.connect(self.generate_random_password)
+        password_layout.addWidget(random_password_btn)
+        layout.addLayout(password_layout)
 
         layout.addWidget(QLabel("<b>Maximum connections:</b>"))
         self.max_connections_input = QSpinBox()
@@ -1322,10 +1369,13 @@ class IntegratedSettingsDialog(QDialog):
                 else:
                     target_layout.addItem(item)
 
-        append_settings_items(category_layouts["핫스팟"], general_items[0:12])
-        append_settings_items(category_layouts["네트워크"], general_items[12:16])
-        append_settings_items(category_layouts["저장/표시"], general_items[16:20])
-        append_settings_items(category_layouts["테이블·구역"], general_items[20:])
+        # Keep both adapter selectors together on the Network tab.
+        # Item ranges: hotspot identity/limits/range (0:14), NICs (14:18),
+        # image/log storage (18:22), and table/zone controls (22:).
+        append_settings_items(category_layouts["핫스팟"], general_items[0:14])
+        append_settings_items(category_layouts["네트워크"], general_items[14:18])
+        append_settings_items(category_layouts["저장/표시"], general_items[18:22])
+        append_settings_items(category_layouts["테이블·구역"], general_items[22:])
         for tab_title, category_layout in category_layouts.items():
             category_layout.insertWidget(0, QLabel(f"<h3>{tab_title} 설정</h3>"))
             category_layout.addStretch()
@@ -1528,7 +1578,22 @@ class IntegratedSettingsDialog(QDialog):
         return self.path_input.text().strip()
 
     def get_hotspot_ssid(self):
-        return DEFAULT_HOTSPOT_SSID
+        ssid = self.ssid_input.text().strip()
+        return ssid or DEFAULT_HOTSPOT_SSID
+
+    def get_hotspot_password(self):
+        password = self.password_input.text().strip()
+        return password or DEFAULT_HOTSPOT_PASSWORD
+
+    def toggle_password_visibility(self, visible):
+        self.password_input.setEchoMode(
+            QLineEdit.Normal if visible else QLineEdit.Password
+        )
+        self.show_password_btn.setText("숨기기" if visible else "보기")
+
+    def generate_random_password(self):
+        alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'
+        self.password_input.setText(''.join(secrets.choice(alphabet) for _ in range(12)))
 
     def get_selected_nic(self, combo):
         data = combo.currentData()
@@ -1590,6 +1655,7 @@ class IntegratedManagerApp(QMainWindow):
     file_signal = Signal(list, str, str)
     delete_signal = Signal(str, list)
     database_loaded = Signal(object, object)
+    qr_export_completed = Signal(str, bool, str)
 
     def __init__(self):
         super().__init__()
@@ -1598,8 +1664,20 @@ class IntegratedManagerApp(QMainWindow):
         app_settings = load_app_settings()
         detected_hotspot_info = get_current_hotspot_wifi_info()
         detected_hotspot_ssid = detected_hotspot_info['ssid']
-        self.hotspot_ssid = DEFAULT_HOTSPOT_SSID
-        self.hotspot_password = detected_hotspot_info['passphrase']
+        self.hotspot_ssid = app_settings.get('ssid', DEFAULT_HOTSPOT_SSID) or DEFAULT_HOTSPOT_SSID
+        configured_password = app_settings.get('hotspot_password', '').strip()
+        self.hotspot_password_user_set = bool(
+            app_settings.get('hotspot_password_user_set', False)
+            or (configured_password and configured_password != DEFAULT_HOTSPOT_PASSWORD)
+        )
+        detected_password = detected_hotspot_info['passphrase'].strip()
+        # Keep an existing Windows hotspot password when the stored value is
+        # only the built-in default. This prevents an unchanged setting from
+        # replacing the actual password on every restart.
+        if detected_password and not self.hotspot_password_user_set:
+            self.hotspot_password = detected_password
+        else:
+            self.hotspot_password = configured_password or detected_password or DEFAULT_HOTSPOT_PASSWORD
         self.hotspot_ssid_sync_message = ''
         self.fare_base_dir = app_settings['fare_dir']
         self.hotspot_image_path = app_settings['hotspot_image']
@@ -1676,6 +1754,7 @@ class IntegratedManagerApp(QMainWindow):
         self.usage_history_timer.start()
 
         self.database_loaded.connect(self.apply_database_state, Qt.QueuedConnection)
+        self.qr_export_completed.connect(self.handle_qr_export_completed, Qt.QueuedConnection)
         threading.Thread(target=self.load_database_state, daemon=True).start()
 
         self.resize(1150, 750)
@@ -1694,7 +1773,9 @@ class IntegratedManagerApp(QMainWindow):
         self.captive_portal_retry_count = 0
         self.start_captive_portal()
         self.persist_settings()
-        QTimer.singleShot(250, self.diagnose_hotspot)
+        # Windows Mobile Hotspot reports start success before the adapter and
+        # gateway are ready. Diagnose again after the asynchronous startup settles.
+        QTimer.singleShot(4000, self.diagnose_hotspot)
 
     def load_database_state(self):
         """Load persisted sessions/history off the GUI thread so startup remains responsive."""
@@ -1726,12 +1807,13 @@ class IntegratedManagerApp(QMainWindow):
         current_info = get_current_hotspot_wifi_info()
         current_ssid = current_info.get('ssid', '').strip()
         log_wifi(f"SSID check: current='{current_ssid}', expected='{self.hotspot_ssid}'.")
-        if current_ssid == self.hotspot_ssid:
-            log_wifi('SSID already matches; no SSID change required.')
+        current_password = current_info.get('passphrase', '').strip()
+        if current_ssid == self.hotspot_ssid and current_password == self.hotspot_password:
+            log_wifi('SSID and password already match; no hotspot credential change required.')
         else:
-            changed, message = set_current_hotspot_ssid(self.hotspot_ssid)
+            changed, message = set_current_hotspot_ssid(self.hotspot_ssid, self.hotspot_password)
             log_wifi(f"SSID configuration result: changed={changed}, {message}", logging.INFO if changed else logging.ERROR)
-            if changed:
+            if changed and not self.hotspot_password_user_set:
                 self.hotspot_password = get_current_hotspot_wifi_info().get('passphrase', self.hotspot_password)
 
         # Stage 2: tethering and gateway state.
@@ -1801,7 +1883,7 @@ class IntegratedManagerApp(QMainWindow):
     def open_settings_dialog(self):
         global DEFAULT_ZONES, DEFAULT_UPLOAD_FOLDER
         dialog = IntegratedSettingsDialog(
-            DEFAULT_ZONES, self.fare_base_dir, self.hotspot_ssid, self.interfaces,
+            DEFAULT_ZONES, self.fare_base_dir, self.hotspot_ssid, self.hotspot_password, self.interfaces,
             self.internet_nic['display'], self.hotspot_nic['display'], self.hotspot_image_path,
             self.hotspot_network, self.hotspot_gateway, self.max_connections,
             self.windows_hotspot_limit, self.approval_sound_enabled,
@@ -1809,8 +1891,18 @@ class IntegratedManagerApp(QMainWindow):
         )
         if dialog.exec() == QDialog.Accepted:
             DEFAULT_ZONES = dialog.zones
+            previous_ssid = self.hotspot_ssid
             new_ssid = dialog.get_hotspot_ssid()
+            new_password = dialog.get_hotspot_password()
             self.hotspot_ssid = new_ssid
+            if new_ssid != previous_ssid or new_password != self.hotspot_password:
+                changed, message = set_current_hotspot_ssid(new_ssid, new_password)
+                log_wifi(f"SSID changed by settings: {message}")
+                if not changed:
+                    QMessageBox.warning(self, "SSID 변경 실패", message)
+                else:
+                    self.hotspot_password = new_password
+                    self.hotspot_password_user_set = True
             self.internet_nic = dialog.get_internet_nic()
             self.hotspot_nic = dialog.get_hotspot_nic()
             self.hotspot_image_path = dialog.get_hotspot_image()
@@ -1865,6 +1957,10 @@ class IntegratedManagerApp(QMainWindow):
         self.persist_settings()
 
     def update_hotspot_info(self):
+        if hasattr(self, 'hotspot_name_label'):
+            self.hotspot_name_label.setText(
+                f"• Active Hotspot Name: <b>{self.hotspot_ssid}</b> (Auto-started)"
+            )
         if hasattr(self, 'hotspot_nic_label'):
             self.hotspot_nic_label.setText(f"• Hotspot NIC: <b>{self.hotspot_nic['display']}</b>")
         if hasattr(self, 'hotspot_network_label'):
@@ -2071,18 +2167,16 @@ class IntegratedManagerApp(QMainWindow):
         )
         if hasattr(self, 'hotspot_status_btn'):
             if result['active']:
-                self.hotspot_status_btn.setText('Hotspot ON')
+                self.hotspot_status_btn.setText('현재 상태: 켜짐')
                 self.hotspot_status_btn.setStyleSheet(
-                    "QPushButton { background-color: #2e7d32; color: white; font-weight: bold; "
-                    "border: 1px solid #1b5e20; border-radius: 4px; padding: 5px 10px; }"
-                    "QPushButton:hover { background-color: #388e3c; }"
+                    "QLabel { background-color: #e8f5e9; color: #1b5e20; font-weight: bold; "
+                        "border: 1px solid #1b5e20; border-radius: 4px; padding: 5px 10px; }"
                 )
             else:
-                self.hotspot_status_btn.setText('Hotspot OFF')
+                self.hotspot_status_btn.setText('현재 상태: 꺼짐')
                 self.hotspot_status_btn.setStyleSheet(
-                    "QPushButton { background-color: #c62828; color: white; font-weight: bold; "
-                    "border: 1px solid #8e0000; border-radius: 4px; padding: 5px 10px; }"
-                    "QPushButton:hover { background-color: #d32f2f; }"
+                    "QLabel { background-color: #ffebee; color: #b71c1c; font-weight: bold; "
+                        "border: 1px solid #8e0000; border-radius: 4px; padding: 5px 10px; }"
                 )
         if hasattr(self, 'hotspot_status_label'):
             self.hotspot_status_label.setText(result['text'].replace('\n', ' | '))
@@ -2131,6 +2225,26 @@ class IntegratedManagerApp(QMainWindow):
             self.persist_settings()
 
     def set_hotspot_state(self, enabled):
+        if enabled:
+            current_info = get_current_hotspot_wifi_info()
+            current_ssid = current_info.get('ssid', '').strip()
+            current_password = current_info.get('passphrase', '').strip()
+            if current_ssid != self.hotspot_ssid or current_password != self.hotspot_password:
+                changed, credential_message = set_current_hotspot_ssid(
+                    self.hotspot_ssid, self.hotspot_password
+                )
+                log_wifi(
+                    f"Hotspot start credential check: changed={changed}, {credential_message}",
+                    logging.INFO if changed else logging.ERROR,
+                )
+                if not changed:
+                    QMessageBox.warning(
+                        self,
+                        "핫스팟 설정 실패",
+                        f"프로그램 설정값을 핫스팟에 적용하지 못했습니다.\n{credential_message}",
+                    )
+                    self.diagnose_hotspot()
+                    return
         success, message = set_hotspot_enabled(enabled, self.hotspot_ssid)
         self.diagnose_hotspot()
         if success:
@@ -2146,6 +2260,8 @@ class IntegratedManagerApp(QMainWindow):
             self.linkshare_splitter_sizes = self.linkshare_splitter.sizes()
         save_app_settings({
             'ssid': self.hotspot_ssid,
+            'hotspot_password': self.hotspot_password,
+            'hotspot_password_user_set': self.hotspot_password_user_set,
             'hotspot_image': self.hotspot_image_path,
             'fare_dir': self.fare_base_dir,
             'upload_folder': DEFAULT_UPLOAD_FOLDER,
@@ -2277,6 +2393,10 @@ class IntegratedManagerApp(QMainWindow):
             pixmap = QPixmap.fromImage(qimage)
             self.qr_pixmap = pixmap
             self.qr_label.setPixmap(pixmap.scaled(200, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            self.queue_qr_background_export(
+                'network', pixmap,
+                f"SSID: {self.hotspot_ssid}\nPassword: {self.hotspot_password or '(not available)'}"
+            )
             if hasattr(self, 'hotspot_qr_label'):
                 self.update_hotspot_qr_code()
         except Exception as e:
@@ -2300,7 +2420,7 @@ class IntegratedManagerApp(QMainWindow):
             self.hotspot_qr_caption.setText("이 QR 코드는 인터넷 사용신청용입니다.")
             self.hotspot_url_label.setText(f"사용신청 URL: {portal_url}")
 
-            wifi_ssid = self.hotspot_ssid or 'hb_wifi'
+            wifi_ssid = self.hotspot_ssid or 'hbwifi'
             wifi_password = self.hotspot_password or ''
             wifi_type = 'WPA' if wifi_password else 'nopass'
             wifi_payload = (
@@ -2324,9 +2444,88 @@ class IntegratedManagerApp(QMainWindow):
                 self.hotspot_network_info_label.setText(
                     f"SSID: {wifi_ssid}\nPassword: {displayed_password}"
                 )
+            self.queue_qr_background_export(
+                'captive', self.hotspot_qr_pixmap,
+                f"Internet access request\n{portal_url}"
+            )
         except Exception as exc:
             self.hotspot_qr_pixmap = QPixmap()
             self.hotspot_qr_label.setText(f"Internet QR generation failed: {exc}")
+
+    def queue_qr_background_export(self, qr_type, pixmap, guide_text):
+        """Export a changed QR as JPG in a worker without blocking the GUI."""
+        if pixmap.isNull():
+            return
+        image = pixmap.toImage().convertToFormat(QImage.Format_RGB32)
+        output_dir = self.qr_output_dirs.get(qr_type, DEFAULT_QR_OUTPUT_DIR) or DEFAULT_QR_OUTPUT_DIR
+        if not os.path.isdir(output_dir):
+            output_dir = DEFAULT_QR_OUTPUT_DIR
+        os.makedirs(output_dir, exist_ok=True)
+        safe_name = 'network_connection_qr' if qr_type == 'network' else 'captive_portal_qr'
+        threading.Thread(
+            target=self._export_qr_jpg_worker,
+            args=(qr_type, image, guide_text, output_dir, safe_name),
+            daemon=True,
+        ).start()
+
+    def _export_qr_jpg_worker(self, qr_type, qr_image, guide_text, output_dir, safe_name):
+        try:
+            output_results = []
+            changed = False
+            for scale in (1, 2, 3, 4):
+                qr_size = max(240, 240 * scale)
+                scaled_qr = qr_image.scaled(qr_size, qr_size, Qt.KeepAspectRatio, Qt.FastTransformation)
+                margin = max(12, 12 * scale)
+                text_font = QFont('Arial', max(12, 12 * scale))
+                metrics = QFontMetrics(text_font)
+                lines = guide_text.splitlines() or [qr_type]
+                line_height = metrics.lineSpacing()
+                canvas = QImage(
+                    qr_size + margin * 2,
+                    qr_size + line_height * len(lines) + margin * 2,
+                    QImage.Format_RGB32,
+                )
+                canvas.fill(Qt.white)
+                painter = QPainter(canvas)
+                painter.setPen(Qt.black)
+                painter.setFont(text_font)
+                painter.drawImage(margin, margin, scaled_qr)
+                text_y = margin + qr_size + max(2, scale)
+                for line in lines:
+                    painter.drawText(margin, text_y, qr_size, line_height, Qt.AlignHCenter, line)
+                    text_y += line_height
+                painter.end()
+                output_path = os.path.join(output_dir, f'{safe_name}_{scale}x.jpg')
+                temp_path = f'{output_path}.tmp-{threading.get_ident()}'
+                if not canvas.save(temp_path, 'JPG'):
+                    raise OSError(f'{output_path} 저장에 실패했습니다.')
+                if os.path.exists(output_path) and filecmp.cmp(temp_path, output_path, shallow=False):
+                    os.remove(temp_path)
+                    output_results.append(f'{scale}x: 변경 없음')
+                else:
+                    os.replace(temp_path, output_path)
+                    changed = True
+                    output_results.append(f'{scale}x: 갱신됨 ({output_path})')
+            if changed:
+                self.qr_export_completed.emit(qr_type, True, '\n'.join(output_results))
+        except Exception as exc:
+            self.qr_export_completed.emit(qr_type, False, str(exc))
+
+    def handle_qr_export_completed(self, qr_type, success, detail):
+        if success:
+            self.show_auto_close_message(
+                QMessageBox.Information,
+                'QR 출력 확인 완료',
+                f'{qr_type} QR JPG 비교 결과\n{detail}',
+                timeout=3000,
+            )
+        else:
+            self.show_auto_close_message(
+                QMessageBox.Warning,
+                'QR 출력 실패',
+                f'{qr_type} QR JPG 저장 실패\n{detail}',
+                timeout=3000,
+            )
 
     def show_network_qr_print_dialog(self):
         if not hasattr(self, 'hotspot_network_pixmap') or self.hotspot_network_pixmap.isNull():

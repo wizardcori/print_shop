@@ -227,15 +227,15 @@ def setup_integrated_ui(window, current_upload_folder, current_zones, current_sa
     window.hotspot_control_layout = hotspot_control_layout
     hotspot_controls = QHBoxLayout()
     hotspot_controls.setSpacing(6)
-    window.hotspot_status_btn = QPushButton("Status")
+    window.hotspot_status_btn = QLabel("상태 확인 중")
+    window.hotspot_status_btn.setAlignment(Qt.AlignCenter)
     window.hotspot_status_btn.setMinimumHeight(32)
     window.hotspot_status_btn.setStyleSheet(
-        "QPushButton { background-color: #607d8b; color: white; font-weight: bold; "
+        "QLabel { background-color: #607d8b; color: white; font-weight: bold; "
         "border: 1px solid #455a64; border-radius: 4px; padding: 5px 10px; }"
-        "QPushButton:hover { background-color: #78909c; }"
     )
     hotspot_controls.addWidget(window.hotspot_status_btn)
-    window.hotspot_on_btn = QPushButton("Hotspot ON")
+    window.hotspot_on_btn = QPushButton("Hotspot 켜기")
     window.hotspot_on_btn.clicked.connect(lambda: window.set_hotspot_state(True))
     window.hotspot_on_btn.setMinimumHeight(32)
     window.hotspot_on_btn.setStyleSheet(
@@ -244,7 +244,7 @@ def setup_integrated_ui(window, current_upload_folder, current_zones, current_sa
         "QPushButton:hover { background-color: #388e3c; }"
     )
     hotspot_controls.addWidget(window.hotspot_on_btn)
-    window.hotspot_off_btn = QPushButton("Hotspot OFF")
+    window.hotspot_off_btn = QPushButton("Hotspot 끄기")
     window.hotspot_off_btn.clicked.connect(lambda: window.set_hotspot_state(False))
     window.hotspot_off_btn.setMinimumHeight(32)
     window.hotspot_off_btn.setStyleSheet(
@@ -253,7 +253,7 @@ def setup_integrated_ui(window, current_upload_folder, current_zones, current_sa
         "QPushButton:hover { background-color: #d32f2f; }"
     )
     hotspot_controls.addWidget(window.hotspot_off_btn)
-    window.hotspot_diagnose_btn = QPushButton("Run diagnosis")
+    window.hotspot_diagnose_btn = QPushButton("상태 진단 실행")
     window.hotspot_diagnose_btn.clicked.connect(window.diagnose_hotspot)
     window.hotspot_diagnose_btn.setMinimumHeight(32)
     window.hotspot_diagnose_btn.setStyleSheet(
@@ -263,7 +263,10 @@ def setup_integrated_ui(window, current_upload_folder, current_zones, current_sa
     )
     hotspot_controls.addWidget(window.hotspot_diagnose_btn)
     hotspot_control_layout.addLayout(hotspot_controls)
-    hotspot_control_layout.addWidget(QLabel(f"• Active Hotspot Name: <b>{current_ssid}</b> (Auto-started)"))
+    window.hotspot_name_label = QLabel(
+        f"• Active Hotspot Name: <b>{current_ssid}</b> (Auto-started)"
+    )
+    hotspot_control_layout.addWidget(window.hotspot_name_label)
     window.hotspot_nic_label = QLabel(f"• Hotspot NIC: <b>{hotspot_nic.get('display', 'Not selected')}</b>")
     hotspot_control_layout.addWidget(window.hotspot_nic_label)
     window.hotspot_network_label = QLabel(f"• Hotspot IP range: <b>{hotspot_network}</b> / gateway: <b>{hotspot_gateway}</b>")
