@@ -2,6 +2,7 @@
 chcp 65001 > nul
 
 setlocal
+cd /d "%~dp0.."
 echo ========================================================
 echo   Starting Wi-Fi Management System (.venv / Python 3.11)
 echo ========================================================
@@ -13,6 +14,6 @@ if not exist .venv (
 )
 
 call .venv\Scripts\activate
-python wifi_full_app.py
+python main_app.py
 
-pause
+rem pause

@@ -14,19 +14,29 @@ import ipaddress
 import qrcode
 import subprocess
 import psutil
+import ctypes
+import shutil
+import logging
+import secrets
+import hashlib
+try:
+    import winsound
+except ImportError:
+    winsound = None
 from io import BytesIO
 from email.parser import BytesParser
 from email.policy import default
-from flask import Flask, request, render_template, redirect
+from flask import Flask, request, render_template, redirect, Response, make_response
 from cryptography.fernet import Fernet
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, 
     QHBoxLayout, QLabel, QLineEdit, QPushButton, 
     QTableWidget, QTableWidgetItem, QComboBox, QMessageBox, QFileDialog,
-    QCheckBox, QMenu, QDialog, QListWidget, QTabWidget, QGridLayout, QSpinBox
+    QCheckBox, QMenu, QDialog, QListWidget, QTabWidget, QGridLayout, QSpinBox,
+    QRadioButton, QButtonGroup
 )
-from PySide6.QtGui import QPixmap, QImage, QColor, QAction, QPainter
+from PySide6.QtGui import QPixmap, QImage, QColor, QAction, QPainter, QFont, QFontMetrics, QPageSize
 from PySide6.QtPrintSupport import QPrinter, QPrintDialog
 from PySide6.QtCore import Qt, QThread, Signal, Slot, QTimer, QObject
 
@@ -36,6 +46,11 @@ os.chdir(current_dir)
 
 linkbox_path = os.path.join(current_dir, "LinkBox")
 linkshare_path = os.path.join(current_dir, "LinkShare")
+database_dir = os.path.join(linkshare_path, "db")
+wifi_approval_db_path = os.path.join(database_dir, "wifi_approval.db")
+os.makedirs(database_dir, exist_ok=True)
+approval_sound_dir = os.path.join(linkshare_path, "approval_sounds")
+os.makedirs(approval_sound_dir, exist_ok=True)
 sys.path.append(linkbox_path)
 sys.path.append(linkshare_path)
 
@@ -43,16 +58,30 @@ import ui_layout
 
 # --- Configuration & Path Setup ---
 SETTINGS_FILE = "wifi_approval_settings.ini"
+WIFI_LOG_FILE = os.path.join(current_dir, "wifi_hotspot.log")
+wifi_logger = logging.getLogger("printshop.wifi")
+if not wifi_logger.handlers:
+    wifi_logger.setLevel(logging.INFO)
+    wifi_handler = logging.FileHandler(WIFI_LOG_FILE, encoding='utf-8')
+    wifi_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
+    wifi_logger.addHandler(wifi_handler)
 DEFAULT_UPLOAD_FOLDER = os.path.join(linkbox_path, "LinkBox_Files")
 os.makedirs(DEFAULT_UPLOAD_FOLDER, exist_ok=True)
 
 DEFAULT_ZONES = ["Counter", "Table01", "Table02", "VIP_Room"]
 DEFAULT_SAVE_TABS = ["DefaultTab"]
+DEFAULT_ACTIVE_MAIN_TAB = "file_receiver"
 DEFAULT_HOTSPOT_SSID = "hb_wifi"
 DEFAULT_HOTSPOT_NETWORK = "192.168.137.0/24"
 DEFAULT_HOTSPOT_GATEWAY = "192.168.137.1"
 DEFAULT_MAX_CONNECTIONS = 250
 DEFAULT_WINDOWS_HOTSPOT_LIMIT = 8
+DEFAULT_STATUS_POLL_INTERVAL = 60.0
+DEFAULT_APPROVAL_SOUND_ENABLED = True
+DEFAULT_APPROVAL_SOUNDS = ['', '', '', '', '']
+DEFAULT_QR_OUTPUT_FORMAT = 'PDF'
+DEFAULT_QR_OUTPUT_SCALE = 1
+DEFAULT_QR_OUTPUT_DIR = os.path.join(current_dir, 'qr_output')
 WINDOWS_HOTSPOT_LIMIT_MAX = 128
 
 # --- Encryption Key Management (LinkShare)[cite: 4] ---
@@ -126,6 +155,29 @@ def load_app_settings():
         )
     except ValueError:
         windows_hotspot_limit = DEFAULT_WINDOWS_HOTSPOT_LIMIT
+    try:
+        status_poll_interval = max(
+            0.5,
+            min(60.0, config.getfloat('Settings', 'status_poll_interval', fallback=DEFAULT_STATUS_POLL_INTERVAL)),
+        )
+    except ValueError:
+        status_poll_interval = DEFAULT_STATUS_POLL_INTERVAL
+    approval_sounds = [
+        config.get('Settings', f'approval_sound_{index}', fallback=DEFAULT_APPROVAL_SOUNDS[index - 1])
+        for index in range(1, 6)
+    ]
+    qr_output_formats = {
+        'network': config.get('Settings', 'network_qr_output_format', fallback=DEFAULT_QR_OUTPUT_FORMAT),
+        'captive': config.get('Settings', 'captive_qr_output_format', fallback=DEFAULT_QR_OUTPUT_FORMAT),
+    }
+    qr_output_scales = {
+        'network': config.getint('Settings', 'network_qr_output_scale', fallback=DEFAULT_QR_OUTPUT_SCALE),
+        'captive': config.getint('Settings', 'captive_qr_output_scale', fallback=DEFAULT_QR_OUTPUT_SCALE),
+    }
+    qr_output_dirs = {
+        'network': config.get('Settings', 'network_qr_output_dir', fallback=DEFAULT_QR_OUTPUT_DIR),
+        'captive': config.get('Settings', 'captive_qr_output_dir', fallback=DEFAULT_QR_OUTPUT_DIR),
+    }
 
     try:
         linkshare_splitter_sizes = json.loads(
@@ -143,9 +195,18 @@ def load_app_settings():
         'fare_dir': config.get('Settings', 'fare_dir', fallback=os.path.join(linkshare_path, 'fare')),
         'max_connections': max_connections,
         'windows_hotspot_limit': windows_hotspot_limit,
+        'status_poll_interval': status_poll_interval,
+        'approval_sound_enabled': config.getboolean(
+            'Settings', 'approval_sound_enabled', fallback=DEFAULT_APPROVAL_SOUND_ENABLED
+        ),
+        'approval_sounds': approval_sounds,
+        'qr_output_formats': qr_output_formats,
+        'qr_output_scales': qr_output_scales,
+        'qr_output_dirs': qr_output_dirs,
         'upload_folder': config.get('Storage', 'upload_folder', fallback=DEFAULT_UPLOAD_FOLDER),
         'zones': zones,
         'save_tabs': save_tabs,
+        'active_main_tab': config.get('Storage', 'active_main_tab', fallback=DEFAULT_ACTIVE_MAIN_TAB),
         'internet_nic': config.get('Network', 'internet_nic', fallback=''),
         'internet_ip': config.get('Network', 'internet_ip', fallback=''),
         'hotspot_nic': config.get('Network', 'hotspot_nic', fallback=''),
@@ -175,6 +236,28 @@ def save_app_settings(settings):
         'windows_hotspot_limit',
         str(max(1, min(WINDOWS_HOTSPOT_LIMIT_MAX, int(settings.get('windows_hotspot_limit', DEFAULT_WINDOWS_HOTSPOT_LIMIT))))),
     )
+    config.set('Settings', 'status_poll_interval', str(max(
+        0.5, min(60.0, float(settings.get('status_poll_interval', DEFAULT_STATUS_POLL_INTERVAL)))
+    )))
+    config.set('Settings', 'approval_sound_enabled', str(bool(
+        settings.get('approval_sound_enabled', DEFAULT_APPROVAL_SOUND_ENABLED)
+    )))
+    approval_sounds = settings.get('approval_sounds', DEFAULT_APPROVAL_SOUNDS)
+    for index in range(1, 6):
+        config.set('Settings', f'approval_sound_{index}', str(
+            approval_sounds[index - 1] if index - 1 < len(approval_sounds) else ''
+        ))
+    qr_formats = settings.get('qr_output_formats', {})
+    qr_scales = settings.get('qr_output_scales', {})
+    qr_dirs = settings.get('qr_output_dirs', {})
+    for qr_type in ('network', 'captive'):
+        output_format = qr_formats.get(qr_type, DEFAULT_QR_OUTPUT_FORMAT)
+        if output_format not in ('JPG', 'BMP', 'PDF'):
+            output_format = DEFAULT_QR_OUTPUT_FORMAT
+        output_scale = max(1, min(4, int(qr_scales.get(qr_type, DEFAULT_QR_OUTPUT_SCALE))))
+        config.set('Settings', f'{qr_type}_qr_output_format', output_format)
+        config.set('Settings', f'{qr_type}_qr_output_scale', str(output_scale))
+        config.set('Settings', f'{qr_type}_qr_output_dir', qr_dirs.get(qr_type, DEFAULT_QR_OUTPUT_DIR))
     splitter_sizes = settings.get('linkshare_splitter_sizes', [520, 260])
     config.set('Settings', 'linkshare_splitter_sizes', json.dumps([int(size) for size in splitter_sizes]))
     config.set('Network', 'internet_nic', settings.get('internet_nic', ''))
@@ -186,6 +269,10 @@ def save_app_settings(settings):
     config.set('Storage', 'upload_folder', settings.get('upload_folder', DEFAULT_UPLOAD_FOLDER))
     config.set('Storage', 'zones', ','.join(settings.get('zones', DEFAULT_ZONES)))
     config.set('Storage', 'save_tabs', ','.join(settings.get('save_tabs', DEFAULT_SAVE_TABS)))
+    active_main_tab = settings.get('active_main_tab', DEFAULT_ACTIVE_MAIN_TAB)
+    if active_main_tab not in ('file_receiver', 'wifi_pass'):
+        active_main_tab = DEFAULT_ACTIVE_MAIN_TAB
+    config.set('Storage', 'active_main_tab', active_main_tab)
 
     with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
         config.write(f)
@@ -447,6 +534,10 @@ def set_hotspot_enabled(enabled, ssid_name):
             enable_mobile_hotspot(ssid_name)
         return False, f"{modern_message}\nLegacy netsh: {exc}"
 
+
+def log_wifi(message, level=logging.INFO):
+    wifi_logger.log(level, message)
+
 # --- NIC Auto-Search & Internet Tested Priority[cite: 2] ---
 def check_internet_via_ip(ip_address):
     try:
@@ -504,9 +595,41 @@ def choose_preferred_interface(interfaces, saved_display='', saved_ip='', wirele
 # --- Integrated Flask Web Server[cite: 3, 4] ---
 web_app = Flask(__name__, template_folder=os.path.join(linkshare_path, 'templates'))
 shared_sessions = {}
+client_identity_map = {}
 usage_history = []
+status_condition = threading.Condition()
 runtime_settings = {'max_connections': DEFAULT_MAX_CONNECTIONS}
 _upstream_dns_cache = {'timestamp': 0.0, 'servers': []}
+CLIENT_COOKIE_NAME = 'printshop_client_token'
+
+
+def get_client_identity():
+    """Identify a portal user across reconnects without relying on a changing IP.
+
+    The browser cookie is the primary identifier.  The IP remains a transport
+    detail and is refreshed on every request.  Device name is only a friendly
+    label supplied by the browser; it is not treated as a security identity.
+    """
+    token = request.cookies.get(CLIENT_COOKIE_NAME)
+    if not token or len(token) > 256:
+        token = secrets.token_urlsafe(24)
+    token_id = hashlib.sha256(token.encode('utf-8')).hexdigest()
+    client_ip = request.remote_addr or '-'
+    previous_ip = client_identity_map.get(token_id)
+    if previous_ip and previous_ip != client_ip and previous_ip in shared_sessions:
+        session = shared_sessions.pop(previous_ip)
+        session['client_ip'] = client_ip
+        shared_sessions[client_ip] = session
+    client_identity_map[token_id] = client_ip
+    device_name = (request.headers.get('X-Client-Device') or '').strip()[:120]
+    return token, token_id, client_ip, device_name
+
+
+def identity_response(payload, token):
+    response = make_response(payload)
+    response.set_cookie(CLIENT_COOKIE_NAME, token, max_age=60 * 60 * 24 * 30,
+                        httponly=True, samesite='Lax')
+    return response
 
 
 def append_usage_log(log_type, session, **overrides):
@@ -583,6 +706,29 @@ class CaptivePortalRedirectHandler(http.server.BaseHTTPRequestHandler):
             return
 
     def do_GET(self):
+        # 승인된 사용자의 OS 연결성 확인(NCSI/Captive Portal probe)은
+        # 사용신청 화면으로 다시 보내면 Wi-Fi에 느낌표가 표시된다.
+        # 주요 Windows/Android/Apple probe에는 정상 응답을 반환한다.
+        if is_client_internet_approved(self.client_address[0]):
+            host = (self.headers.get('Host') or '').lower().split(':', 1)[0]
+            probe_hosts = {
+                'www.msftconnecttest.com', 'www.msftncsi.com',
+                'connectivitycheck.gstatic.com', 'clients3.google.com',
+                'connectivitycheck.android.com', 'captive.apple.com',
+            }
+            if host in probe_hosts:
+                if host in {'www.msftconnecttest.com', 'www.msftncsi.com'}:
+                    body = b'Microsoft Connect Test'
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                    self.send_header('Content-Length', str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                else:
+                    self.send_response(204)
+                    self.send_header('Content-Length', '0')
+                    self.end_headers()
+                return
         self.send_response(302)
         self.send_header('Location', self.portal_url)
         self.send_header('Content-Length', '0')
@@ -658,7 +804,41 @@ def portal_root():
 
 @web_app.route('/scan')
 def customer_scan():
-    return render_template('portal.html')
+    token, token_id, client_ip, device_name = get_client_identity()
+    response = make_response(render_template(
+        'portal.html',
+        status_poll_interval=runtime_settings.get('status_poll_interval', DEFAULT_STATUS_POLL_INTERVAL),
+    ))
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    response.set_cookie(CLIENT_COOKIE_NAME, token, max_age=60 * 60 * 24 * 30,
+                        httponly=True, samesite='Lax')
+    return response
+
+@web_app.route('/manifest.webmanifest')
+def app_manifest():
+    return Response(json.dumps({
+        'name': '인터넷 사용신청',
+        'short_name': '사용신청',
+        'start_url': '/scan',
+        'display': 'standalone',
+        'background_color': '#f3f6f8',
+        'theme_color': '#1565c0',
+        'icons': [
+            {'src': '/app-icon.svg', 'sizes': 'any', 'type': 'image/svg+xml', 'purpose': 'any maskable'},
+        ],
+    }, ensure_ascii=False), mimetype='application/manifest+json')
+
+@web_app.route('/app-icon.svg')
+@web_app.route('/favicon.ico')
+def app_icon():
+    return Response('''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+      <rect width="512" height="512" rx="96" fill="#1565c0"/>
+      <path d="M128 176h256v160H128z" fill="#fff"/>
+      <path d="M176 144c64-64 96-64 160 0M208 112c40-40 56-40 96 0" fill="none" stroke="#fff" stroke-width="24" stroke-linecap="round"/>
+      <circle cx="256" cy="256" r="28" fill="#1565c0"/>
+    </svg>''', mimetype='image/svg+xml')
 
 @web_app.route('/file_share')
 def file_share_page():
@@ -674,7 +854,7 @@ def customer_request():
     if minutes not in allowed_minutes:
         return {'msg': 'Select one of the available usage times.'}, 400
 
-    client_ip = request.remote_addr
+    token, token_id, client_ip, device_name = get_client_identity()
     dur_str = f"{minutes} Min Pass" if minutes < 60 else f"{minutes//60} Hour Pass"
     existing_session = shared_sessions.get(client_ip)
     if existing_session:
@@ -705,7 +885,11 @@ def customer_request():
                 start_time='-',
                 end_time='-',
             )
-            signals.approval_requested.emit(client_ip, minutes, dur_str)
+            threading.Thread(
+                target=signals.approval_requested.emit,
+                args=(client_ip, minutes, dur_str),
+                daemon=True,
+            ).start()
             return {
                 'status': 'Pending',
                 'msg': f"[{dur_str}] Additional usage request sent for approval.",
@@ -737,6 +921,9 @@ def customer_request():
         'requested_minutes': minutes,
         'fare': dur_str,
         'client_ip': client_ip,
+        'client_token_id': token_id,
+        'device_name': device_name or '알 수 없는 기기',
+        'last_seen': datetime.datetime.now().isoformat(timespec='seconds'),
         'connection_status': '연결됨',
         'usage_request': dur_str,
         'usage_approval': '승인대기',
@@ -744,10 +931,16 @@ def customer_request():
         'approval_time': '-',
         'start_time': '-',
         'end_time': '-',
+        'internet_status': '확인 중',
+        'total_used_seconds': 0,
     }
     shared_sessions[client_ip] = session_record
     append_usage_log('request', session_record)
-    signals.approval_requested.emit(client_ip, minutes, dur_str)
+    threading.Thread(
+        target=signals.approval_requested.emit,
+        args=(client_ip, minutes, dur_str),
+        daemon=True,
+    ).start()
     return {
         'status': 'Pending',
         'msg': f"[{dur_str}] Approval request sent. Please pay at the counter.",
@@ -772,22 +965,103 @@ def get_client_session(client_ip):
     return snapshot
 
 
+def notify_status_change():
+    with status_condition:
+        status_condition.notify_all()
+
+
+def session_status_signature(session):
+    return tuple(session.get(key) for key in (
+        'status', 'approval_time', 'end_time', 'remaining_seconds', 'internet_status'
+    ))
+
+
 @web_app.route('/status')
 def get_status():
-    return get_client_session(request.remote_addr)
+    # 상태 전달 흐름:
+    # - 화면 최초 진입과 상태확인 버튼은 일반 /status 요청으로 즉시 응답한다.
+    # - 스마트폰 화면의 자동 조회는 /status?wait=1 대기 연결을 사용한다.
+    # - 대기 연결은 승인/비승인/인터넷 연결 상태가 바뀔 때까지 서버에서 대기한다.
+    # - 상태 변경 시 notify_status_change()가 모든 대기 연결을 즉시 깨워 새 상태를 전송한다.
+    # - 브라우저가 숨겨지면 대기 연결을 만들지 않고, 다시 보이면 연결을 재개한다.
+    wait_for_change = request.args.get('wait') == '1'
+    token, token_id, client_ip, device_name = get_client_identity()
+    session = shared_sessions.get(client_ip)
+    if session:
+        session['last_seen'] = datetime.datetime.now().isoformat(timespec='seconds')
+        session['client_token_id'] = token_id
+        if device_name:
+            session['device_name'] = device_name
+    if wait_for_change:
+        with status_condition:
+            before = session_status_signature(shared_sessions.get(client_ip, {}))
+            status_condition.wait_for(
+                lambda: session_status_signature(shared_sessions.get(client_ip, {})) != before,
+                timeout=30,
+            )
+    return identity_response(get_client_session(client_ip), token)
+
+@web_app.route('/internet-status', methods=['GET', 'POST'])
+def report_internet_status():
+    # 사용자 브라우저의 실제 인터넷 연결 확인 결과를 관리자 앱 세션에 기록한다.
+    # 기록 즉시 대기 중인 /status?wait=1 연결을 깨워 관리자 화면에 반영한다.
+    token, token_id, client_ip, device_name = get_client_identity()
+    session = shared_sessions.get(client_ip)
+    if not session:
+        return identity_response({'status': 'None'}, token), 404
+    session['last_seen'] = datetime.datetime.now().isoformat(timespec='seconds')
+    session['client_token_id'] = token_id
+    if device_name:
+        session['device_name'] = device_name
+    payload = request.get_json(silent=True) or {}
+    if request.method == 'GET':
+        payload = request.args.to_dict()
+        if payload.get('browser_online') is not None:
+            payload['browser_online'] = payload['browser_online'].lower() == 'true'
+        if payload.get('internet_check'):
+            try:
+                payload['internet_check'] = json.loads(payload['internet_check'])
+            except (TypeError, json.JSONDecodeError):
+                payload['internet_check'] = {'raw': str(payload['internet_check'])[:200]}
+    internet_status = payload.get('internet_status')
+    if isinstance(payload.get('internet_check'), dict):
+        session['internet_check'] = dict(payload['internet_check'])
+    if 'browser_online' in payload:
+        session['browser_online'] = bool(payload['browser_online'])
+    if payload.get('checked_at'):
+        session['internet_checked_at'] = str(payload['checked_at'])[:80]
+    if payload.get('test_result'):
+        session['internet_test_result'] = str(payload['test_result'])[:20]
+    if internet_status in ('확인 중', '사용 가능', '확인 실패'):
+        if session.get('internet_status') != internet_status:
+            session['internet_status'] = internet_status
+            notify_status_change()
+    return {'status': session.get('internet_status', '확인 중')}
 
 # --- Integrated Settings Dialog ---
 class IntegratedSettingsDialog(QDialog):
     def __init__(self, current_zones, current_fare_dir, current_ssid, interfaces,
                  current_internet_nic, current_hotspot_nic, current_hotspot_image,
                  current_hotspot_network, current_hotspot_gateway, current_max_connections,
-                 current_windows_hotspot_limit, parent=None):
+                 current_windows_hotspot_limit, approval_sound_enabled,
+                 approval_sounds, approval_sound_dir, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Integrated Environment Settings")
         self.resize(520, 650)
         
         self.zones = current_zones.copy()
-        layout = QVBoxLayout(self)
+        root_layout = QVBoxLayout(self)
+        settings_tabs = QTabWidget()
+        root_layout.addWidget(settings_tabs)
+        general_tab = QWidget()
+        layout = QVBoxLayout(general_tab)
+        category_layouts = {}
+        for tab_title, tab_description in (("핫스팟", "핫스팟 SSID, 접속 수, IP 범위 및 게이트웨이 설정"), ("네트워크", "인터넷 회선과 핫스팟 네트워크 어댑터 설정"), ("저장/표시", "이미지와 로그 저장 위치 설정"), ("테이블·구역", "테이블 및 서비스 구역 설정")):
+            category_tab = QWidget()
+            category_layout = QVBoxLayout(category_tab)
+            category_layouts[tab_title] = category_layout
+            settings_tabs.addTab(category_tab, tab_title)
+        settings_tabs.addTab(general_tab, "일반")
         
         layout.addWidget(QLabel("<b>📶 Hotspot SSID (Name):</b>"))
         self.ssid_input = QLineEdit(DEFAULT_HOTSPOT_SSID)
@@ -814,6 +1088,10 @@ class IntegratedSettingsDialog(QDialog):
         layout.addWidget(QLabel(
             "Requires Administrator. Stop/restart Mobile Hotspot; Windows may require a reboot."
         ))
+
+        self.approval_sound_enabled = approval_sound_enabled
+        self.approval_sounds = list(approval_sounds[:5])
+        self.approval_sound_dir = approval_sound_dir
 
         layout.addWidget(QLabel("<b>Hotspot IPv4 range (CIDR):</b>"))
         self.hotspot_network_input = QLineEdit(current_hotspot_network)
@@ -877,15 +1155,142 @@ class IntegratedSettingsDialog(QDialog):
         del_btn.clicked.connect(self.delete_zone)
         layout.addWidget(del_btn)
         
+        # Move the existing general-settings controls into their category tabs.
+        for category_layout in category_layouts.values():
+            while category_layout.count():
+                placeholder = category_layout.takeAt(0)
+                if placeholder.widget():
+                    placeholder.widget().deleteLater()
+
+        general_items = []
+        while layout.count():
+            general_items.append(layout.takeAt(0))
+
+        def append_settings_items(target_layout, items):
+            for item in items:
+                if item.widget():
+                    target_layout.addWidget(item.widget())
+                elif item.layout():
+                    target_layout.addLayout(item.layout())
+                else:
+                    target_layout.addItem(item)
+
+        append_settings_items(category_layouts["핫스팟"], general_items[0:12])
+        append_settings_items(category_layouts["네트워크"], general_items[12:16])
+        append_settings_items(category_layouts["저장/표시"], general_items[16:20])
+        append_settings_items(category_layouts["테이블·구역"], general_items[20:])
+        for tab_title, category_layout in category_layouts.items():
+            category_layout.insertWidget(0, QLabel(f"<h3>{tab_title} 설정</h3>"))
+            category_layout.addStretch()
+
+        # The former catch-all tab is no longer exposed; all controls are in category tabs.
+        general_index = settings_tabs.indexOf(general_tab)
+        if general_index >= 0:
+            settings_tabs.removeTab(general_index)
+
+        sound_tab = QWidget()
+        sound_layout = QVBoxLayout(sound_tab)
+        settings_tabs.addTab(sound_tab, "승인 알림")
+        self.approval_sound_checkbox = QCheckBox("사용승인 소리알림")
+        self.approval_sound_checkbox.setChecked(self.approval_sound_enabled)
+        sound_layout.addWidget(self.approval_sound_checkbox)
+        sound_layout.addWidget(QLabel("승인 시 재생할 사운드를 등록하고 하나를 선택하세요."))
+        self.sound_radio_group = QButtonGroup(self)
+        self.sound_radio_group.setExclusive(True)
+        self.sound_radios = []
+        self.selected_sound_index = -1
+        self.play_sound_button = QPushButton("▶ 재생 사운드")
+        self.play_sound_button.clicked.connect(self.play_selected_approval_sound)
+        self.play_sound_button.setEnabled(False)
+        sound_layout.addWidget(self.play_sound_button)
+        self.sound_inputs = []
+        for index in range(5):
+            sound_row = QHBoxLayout()
+            sound_radio = QRadioButton()
+            sound_radio.setEnabled(bool(self.approval_sounds[index] if index < len(self.approval_sounds) else ''))
+            sound_radio.toggled.connect(lambda checked, i=index: self.select_approval_sound(i, checked))
+            self.sound_radio_group.addButton(sound_radio, index)
+            self.sound_radios.append(sound_radio)
+            sound_row.addWidget(sound_radio)
+            sound_row.addWidget(QLabel(f"사운드 {index + 1}"))
+            sound_input = QLineEdit(self.approval_sounds[index] if index < len(self.approval_sounds) else '')
+            self.sound_inputs.append(sound_input)
+            sound_row.addWidget(sound_input)
+            browse_sound_btn = QPushButton("선택")
+            browse_sound_btn.clicked.connect(lambda checked=False, i=index: self.browse_approval_sound(i))
+            sound_row.addWidget(browse_sound_btn)
+            delete_sound_btn = QPushButton("삭제")
+            delete_sound_btn.clicked.connect(lambda checked=False, i=index: self.delete_approval_sound(i))
+            sound_row.addWidget(delete_sound_btn)
+            sound_layout.addLayout(sound_row)
+        for index, path in enumerate(self.approval_sounds[:5]):
+            if path:
+                self.sound_radios[index].setChecked(True)
+                break
+        self.update_sound_button_text()
+        sound_layout.addStretch()
+
         save_btn = QPushButton("Save & Close")
         save_btn.setStyleSheet("background-color: #007BFF; color: white; font-weight: bold; padding: 8px;")
         save_btn.clicked.connect(self.accept)
-        layout.addWidget(save_btn)
+        root_layout.addWidget(save_btn)
 
     def browse_folder(self):
         dir_path = QFileDialog.getExistingDirectory(self, "Select Log Directory", self.path_input.text())
         if dir_path:
             self.path_input.setText(dir_path)
+
+    def browse_approval_sound(self, index):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "승인 알림 사운드 선택", self.sound_inputs[index].text(),
+            "Wave files (*.wav);;All files (*.*)"
+        )
+        if path:
+            try:
+                os.makedirs(self.approval_sound_dir, exist_ok=True)
+                target_name = os.path.basename(path)
+                target_path = os.path.join(self.approval_sound_dir, target_name)
+                if os.path.abspath(path) != os.path.abspath(target_path):
+                    shutil.copy2(path, target_path)
+                self.sound_inputs[index].setText(target_path)
+                self.sound_radios[index].setEnabled(True)
+                self.sound_radios[index].setChecked(True)
+                self.update_sound_button_text()
+            except OSError as exc:
+                QMessageBox.warning(self, "사운드 복사 실패", str(exc))
+
+    def delete_approval_sound(self, index):
+        current_path = self.sound_inputs[index].text().strip()
+        try:
+            if current_path and os.path.isfile(current_path):
+                sound_root = os.path.abspath(self.approval_sound_dir)
+                if os.path.commonpath([sound_root, os.path.abspath(current_path)]) == sound_root:
+                    os.remove(current_path)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "사운드 삭제 실패", str(exc))
+        self.sound_inputs[index].clear()
+        self.sound_radios[index].setChecked(False)
+        self.sound_radios[index].setEnabled(False)
+        self.update_sound_button_text()
+
+    def select_approval_sound(self, index, checked):
+        if checked:
+            self.selected_sound_index = index
+            self.update_sound_button_text()
+
+    def update_sound_button_text(self):
+        index = self.selected_sound_index
+        path = self.sound_inputs[index].text().strip() if 0 <= index < len(self.sound_inputs) else ''
+        self.play_sound_button.setText(f"▶ {os.path.basename(path)}" if path else "▶ 재생 사운드")
+        self.play_sound_button.setEnabled(bool(path and os.path.isfile(path)))
+
+    def play_selected_approval_sound(self):
+        index = self.selected_sound_index
+        if not (0 <= index < len(self.sound_inputs)):
+            return
+        path = self.sound_inputs[index].text().strip()
+        if winsound is not None and os.path.isfile(path):
+            winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
 
     def populate_nic_combo(self, combo, interfaces, selected, wireless_only):
         combo.clear()
@@ -965,6 +1370,16 @@ class IntegratedSettingsDialog(QDialog):
     def get_windows_hotspot_limit(self):
         return self.windows_hotspot_limit_input.value()
 
+    def get_approval_sound_enabled(self):
+        return self.approval_sound_checkbox.isChecked()
+
+    def get_approval_sounds(self):
+        sounds = [input_widget.text().strip() for input_widget in self.sound_inputs]
+        if 0 <= self.selected_sound_index < len(sounds) and sounds[self.selected_sound_index]:
+            selected = sounds.pop(self.selected_sound_index)
+            sounds.insert(0, selected)
+        return sounds
+
     def apply_windows_hotspot_limit(self):
         limit = self.get_windows_hotspot_limit()
         answer = QMessageBox.warning(
@@ -1003,10 +1418,6 @@ class IntegratedManagerApp(QMainWindow):
         self.hotspot_ssid = DEFAULT_HOTSPOT_SSID
         self.hotspot_password = detected_hotspot_info['passphrase']
         self.hotspot_ssid_sync_message = ''
-        if detected_hotspot_ssid and detected_hotspot_ssid != DEFAULT_HOTSPOT_SSID:
-            changed, message = set_current_hotspot_ssid(DEFAULT_HOTSPOT_SSID)
-            self.hotspot_ssid_sync_message = message
-            self.hotspot_password = get_current_hotspot_wifi_info()['passphrase']
         self.fare_base_dir = app_settings['fare_dir']
         self.hotspot_image_path = app_settings['hotspot_image']
         self.hotspot_network, self.hotspot_gateway = normalize_hotspot_network(
@@ -1014,8 +1425,26 @@ class IntegratedManagerApp(QMainWindow):
         )
         self.linkshare_splitter_sizes = app_settings.get('linkshare_splitter_sizes', [520, 260])
         self.max_connections = app_settings['max_connections']
+        self.status_poll_interval = app_settings.get('status_poll_interval', DEFAULT_STATUS_POLL_INTERVAL)
         self.windows_hotspot_limit = app_settings['windows_hotspot_limit']
+        self.approval_sound_enabled = app_settings.get('approval_sound_enabled', DEFAULT_APPROVAL_SOUND_ENABLED)
+        self.approval_sounds = app_settings.get('approval_sounds', DEFAULT_APPROVAL_SOUNDS)
+        self.approval_sound_index = 0
+        self.approval_sound_playback_timer = None
+        self.qr_output_formats = app_settings.get('qr_output_formats', {
+            'network': DEFAULT_QR_OUTPUT_FORMAT,
+            'captive': DEFAULT_QR_OUTPUT_FORMAT,
+        })
+        self.qr_output_scales = app_settings.get('qr_output_scales', {
+            'network': DEFAULT_QR_OUTPUT_SCALE,
+            'captive': DEFAULT_QR_OUTPUT_SCALE,
+        })
+        self.qr_output_dirs = app_settings.get('qr_output_dirs', {
+            'network': DEFAULT_QR_OUTPUT_DIR,
+            'captive': DEFAULT_QR_OUTPUT_DIR,
+        })
         runtime_settings['max_connections'] = self.max_connections
+        runtime_settings['status_poll_interval'] = self.status_poll_interval
         self.internet_nic = {'display': app_settings['internet_nic'], 'ip': app_settings['internet_ip']}
         self.hotspot_nic = {'display': app_settings['hotspot_nic'], 'ip': app_settings['hotspot_ip']}
         self.load_saved_defaults(app_settings)
@@ -1031,19 +1460,13 @@ class IntegratedManagerApp(QMainWindow):
         self.internet_nic = {'display': internet_interface[0], 'ip': internet_interface[1]}
         self.hotspot_nic = {'display': hotspot_interface[0], 'ip': hotspot_interface[1]}
 
-        # The QR code points to the hotspot gateway.  Merely opening the
-        # Windows settings page leaves that gateway unassigned, so clients
-        # can scan the QR code but cannot connect to the web server.  Start
-        # the hotspot through the WinRT API (with the existing fallback) and
-        # let the diagnostics/retry logic handle the adapter's startup delay.
-        hotspot_started, hotspot_message = set_hotspot_enabled(True, self.hotspot_ssid)
-        if not hotspot_started:
-            print(f"Hotspot startup was not completed: {hotspot_message}")
+        self.initialize_hotspot_state()
         
         ui_layout.setup_integrated_ui(
             self, DEFAULT_UPLOAD_FOLDER, DEFAULT_ZONES, DEFAULT_SAVE_TABS, interfaces,
             self.hotspot_ssid, self.internet_nic, self.hotspot_nic, self.hotspot_image_path,
-            self.hotspot_network, self.hotspot_gateway, self.max_connections
+            self.hotspot_network, self.hotspot_gateway, self.max_connections,
+            app_settings.get('active_main_tab', DEFAULT_ACTIVE_MAIN_TAB)
         )
 
         self.tab_tables = {}
@@ -1065,7 +1488,9 @@ class IntegratedManagerApp(QMainWindow):
 
         self.file_signal.connect(self.handle_incoming_files)
         self.delete_signal.connect(self.handle_deleted_files)
-        signals.approval_requested.connect(self.handle_customer_request)
+        # HTTP /request 응답을 승인 팝업의 exec()가 붙잡지 않도록
+        # 승인 처리는 GUI 이벤트 큐에서 비동기로 실행한다.
+        signals.approval_requested.connect(self.handle_customer_request, Qt.QueuedConnection)
 
         self.server_thread = threading.Thread(target=self.run_server, daemon=True)
         self.server_thread.start()
@@ -1081,6 +1506,40 @@ class IntegratedManagerApp(QMainWindow):
         DEFAULT_ZONES = app_settings['zones'] or DEFAULT_ZONES
         DEFAULT_SAVE_TABS = app_settings['save_tabs'] or DEFAULT_SAVE_TABS
         os.makedirs(DEFAULT_UPLOAD_FOLDER, exist_ok=True)
+
+    def initialize_hotspot_state(self):
+        """Check each hotspot requirement and change only mismatched stages."""
+        log_wifi('Hotspot startup check started.')
+
+        # Stage 1: SSID. Keep the configured hotspot when it already matches.
+        current_info = get_current_hotspot_wifi_info()
+        current_ssid = current_info.get('ssid', '').strip()
+        log_wifi(f"SSID check: current='{current_ssid}', expected='{self.hotspot_ssid}'.")
+        if current_ssid == self.hotspot_ssid:
+            log_wifi('SSID already matches; no SSID change required.')
+        else:
+            changed, message = set_current_hotspot_ssid(self.hotspot_ssid)
+            log_wifi(f"SSID configuration result: changed={changed}, {message}", logging.INFO if changed else logging.ERROR)
+            if changed:
+                self.hotspot_password = get_current_hotspot_wifi_info().get('passphrase', self.hotspot_password)
+
+        # Stage 2: tethering and gateway state.
+        diagnostics = run_hotspot_diagnostics(
+            self.hotspot_nic, self.hotspot_network, self.hotspot_gateway
+        )
+        log_wifi(f"Hotspot active check: {diagnostics['active']}. {diagnostics['text'].replace(chr(10), ' | ')}")
+        if diagnostics['active']:
+            log_wifi('Hotspot is already active; keeping current hotspot running.')
+        else:
+            started, message = set_hotspot_enabled(True, self.hotspot_ssid)
+            log_wifi(f"Hotspot enable result: started={started}, {message}", logging.INFO if started else logging.ERROR)
+
+        # Stage 3: persist the final selected NIC/network/gateway values.
+        log_wifi(
+            f"Network settings registered: NIC='{self.hotspot_nic.get('display', '')}', "
+            f"IP='{self.hotspot_nic.get('ip', '')}', network='{self.hotspot_network}', gateway='{self.hotspot_gateway}'."
+        )
+        log_wifi('Hotspot startup check completed.')
 
     def run_server(self):
         socketserver.TCPServer.allow_reuse_address = True
@@ -1134,7 +1593,8 @@ class IntegratedManagerApp(QMainWindow):
             DEFAULT_ZONES, self.fare_base_dir, self.hotspot_ssid, self.interfaces,
             self.internet_nic['display'], self.hotspot_nic['display'], self.hotspot_image_path,
             self.hotspot_network, self.hotspot_gateway, self.max_connections,
-            self.windows_hotspot_limit, self
+            self.windows_hotspot_limit, self.approval_sound_enabled,
+            self.approval_sounds, approval_sound_dir, self
         )
         if dialog.exec() == QDialog.Accepted:
             DEFAULT_ZONES = dialog.zones
@@ -1146,6 +1606,8 @@ class IntegratedManagerApp(QMainWindow):
             self.hotspot_network, self.hotspot_gateway = dialog.get_hotspot_network()
             self.max_connections = dialog.get_max_connections()
             self.windows_hotspot_limit = dialog.get_windows_hotspot_limit()
+            self.approval_sound_enabled = dialog.get_approval_sound_enabled()
+            self.approval_sounds = dialog.get_approval_sounds()
             runtime_settings['max_connections'] = self.max_connections
 
             new_fare_path = dialog.get_fare_path()
@@ -1250,9 +1712,26 @@ class IntegratedManagerApp(QMainWindow):
             ]),
             '사용허가': (
                 [record for record in usage_history if record.get('log_type') == 'approval'],
-                ['usage_approval', 'approval_time', 'start_time', 'end_time', 'remaining', 'client_ip']
+                ['usage_approval', 'approval_time', 'requested_time', 'client_ip']
             ),
         }
+        connection_tab_name = next(iter(table_records))
+        latest_by_client = {}
+        requested_seconds_by_client = {}
+        for record in usage_history:
+            client_ip = record.get('client_ip', '-')
+            latest_by_client[client_ip] = record
+            if record.get('log_type') == 'request':
+                requested_seconds_by_client[client_ip] = requested_seconds_by_client.get(client_ip, 0) + (
+                    int(record.get('requested_minutes', 0)) * 60
+                )
+        for client_ip, session in shared_sessions.items():
+            latest_by_client[client_ip] = session
+        table_records[connection_tab_name] = (
+            list(latest_by_client.values()),
+            ['connection_status', 'usage_approval', 'internet_status',
+             'request_time', 'start_time', 'end_time', 'total_requested', 'remaining', 'client_ip']
+        )
 
         for tab_name, (records, fields) in table_records.items():
             table = self.usage_history_tables[tab_name]
@@ -1264,14 +1743,27 @@ class IntegratedManagerApp(QMainWindow):
                     remaining_text = f'{minutes:02d}분 {seconds:02d}초'
                 else:
                     remaining_text = '-'
+                total_requested = requested_seconds_by_client.get(record.get('client_ip', '-'), 0)
+                requested_minutes, requested_seconds = divmod(total_requested, 60)
+                requested_hours, requested_minutes = divmod(requested_minutes, 60)
+                total_requested_text = (
+                    f'{requested_hours}시간 {requested_minutes:02d}분'
+                    if requested_hours else f'{requested_minutes}분'
+                )
                 values = {
                     'connection_status': record.get('connection_status', '-'),
+                    'internet_status': record.get('internet_status', '확인 중'),
                     'usage_request': record.get('usage_request', record.get('fare', '-')),
                     'usage_approval': record.get('usage_approval', '-'),
                     'request_time': record.get('request_time', '-'),
                     'approval_time': record.get('approval_time', '-'),
+                    'requested_time': (
+                        f"{record.get('requested_minutes', 0)}분"
+                        if record.get('requested_minutes') else record.get('usage_request', '-')
+                    ),
                     'start_time': record.get('start_time', '-'),
                     'end_time': record.get('end_time', '-'),
+                    'total_requested': total_requested_text,
                     'remaining': remaining_text,
                     'client_ip': record.get('client_ip', '-'),
                 }
@@ -1364,6 +1856,7 @@ class IntegratedManagerApp(QMainWindow):
             'upload_folder': DEFAULT_UPLOAD_FOLDER,
             'zones': DEFAULT_ZONES,
             'save_tabs': DEFAULT_SAVE_TABS,
+            'active_main_tab': self.get_active_main_tab_key(),
             'internet_nic': self.internet_nic['display'],
             'internet_ip': self.internet_nic['ip'],
             'hotspot_nic': self.hotspot_nic['display'],
@@ -1371,6 +1864,12 @@ class IntegratedManagerApp(QMainWindow):
             'hotspot_network': self.hotspot_network,
             'hotspot_gateway': self.hotspot_gateway,
             'max_connections': self.max_connections,
+            'status_poll_interval': self.status_poll_interval,
+            'approval_sound_enabled': self.approval_sound_enabled,
+            'approval_sounds': self.approval_sounds,
+            'qr_output_formats': self.qr_output_formats,
+            'qr_output_scales': self.qr_output_scales,
+            'qr_output_dirs': self.qr_output_dirs,
             'windows_hotspot_limit': self.windows_hotspot_limit,
             'linkshare_splitter_sizes': self.linkshare_splitter_sizes,
         })
@@ -1386,6 +1885,12 @@ class IntegratedManagerApp(QMainWindow):
         self.save_tab_combo.clear()
         self.save_tab_combo.addItems(DEFAULT_SAVE_TABS)
         self.save_tab_combo.blockSignals(False)
+
+    def get_active_main_tab_key(self):
+        return 'wifi_pass' if self.main_tabs.currentIndex() == 1 else 'file_receiver'
+
+    def on_main_tab_changed(self, _index):
+        self.persist_settings()
 
     def close_tab(self, index):
         """Close a received-file tab created by the integrated manager."""
@@ -1551,6 +2056,9 @@ class IntegratedManagerApp(QMainWindow):
         dialog.setWindowTitle(title)
         dialog.setMinimumSize(380, 460)
         layout = QVBoxLayout(dialog)
+        qr_type = 'network' if 'Network' in title else 'captive'
+        saved_format = self.qr_output_formats.get(qr_type, DEFAULT_QR_OUTPUT_FORMAT)
+        saved_scale = int(self.qr_output_scales.get(qr_type, DEFAULT_QR_OUTPUT_SCALE))
 
         preview = QLabel()
         preview.setAlignment(Qt.AlignCenter)
@@ -1563,18 +2071,96 @@ class IntegratedManagerApp(QMainWindow):
         guide.setStyleSheet("font-size: 11px; color: #263238; padding: 6px;")
         layout.addWidget(guide)
 
+        format_layout = QHBoxLayout()
+        format_layout.addWidget(QLabel("출력 형식:"))
+        format_group = QButtonGroup(dialog)
+        format_buttons = {}
+        for file_format in ("JPG", "BMP", "PDF"):
+            radio = QRadioButton(file_format)
+            radio.setChecked(file_format == saved_format)
+            format_group.addButton(radio)
+            format_buttons[file_format] = radio
+            format_layout.addWidget(radio)
+        format_layout.addStretch()
+        layout.addLayout(format_layout)
+
         scale_layout = QHBoxLayout()
         for scale in (1, 2, 3, 4):
             button = QPushButton(f"{scale}x")
             button.setMinimumHeight(32)
+            if scale == saved_scale:
+                button.setStyleSheet("font-weight: bold; border: 2px solid #1565c0;")
             button.clicked.connect(
-                lambda checked=False, value=scale: self.print_qr_pixmap(
-                    pixmap, title, value, dialog
+                lambda checked=False, value=scale: self.export_qr_with_text(
+                    pixmap, title, guide_text, value,
+                    next((name for name, radio in format_buttons.items() if radio.isChecked()), "PDF"),
+                    dialog, qr_type
                 )
             )
             scale_layout.addWidget(button)
         layout.addLayout(scale_layout)
         dialog.exec()
+
+    def export_qr_with_text(self, pixmap, title, guide_text, scale, file_format, preview_dialog=None, qr_type=None):
+        """Save a compact, readable QR+text output with a fixed filename."""
+        qr_type = qr_type or ('network' if 'Network' in title else 'captive')
+        output_dir = self.qr_output_dirs.get(qr_type, DEFAULT_QR_OUTPUT_DIR)
+        if not output_dir or not os.path.isdir(output_dir):
+            output_dir = QFileDialog.getExistingDirectory(self, "출력 폴더 선택", output_dir or current_dir)
+            if not output_dir:
+                return False
+            self.qr_output_dirs[qr_type] = output_dir
+            self.persist_settings()
+
+        safe_name = "network_connection_qr" if "Network" in title else "captive_portal_qr"
+        extension = file_format.lower()
+        output_path = os.path.join(output_dir, f"{safe_name}_{scale}x.{extension}")
+        self.qr_output_formats[qr_type] = file_format
+        self.qr_output_scales[qr_type] = scale
+        self.persist_settings()
+        qr_size = max(240, 240 * scale)
+        qr_image = pixmap.toImage().scaled(qr_size, qr_size, Qt.KeepAspectRatio, Qt.FastTransformation)
+        margin = max(12, 12 * scale)
+        text_font = QFont("Arial", max(12, 12 * scale))
+        text_metrics = QFontMetrics(text_font)
+        text_lines = guide_text.splitlines() or [title]
+        text_height = text_metrics.lineSpacing() * len(text_lines)
+        canvas = QImage(qr_size + margin * 2, qr_size + text_height + margin * 2, QImage.Format_RGB32)
+        canvas.fill(Qt.white)
+        painter = QPainter(canvas)
+        painter.setPen(Qt.black)
+        painter.setFont(text_font)
+        painter.drawImage(margin, margin, qr_image)
+        text_y = margin + qr_size + max(2, scale)
+        for line in text_lines:
+            painter.drawText(margin, text_y, qr_size, text_metrics.lineSpacing(), Qt.AlignHCenter, line)
+            text_y += text_metrics.lineSpacing()
+        painter.end()
+
+        try:
+            if file_format in ("JPG", "BMP"):
+                if not canvas.save(output_path, file_format):
+                    raise OSError("이미지 파일 저장에 실패했습니다.")
+            else:
+                printer = QPrinter(QPrinter.HighResolution)
+                printer.setOutputFormat(QPrinter.PdfFormat)
+                printer.setOutputFileName(output_path)
+                printer.setPageSize(QPageSize(QPageSize.A4))
+                painter = QPainter(printer)
+                page_rect = printer.pageLayout().paintRectPixels(printer.resolution())
+                fitted = canvas.scaled(page_rect.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                x = page_rect.left() + (page_rect.width() - fitted.width()) // 2
+                y = page_rect.top() + (page_rect.height() - fitted.height()) // 2
+                painter.drawImage(x, y, fitted)
+                painter.end()
+        except (OSError, RuntimeError) as exc:
+            QMessageBox.warning(self, "출력 실패", str(exc))
+            return False
+
+        QMessageBox.information(self, "출력 완료", f"파일이 저장되었습니다.\n{output_path}")
+        if preview_dialog is not None:
+            preview_dialog.accept()
+        return True
 
     def print_qr_pixmap(self, pixmap, title, scale, preview_dialog=None):
         printer = QPrinter(QPrinter.HighResolution)
@@ -1629,6 +2215,7 @@ class IntegratedManagerApp(QMainWindow):
         pass
 
     def handle_customer_request(self, client_ip, minutes, dur_str):
+        self.bring_to_front()
         self.update_connection_summary()
         session = shared_sessions.get(client_ip)
         if not session:
@@ -1639,13 +2226,23 @@ class IntegratedManagerApp(QMainWindow):
         ):
             return
 
-        reply = QMessageBox.question(
-            self,
-            "Internet Request",
-            f"Client IP: {client_ip}\nSelected time: {dur_str}\n\nApprove Internet access?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+        approval_box = QMessageBox(self)
+        approval_box.setWindowTitle("Internet Request")
+        approval_box.setText(
+            f"Client IP: {client_ip}\nSelected time: {dur_str}\n\nApprove Internet access?"
         )
+        approval_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        approval_box.setDefaultButton(QMessageBox.No)
+        approval_sound_checkbox = QCheckBox("사용승인 소리알림")
+        approval_sound_checkbox.setChecked(self.approval_sound_enabled)
+        approval_box.setCheckBox(approval_sound_checkbox)
+        if self.approval_sound_enabled:
+            self.play_approval_sound()
+        reply = approval_box.exec()
+        self.stop_approval_sound()
+        if approval_sound_checkbox.isChecked() != self.approval_sound_enabled:
+            self.approval_sound_enabled = approval_sound_checkbox.isChecked()
+            self.persist_settings()
         if reply == QMessageBox.Yes:
             start = datetime.datetime.now()
             if is_extension:
@@ -1663,10 +2260,14 @@ class IntegratedManagerApp(QMainWindow):
                     'end_timestamp': end.timestamp(),
                     'remaining_seconds': max(0, int(end.timestamp() - start.timestamp())),
                     'usage_approval': 'Approved (additional)',
+                    'total_used_seconds': int(session.get('total_used_seconds', 0)) + minutes * 60,
                 })
-                append_usage_log('approval', session)
-                QMessageBox.information(
-                    self, 'Approved', f'Additional Internet time approved for {client_ip}.'
+                append_usage_log('approval', session, requested_minutes=minutes)
+                notify_status_change()
+                self.show_auto_close_message(
+                    QMessageBox.Information,
+                    'Approved',
+                    f'Additional Internet time approved for {client_ip}.'
                 )
                 self.update_connection_summary()
                 return
@@ -1680,9 +2281,16 @@ class IntegratedManagerApp(QMainWindow):
                 'end_time': end.strftime('%Y-%m-%d %H:%M:%S'),
                 'end_timestamp': end.timestamp(),
                 'remaining_seconds': minutes * 60,
+                'total_used_seconds': int(session.get('total_used_seconds', 0)) + minutes * 60,
             })
-            append_usage_log('approval', session)
-            QMessageBox.information(self, "Approved", f"Internet access started for {client_ip}.")
+            session['usage_approval'] = 'Approved (first)'
+            append_usage_log('approval', session, requested_minutes=minutes)
+            notify_status_change()
+            self.show_auto_close_message(
+                QMessageBox.Information,
+                "Approved",
+                f"Internet access started for {client_ip}."
+            )
         else:
             if is_extension:
                 session.update({
@@ -1697,6 +2305,7 @@ class IntegratedManagerApp(QMainWindow):
                     usage_approval='Rejected',
                     approval_time=datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 )
+                notify_status_change()
                 QMessageBox.warning(
                     self,
                     'Rejected',
@@ -1710,10 +2319,54 @@ class IntegratedManagerApp(QMainWindow):
             session['approval_time'] = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             session['remaining_seconds'] = 0
             append_usage_log('approval', session)
+            notify_status_change()
             QMessageBox.warning(self, "Rejected", f"Internet request from {client_ip} was rejected.")
         self.update_connection_summary()
 
+    def bring_to_front(self):
+        """Restore and activate the manager when a customer request arrives."""
+        self.showNormal()
+        self.setWindowState((self.windowState() & ~Qt.WindowMinimized) | Qt.WindowActive)
+        self.raise_()
+        self.activateWindow()
+        try:
+            hwnd = int(self.winId())
+            ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            ctypes.windll.user32.SetForegroundWindow(hwnd)
+        except (AttributeError, OSError, TypeError, ValueError):
+            pass
+
+    def show_auto_close_message(self, icon, title, message, timeout=1000):
+        dialog = QMessageBox(icon, title, message, QMessageBox.Ok, self)
+        QTimer.singleShot(timeout, dialog.accept)
+        dialog.exec()
+
+    def play_approval_sound(self):
+        if not self.approval_sound_enabled or winsound is None:
+            return
+        path = next((path for path in self.approval_sounds if path and os.path.isfile(path)), '')
+        if not path:
+            return
+        try:
+            winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_LOOP)
+            if self.approval_sound_playback_timer:
+                self.approval_sound_playback_timer.stop()
+            self.approval_sound_playback_timer = QTimer(self)
+            self.approval_sound_playback_timer.setSingleShot(True)
+            self.approval_sound_playback_timer.timeout.connect(self.stop_approval_sound)
+            self.approval_sound_playback_timer.start(15 * 60 * 1000)
+        except (OSError, RuntimeError) as exc:
+            print(f"Approval sound playback error: {exc}")
+
+    def stop_approval_sound(self):
+        if self.approval_sound_playback_timer:
+            self.approval_sound_playback_timer.stop()
+            self.approval_sound_playback_timer = None
+        if winsound is not None:
+            winsound.PlaySound(None, 0)
+
     def closeEvent(self, event):
+        log_wifi('Application closing; hotspot will remain running.')
         self.stop_captive_portal()
         self.persist_settings()
         event.accept()

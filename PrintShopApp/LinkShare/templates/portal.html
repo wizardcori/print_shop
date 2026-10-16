@@ -3,6 +3,12 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#1565c0">
+    <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="인터넷 사용신청">
+    <link rel="manifest" href="/manifest.webmanifest">
     <title>인터넷 사용 신청</title>
     <style>
         body { margin: 0; padding: 20px; background: #f3f6f8; color: #263238; font-family: Arial, sans-serif; }
@@ -20,6 +26,13 @@
         #status { background: #f5f5f5; line-height: 1.7; }
         .hidden { display: none; }
         .label { font-weight: bold; color: #455a64; }
+        .approved { color: #2e7d32; }
+        .rejected { color: #c62828; }
+        .pending { color: #ef6c00; }
+        #internetState { margin-top: 10px; padding: 10px; border-radius: 8px; background: #eef5f9; }
+        #installArea { margin-top: 14px; padding: 12px; background: #e3f2fd; border-radius: 8px; }
+        #installButton { width: 100%; margin-top: 8px; background: #0d47a1; color: white; }
+        #iosInstallHint { line-height: 1.6; }
     </style>
 </head>
 <body>
@@ -34,15 +47,88 @@
         <button class="time" data-min="180">3시간</button>
         <button class="time" data-min="240">4시간</button>
     </div>
-    <button class="primary" id="requestButton">사용요청</button>
-    <button class="secondary" id="statusButton">상태확인</button>
+    <form id="requestForm" action="/request?min=30" method="get">
+        <button class="primary" id="requestButton" type="submit" onclick="if (!window.portalScriptReady) return true;">사용요청</button>
+    </form>
+    <button class="secondary" id="statusButton" type="button" onclick="if (!window.portalScriptReady) window.location.href='/status';">상태확인</button>
     <div id="message" class="hidden"></div>
     <div id="status" class="hidden"></div>
+    <div id="internetState" class="hidden"></div>
+    <div id="installArea" class="hidden">
+        <strong>홈 화면에 앱 설치</strong>
+        <button id="installButton" class="hidden">홈 화면에 추가</button>
+        <div id="iosInstallHint" class="hidden">Safari 하단의 <b>공유</b> 버튼을 누른 후<br><b>홈 화면에 추가</b>를 선택하세요.</div>
+    </div>
 </main>
 <script>
     let selectedMinutes = 30;
     const messageBox = document.getElementById('message');
     const statusBox = document.getElementById('status');
+    const internetStateBox = document.getElementById('internetState');
+    const statusPollIntervalMs = {{ (status_poll_interval * 1000)|int }};
+    const isMobileScreen = /android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent);
+    let internetCheckRun = 0;
+    let lastStatus = null;
+    let lastReportedInternetStatus = null;
+    let deferredInstallPrompt = null;
+    function clientHeaders() {
+        const platform = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
+        const mobile = /android|iphone|ipad|ipod/i.test(navigator.userAgent) ? '모바일' : 'PC';
+        return {'X-Client-Device': `${mobile} · ${platform}`.slice(0, 120)};
+    }
+    // 캡티브 포털의 구형 브라우저에서 fetch가 없는 경우를 지원한다.
+    function requestJson(url, options) {
+        options = options || {};
+        return new Promise(function (resolve, reject) {
+            var xhr = new XMLHttpRequest();
+            xhr.open(options.method || 'GET', url, true);
+            var headers = options.headers || {};
+            Object.keys(headers).forEach(function (key) {
+                xhr.setRequestHeader(key, headers[key]);
+            });
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4) return;
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    try { resolve(JSON.parse(xhr.responseText)); }
+                    catch (error) { reject(error); }
+                } else reject(new Error('HTTP ' + xhr.status));
+            };
+            xhr.onerror = function () { reject(new Error('network error')); };
+            xhr.send(options.body || null);
+        });
+    }
+    const installArea = document.getElementById('installArea');
+    const installButton = document.getElementById('installButton');
+    const iosInstallHint = document.getElementById('iosInstallHint');
+
+    function setupInstallGuide() {
+        const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream;
+        const isStandalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+        if (isStandalone) return;
+        if (isIos) {
+            installArea.classList.remove('hidden');
+            iosInstallHint.classList.remove('hidden');
+            return;
+        }
+        window.addEventListener('beforeinstallprompt', event => {
+            event.preventDefault();
+            deferredInstallPrompt = event;
+            installArea.classList.remove('hidden');
+            installButton.classList.remove('hidden');
+        }, { once: true });
+        window.addEventListener('appinstalled', () => {
+            deferredInstallPrompt = null;
+            installArea.classList.add('hidden');
+        });
+    }
+
+    installButton.addEventListener('click', async () => {
+        if (!deferredInstallPrompt) return;
+        deferredInstallPrompt.prompt();
+        await deferredInstallPrompt.userChoice;
+        deferredInstallPrompt = null;
+        installArea.classList.add('hidden');
+    });
 
     document.querySelectorAll('.time').forEach(button => {
         button.addEventListener('click', () => {
@@ -66,36 +152,199 @@
         return `${hours ? hours + '시간 ' : ''}${minutes}분 ${secs}초`;
     }
 
+    function formatUsed(seconds) {
+        seconds = Math.max(0, Number(seconds || 0));
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        return `${hours ? hours + '시간 ' : ''}${minutes}분`;
+    }
+
     function renderStatus(data) {
         if (!data || data.status === 'None') {
             statusBox.textContent = '현재 신청 또는 사용 기록이 없습니다.';
+            internetStateBox.classList.add('hidden');
         } else if (data.status === 'Approved') {
-            statusBox.innerHTML = `<span class="label">사용중</span><br>` +
+            statusBox.innerHTML = `<span class="label approved">승인됨 · 사용중</span><br>` +
                 `시작시간: ${data.start_time}<br>` +
                 `종료시간: ${data.end_time}<br>` +
-                `남은시간: ${formatRemaining(data.remaining_seconds)}`;
+                `남은시간: ${formatRemaining(data.remaining_seconds)}<br>` +
+                `누적 승인시간: ${formatUsed(data.total_used_seconds)}`;
+            if (lastStatus !== 'Approved' || internetStateBox.classList.contains('hidden')) {
+                internetStateBox.innerHTML = '<span class="label pending">인터넷 연결 상태</span><br>연결 확인 중입니다.';
+                internetStateBox.classList.remove('hidden');
+            }
+            if (data.internet_status === '사용 가능') {
+                internetStateBox.innerHTML = '<span class="label approved">인터넷 연결 성공</span><br>인터넷 사용이 가능합니다.';
+                internetStateBox.classList.remove('hidden');
+            } else if (data.internet_status === '확인 실패') {
+                internetStateBox.innerHTML = '<span class="label rejected">인터넷 연결 실패</span><br>인터넷 연결을 확인하지 못했습니다.';
+                internetStateBox.classList.remove('hidden');
+            }
         } else if (data.status === 'Pending') {
-            statusBox.textContent = '사용요청이 접수되어 관리자 승인을 기다리는 중입니다.';
+            statusBox.innerHTML = `<span class="label pending">승인 대기</span><br>` +
+                '사용요청이 접수되어 관리자 승인을 기다리는 중입니다.';
+            internetStateBox.classList.add('hidden');
+        } else if (data.status === 'Rejected') {
+            statusBox.innerHTML = `<span class="label rejected">미승인</span><br>` +
+                '인터넷 사용요청이 미승인되었습니다.';
+            internetStateBox.classList.add('hidden');
+        } else if (data.status === 'Expired') {
+            statusBox.innerHTML = `<span class="label">사용시간 종료</span><br>` +
+                `누적 승인시간: ${formatUsed(data.total_used_seconds)}`;
+            internetStateBox.classList.add('hidden');
         } else {
             statusBox.textContent = `현재 상태: ${data.status}`;
         }
         statusBox.classList.remove('hidden');
     }
 
-    async function checkStatus() {
-        const response = await fetch('/status', { cache: 'no-store' });
-        renderStatus(await response.json());
+    async function reportInternetStatus(value, details) {
+        if (lastReportedInternetStatus === value) return;
+        try {
+            const params = [
+                'internet_status=' + encodeURIComponent(value),
+                'internet_check=' + encodeURIComponent(JSON.stringify(details || {})),
+                'test_result=' + encodeURIComponent((details && details.result) || (value === '확인 실패' ? 'FAIL' : 'TESTING')),
+                'browser_online=' + encodeURIComponent(navigator.onLine ? 'true' : 'false'),
+                'checked_at=' + encodeURIComponent(new Date().toISOString())
+            ].join('&');
+            await requestJson('/internet-status?' + params);
+            lastReportedInternetStatus = value;
+        } catch (error) {
+            // The next status poll will retry the connection check.
+        }
+    }
+
+    function testInternetConnection() {
+        return new Promise(function (resolve, reject) {
+            var probes = [
+                'https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png',
+                'https://www.gstatic.com/favicon.ico',
+                'https://www.google.com/favicon.ico'
+            ];
+            var testNext = function (index) {
+                if (index >= probes.length) {
+                    reject(new Error('all internet probes failed'));
+                    return;
+                }
+                var url = probes[index];
+                var image = new Image();
+                var finished = false;
+                var startedAt = Date.now();
+                var timer = setTimeout(function () {
+                    if (finished) return;
+                    finished = true;
+                    testNext(index + 1);
+                }, 5000);
+                image.onload = function () {
+                    if (finished) return;
+                    finished = true;
+                    clearTimeout(timer);
+                    resolve({probe_url: url, method: 'image-load-' + (index + 1), result: 'PASS', elapsed_ms: Date.now() - startedAt});
+                };
+                image.onerror = function () {
+                    if (finished) return;
+                    finished = true;
+                    clearTimeout(timer);
+                    testNext(index + 1);
+                };
+                image.src = url + '?check=' + startedAt;
+            };
+            testNext(0);
+        });
+    }
+
+    async function checkInternetAfterApproval(runId) {
+        const attempts = 10;
+        const deadline = Date.now() + 15000;
+        try {
+            for (let attempt = 1; attempt <= attempts && runId === internetCheckRun && Date.now() < deadline; attempt++) {
+                await reportInternetStatus('확인 중');
+                internetStateBox.innerHTML = '<span class="label pending">인터넷 연결 상태</span><br>' +
+                    `승인된 인터넷 연결을 확인하고 있습니다. (${attempt}/${attempts})`;
+                internetStateBox.classList.remove('hidden');
+                try {
+                    var internetCheck = await testInternetConnection();
+                    if (runId !== internetCheckRun) return;
+                    await reportInternetStatus('사용 가능', internetCheck);
+                    internetStateBox.innerHTML = '<span class="label approved">인터넷 사용 가능</span><br>' +
+                        '인터넷 연결이 확인되었습니다.';
+                    return;
+                } catch (error) {
+                    // The next attempt gives the hotspot/DNS route time to settle.
+                }
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+            // 외부 확인 주소가 차단되어도 브라우저가 온라인으로 판단하면
+            // 핫스팟 인터넷은 사용 가능한 상태로 표시한다.
+            if (runId === internetCheckRun && navigator.onLine) {
+                await reportInternetStatus('사용 가능', {
+                    probe_url: 'navigator.onLine',
+                    elapsed_ms: 0,
+                    fallback: true
+                });
+                internetStateBox.innerHTML = '<span class="label approved">인터넷 사용 가능</span><br>브라우저 온라인 상태가 확인되었습니다.';
+                return;
+            }
+        } finally {
+            if (runId === internetCheckRun && lastReportedInternetStatus !== '사용 가능') {
+                await reportInternetStatus('확인 실패', {
+                    probe_url: 'all probes failed',
+                    browser_online: navigator.onLine,
+                    result: 'FAIL'
+                });
+                internetStateBox.innerHTML = '<span class="label rejected">인터넷 연결 확인 실패</span><br>' +
+                    '승인은 완료되었지만 인터넷 연결을 확인하지 못했습니다. 잠시 후 다시 확인해주세요.';
+            }
+        }
+    }
+
+    // 상태 확인 정책:
+    // 1) 페이지 최초 접속: 즉시 /status 요청
+    // 2) 상태확인 버튼: 즉시 /status 요청
+    // 3) 스마트폰 화면이 보일 때: /status?wait=1 대기 연결 유지
+    // 4) 승인/비승인 또는 인터넷 상태 변경 패킷 수신 즉시 화면 갱신
+    // 5) 화면이 숨겨지면 대기 연결 중지, 다시 보이면 자동 재연결
+    async function checkStatus(waitForChange = false, forceInternetCheck = false) {
+        const data = await requestJson(waitForChange ? '/status?wait=1' : '/status');
+        renderStatus(data);
+        if (data.status === 'Approved' && (lastStatus !== 'Approved' || forceInternetCheck)) {
+            internetCheckRun++;
+            lastReportedInternetStatus = null;
+            checkInternetAfterApproval(internetCheckRun);
+        }
+        if (data.status !== 'Approved') internetCheckRun++;
+        lastStatus = data.status;
+    }
+
+    let statusStreamRunning = false;
+    async function startStatusStream() {
+        // 모바일 화면이 실제로 보이는 경우에만 자동 대기 연결을 실행한다.
+        if (statusStreamRunning || !isMobileScreen || document.visibilityState !== 'visible') return;
+        statusStreamRunning = true;
+        while (isMobileScreen && document.visibilityState === 'visible') {
+            try {
+                await checkStatus(true);
+            } catch (error) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+        }
+        statusStreamRunning = false;
     }
 
     const requestButton = document.getElementById('requestButton');
     let requestCooldown = false;
-    requestButton.addEventListener('click', async () => {
+    requestButton.addEventListener('click', async (event) => {
+        event.preventDefault();
         if (requestCooldown) return;
         requestCooldown = true;
         requestButton.disabled = true;
         requestButton.textContent = '요청 처리 중...';
-        const response = await fetch(`/request?min=${selectedMinutes}`);
-        const data = await response.json();
+        const data = await requestJson(`/request?min=${selectedMinutes}`, {
+            method: 'GET',
+            credentials: 'same-origin',
+            cache: 'no-store'
+        });
         showMessage(data.msg || '요청이 처리되었습니다.');
         if (data.session) renderStatus(data.session);
         setTimeout(() => {
@@ -104,9 +353,12 @@
             requestButton.textContent = '사용요청';
         }, 200);
     });
-    document.getElementById('statusButton').addEventListener('click', checkStatus);
+    document.getElementById('statusButton').addEventListener('click', () => checkStatus(false, true));
+    window.portalScriptReady = true;
     checkStatus();
-    setInterval(checkStatus, 10000);
+    document.addEventListener('visibilitychange', startStatusStream);
+    startStatusStream();
+    setupInstallGuide();
 </script>
 </body>
 </html>

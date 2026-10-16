@@ -18,7 +18,7 @@ if exist wifi_full_app.spec del wifi_full_app.spec
 
 echo [2/2] Building executable with PyInstaller inside .venv...
 call .venv\Scripts\activate
-pyinstaller --noconsole --onedir --add-data "templates;templates" wifi_full_app.py
+pyinstaller --noconsole --onedir --add-data "templates;templates" main_app.py
 
 echo ========================================================
 echo Packaging complete!

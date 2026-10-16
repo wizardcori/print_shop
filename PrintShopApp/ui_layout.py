@@ -70,7 +70,8 @@ class AutoFitTextLabel(QLabel):
 
 def setup_integrated_ui(window, current_upload_folder, current_zones, current_save_tabs, interfaces,
                         current_ssid, internet_nic, hotspot_nic, hotspot_image,
-                        hotspot_network, hotspot_gateway, max_connections):
+                        hotspot_network, hotspot_gateway, max_connections,
+                        current_main_tab="file_receiver"):
     settings_menu = window.menuBar().addMenu("Settings")
     window.settings_action = QAction("Open Settings", window)
     window.settings_action.triggered.connect(window.open_settings_dialog)
@@ -84,6 +85,7 @@ def setup_integrated_ui(window, current_upload_folder, current_zones, current_sa
 
     # Main Tab Widget (Tab 1: LinkBox, Tab 2: LinkShare)
     window.main_tabs = QTabWidget()
+    window.main_tabs.currentChanged.connect(window.on_main_tab_changed)
     main_layout.addWidget(window.main_tabs)
 
     # ==========================================
@@ -394,6 +396,10 @@ def setup_integrated_ui(window, current_upload_folder, current_zones, current_sa
         "사용요청": ["사용요청", "요청시간", "IP 주소"],
         "사용허가": ["사용허가", "승인시간", "시작시간", "종료시간", "남은시간", "IP 주소"],
     }
+    connection_tab_name = next(iter(usage_tabs))
+    usage_tabs[connection_tab_name] = ["연결상태", "사용승인", "인터넷연결", "요청시간", "시작시간", "종료시간", "총사용요청시간", "남은시간", "IP 주소"]
+    approval_tab_name = list(usage_tabs)[2]
+    usage_tabs[approval_tab_name] = ["사용허가", "승인시간", "요청사용시간", "IP 주소"]
     for tab_name, headers in usage_tabs.items():
         usage_tab = QWidget()
         usage_tab_layout = QVBoxLayout(usage_tab)
@@ -438,3 +444,4 @@ def setup_integrated_ui(window, current_upload_folder, current_zones, current_sa
     QTimer.singleShot(0, window.adjust_linkshare_spacing)
 
     window.main_tabs.addTab(tab2_widget, "🌐 Wi-Fi Pass Manager (LinkShare)")
+    window.main_tabs.setCurrentIndex(1 if current_main_tab == "wifi_pass" else 0)

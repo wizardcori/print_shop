@@ -7,6 +7,7 @@ echo   Starting PrintShopApp...
 echo ===================================================
 echo.
 
+cd /d "%~dp0"
 set "PYTHON_EXE=.venv\Scripts\python.exe"
 if not exist "%PYTHON_EXE%" goto missing_venv
 
@@ -14,7 +15,7 @@ echo [INFO] Starting main_app.py with the project virtual environment...
 "%PYTHON_EXE%" main_app.py
 if errorlevel 1 goto run_error
 
-pause
+rem pause
 exit /b
 
 :missing_venv
