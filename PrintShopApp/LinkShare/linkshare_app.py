@@ -256,7 +256,8 @@ class ConnectionListDialog(QDialog):
         self.table = QTableWidget()
         self.table.setColumnCount(6)
         self.table.setHorizontalHeaderLabels(["Serial No", "IP Address", "Pass Type", "Status", "Remaining Time", "Start Time"])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setStyleSheet(
             "QTableWidget { background-color: #ffffff; color: #263238; gridline-color: #b0bec5; }"
             " QHeaderView::section { background-color: #1565c0; color: #ffffff; font-weight: bold; padding: 5px; }"
@@ -310,7 +311,8 @@ class FareLogListDialog(QDialog):
         self.table = QTableWidget()
         self.table.setColumnCount(8)
         self.table.setHorizontalHeaderLabels(["Serial No", "Log Date", "IP Address", "Pass Type", "Status", "Request Time", "Start Time", "End Time"])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setStyleSheet(
             "QTableWidget { background-color: #ffffff; color: #263238; gridline-color: #b0bec5; }"
             " QHeaderView::section { background-color: #1565c0; color: #ffffff; font-weight: bold; padding: 5px; }"
@@ -751,7 +753,8 @@ class LinkShareApp(QMainWindow):
             usage_tab_layout = QVBoxLayout(usage_tab)
             table = QTableWidget(0, len(headers))
             table.setHorizontalHeaderLabels(headers)
-            table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+            table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+            table.horizontalHeader().setStretchLastSection(True)
             table.setEditTriggers(QTableWidget.NoEditTriggers)
             table.setStyleSheet(
                 "QTableWidget { background-color: #ffffff; color: #263238; "

@@ -401,11 +401,13 @@ def setup_integrated_ui(window, current_upload_folder, current_zones, current_sa
     approval_tab_name = list(usage_tabs)[2]
     usage_tabs[approval_tab_name] = ["사용허가", "승인시간", "요청사용시간", "IP 주소"]
     for tab_name, headers in usage_tabs.items():
+        headers = headers + ["사용자정보"]
         usage_tab = QWidget()
         usage_tab_layout = QVBoxLayout(usage_tab)
         table = QTableWidget(0, len(headers))
         table.setHorizontalHeaderLabels(headers)
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        table.horizontalHeader().setStretchLastSection(True)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
         table.setStyleSheet(
             "QTableWidget { background-color: #ffffff; color: #263238; "
@@ -416,6 +418,34 @@ def setup_integrated_ui(window, current_upload_folder, current_zones, current_sa
         usage_tab_layout.addWidget(table)
         window.usage_history_tables[tab_name] = table
         window.usage_history_tabs.addTab(usage_tab, tab_name)
+
+    history_tab = QWidget()
+    history_layout = QVBoxLayout(history_tab)
+    history_filter_layout = QHBoxLayout()
+    window.usage_history_filter = QComboBox()
+    window.usage_history_filter.addItems(["전체", "오늘", "이번 달", "기간"])
+    window.usage_history_start = QLineEdit()
+    window.usage_history_start.setPlaceholderText("시작일 YYYY-MM-DD")
+    window.usage_history_end = QLineEdit()
+    window.usage_history_end.setPlaceholderText("종료일 YYYY-MM-DD")
+    history_filter_layout.addWidget(window.usage_history_filter)
+    history_filter_layout.addWidget(window.usage_history_start)
+    history_filter_layout.addWidget(window.usage_history_end)
+    history_layout.addLayout(history_filter_layout)
+    window.usage_history_total_label = QLabel("사용시간 누적: 0분                         금액 누적: 0 PHP")
+    history_layout.addWidget(window.usage_history_total_label)
+    history_table = QTableWidget(0, 5)
+    history_table.setHorizontalHeaderLabels(["요청시간", "승인시간", "사용시간", "금액", "사용자정보"])
+    history_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+    history_table.horizontalHeader().setStretchLastSection(True)
+    history_table.setEditTriggers(QTableWidget.NoEditTriggers)
+    history_layout.addWidget(history_table)
+    window.usage_history_tables["사용내역"] = history_table
+    window.usage_history_tabs.addTab(history_tab, "사용내역")
+    window.usage_history_filter.currentIndexChanged.connect(window.update_usage_history_tables)
+    window.usage_history_start.textChanged.connect(window.update_usage_history_tables)
+    window.usage_history_end.textChanged.connect(window.update_usage_history_tables)
+    window.usage_history_tabs.currentChanged.connect(window.on_usage_history_tab_changed)
 
     status_panel = QWidget()
     status_panel_layout = QVBoxLayout(status_panel)

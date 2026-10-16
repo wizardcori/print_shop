@@ -19,6 +19,9 @@ import shutil
 import logging
 import secrets
 import hashlib
+import sqlite3
+import re
+from db import AppDatabase
 try:
     import winsound
 except ImportError:
@@ -41,31 +44,70 @@ from PySide6.QtPrintSupport import QPrinter, QPrintDialog
 from PySide6.QtCore import Qt, QThread, Signal, Slot, QTimer, QObject
 
 # --- Path and Subfolder Integration ---
+# Source mode uses the project folder.  Frozen deployments use the executable
+# folder for writable application data and PyInstaller's bundle folder only for
+# read-only resources (templates, icons, and Python modules).
 current_dir = os.path.dirname(os.path.abspath(__file__))
-os.chdir(current_dir)
+application_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else current_dir
+resource_dir = getattr(sys, '_MEIPASS', current_dir)
+data_dir = os.environ.get('PRINTSHOP_DATA_DIR', os.path.join(application_dir, 'data'))
+os.makedirs(data_dir, exist_ok=True)
+os.chdir(application_dir)
 
-linkbox_path = os.path.join(current_dir, "LinkBox")
-linkshare_path = os.path.join(current_dir, "LinkShare")
-database_dir = os.path.join(linkshare_path, "db")
+def migrate_storage_file(filename):
+    """Copy a legacy root-level file into the unified data directory once."""
+    old_path = os.path.join(application_dir, filename)
+    new_path = os.path.join(data_dir, filename)
+    if os.path.exists(old_path) and not os.path.exists(new_path):
+        shutil.copy2(old_path, new_path)
+
+
+migrate_storage_file('wifi_approval_settings.ini')
+migrate_storage_file('wifi_hotspot.log')
+
+resource_linkbox_path = os.path.join(resource_dir, "LinkBox")
+resource_linkshare_path = os.path.join(resource_dir, "LinkShare")
+linkbox_path = resource_linkbox_path
+linkshare_path = data_dir
+database_dir = os.path.join(data_dir, "db")
 wifi_approval_db_path = os.path.join(database_dir, "wifi_approval.db")
 os.makedirs(database_dir, exist_ok=True)
-approval_sound_dir = os.path.join(linkshare_path, "approval_sounds")
+legacy_db_path = os.path.join(data_dir, "LinkShare", "db", "wifi_approval.db")
+if not os.path.exists(legacy_db_path):
+    legacy_db_path = os.path.join(application_dir, "LinkShare", "db", "wifi_approval.db")
+if not os.path.exists(wifi_approval_db_path) and os.path.exists(legacy_db_path):
+    shutil.copy2(legacy_db_path, wifi_approval_db_path)
+app_database = AppDatabase(wifi_approval_db_path)
+approval_sound_dir = os.path.join(data_dir, "approval_sounds")
 os.makedirs(approval_sound_dir, exist_ok=True)
-sys.path.append(linkbox_path)
-sys.path.append(linkshare_path)
+legacy_data_linkshare = os.path.join(application_dir, "LinkShare")
+for folder_name, target_path in (
+    ("approval_sounds", approval_sound_dir),
+    ("fare", os.path.join(data_dir, "fare")),
+):
+    source_path = os.path.join(legacy_data_linkshare, folder_name)
+    if os.path.isdir(source_path):
+        os.makedirs(target_path, exist_ok=True)
+        for filename in os.listdir(source_path):
+            source_file = os.path.join(source_path, filename)
+            target_file = os.path.join(target_path, filename)
+            if os.path.isfile(source_file) and not os.path.exists(target_file):
+                shutil.copy2(source_file, target_file)
+sys.path.append(resource_linkbox_path)
+sys.path.append(resource_linkshare_path)
 
 import ui_layout
 
 # --- Configuration & Path Setup ---
-SETTINGS_FILE = "wifi_approval_settings.ini"
-WIFI_LOG_FILE = os.path.join(current_dir, "wifi_hotspot.log")
+SETTINGS_FILE = os.path.join(data_dir, "wifi_approval_settings.ini")
+WIFI_LOG_FILE = os.path.join(data_dir, "wifi_hotspot.log")
 wifi_logger = logging.getLogger("printshop.wifi")
 if not wifi_logger.handlers:
     wifi_logger.setLevel(logging.INFO)
     wifi_handler = logging.FileHandler(WIFI_LOG_FILE, encoding='utf-8')
     wifi_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
     wifi_logger.addHandler(wifi_handler)
-DEFAULT_UPLOAD_FOLDER = os.path.join(linkbox_path, "LinkBox_Files")
+DEFAULT_UPLOAD_FOLDER = os.path.join(data_dir, "LinkBox_Files")
 os.makedirs(DEFAULT_UPLOAD_FOLDER, exist_ok=True)
 
 DEFAULT_ZONES = ["Counter", "Table01", "Table02", "VIP_Room"]
@@ -77,11 +119,19 @@ DEFAULT_HOTSPOT_GATEWAY = "192.168.137.1"
 DEFAULT_MAX_CONNECTIONS = 250
 DEFAULT_WINDOWS_HOTSPOT_LIMIT = 8
 DEFAULT_STATUS_POLL_INTERVAL = 60.0
+DEFAULT_EXPIRATION_CHECK_INTERVAL = 60
+DEFAULT_INTERNET_FARES = [
+    {'minutes': 30, 'price': 5}, {'minutes': 60, 'price': 10},
+    {'minutes': 90, 'price': 15}, {'minutes': 120, 'price': 20},
+    {'minutes': 180, 'price': 30}, {'minutes': 240, 'price': 40},
+    {'minutes': 480, 'price': 80},
+]
 DEFAULT_APPROVAL_SOUND_ENABLED = True
 DEFAULT_APPROVAL_SOUNDS = ['', '', '', '', '']
 DEFAULT_QR_OUTPUT_FORMAT = 'PDF'
 DEFAULT_QR_OUTPUT_SCALE = 1
-DEFAULT_QR_OUTPUT_DIR = os.path.join(current_dir, 'qr_output')
+DEFAULT_QR_OUTPUT_DIR = os.path.join(data_dir, 'qr_output')
+os.makedirs(DEFAULT_QR_OUTPUT_DIR, exist_ok=True)
 WINDOWS_HOTSPOT_LIMIT_MAX = 128
 
 # --- Encryption Key Management (LinkShare)[cite: 4] ---
@@ -162,6 +212,22 @@ def load_app_settings():
         )
     except ValueError:
         status_poll_interval = DEFAULT_STATUS_POLL_INTERVAL
+    try:
+        expiration_check_interval = max(30, min(300, config.getint(
+            'Settings', 'expiration_check_interval', fallback=DEFAULT_EXPIRATION_CHECK_INTERVAL
+        )))
+    except ValueError:
+        expiration_check_interval = DEFAULT_EXPIRATION_CHECK_INTERVAL
+    try:
+        internet_fares = json.loads(config.get('Settings', 'internet_fares', fallback=''))
+        if not isinstance(internet_fares, list) or not internet_fares:
+            internet_fares = DEFAULT_INTERNET_FARES
+        internet_fares = [
+            {'minutes': int(item['minutes']), 'price': float(item['price'])}
+            for item in internet_fares if int(item['minutes']) > 0 and float(item['price']) >= 0
+        ] or DEFAULT_INTERNET_FARES
+    except (TypeError, ValueError, KeyError, json.JSONDecodeError):
+        internet_fares = DEFAULT_INTERNET_FARES
     approval_sounds = [
         config.get('Settings', f'approval_sound_{index}', fallback=DEFAULT_APPROVAL_SOUNDS[index - 1])
         for index in range(1, 6)
@@ -196,6 +262,8 @@ def load_app_settings():
         'max_connections': max_connections,
         'windows_hotspot_limit': windows_hotspot_limit,
         'status_poll_interval': status_poll_interval,
+        'expiration_check_interval': expiration_check_interval,
+        'internet_fares': internet_fares,
         'approval_sound_enabled': config.getboolean(
             'Settings', 'approval_sound_enabled', fallback=DEFAULT_APPROVAL_SOUND_ENABLED
         ),
@@ -239,6 +307,12 @@ def save_app_settings(settings):
     config.set('Settings', 'status_poll_interval', str(max(
         0.5, min(60.0, float(settings.get('status_poll_interval', DEFAULT_STATUS_POLL_INTERVAL)))
     )))
+    config.set('Settings', 'expiration_check_interval', str(max(
+        30, min(300, int(settings.get('expiration_check_interval', DEFAULT_EXPIRATION_CHECK_INTERVAL)))
+    )))
+    config.set('Settings', 'internet_fares', json.dumps(
+        settings.get('internet_fares', DEFAULT_INTERNET_FARES), ensure_ascii=False
+    ))
     config.set('Settings', 'approval_sound_enabled', str(bool(
         settings.get('approval_sound_enabled', DEFAULT_APPROVAL_SOUND_ENABLED)
     )))
@@ -593,16 +667,15 @@ def choose_preferred_interface(interfaces, saved_display='', saved_ip='', wirele
     return candidates[0] if candidates else ("Default (192.168.137.1)", "192.168.137.1", False, True)
 
 # --- Integrated Flask Web Server[cite: 3, 4] ---
-web_app = Flask(__name__, template_folder=os.path.join(linkshare_path, 'templates'))
+web_app = Flask(__name__, template_folder=os.path.join(resource_linkshare_path, 'templates'))
 shared_sessions = {}
 client_identity_map = {}
+client_metadata_map = {}
 usage_history = []
 status_condition = threading.Condition()
-runtime_settings = {'max_connections': DEFAULT_MAX_CONNECTIONS}
+runtime_settings = {'max_connections': DEFAULT_MAX_CONNECTIONS, 'internet_fares': DEFAULT_INTERNET_FARES}
 _upstream_dns_cache = {'timestamp': 0.0, 'servers': []}
 CLIENT_COOKIE_NAME = 'printshop_client_token'
-
-
 def get_client_identity():
     """Identify a portal user across reconnects without relying on a changing IP.
 
@@ -621,7 +694,39 @@ def get_client_identity():
         session['client_ip'] = client_ip
         shared_sessions[client_ip] = session
     client_identity_map[token_id] = client_ip
-    device_name = (request.headers.get('X-Client-Device') or '').strip()[:120]
+    user_agent = (request.headers.get('User-Agent') or '').strip()[:500]
+    if 'Android' in user_agent:
+        device_type, operating_system = 'Mobile', 'Android'
+    elif any(item in user_agent for item in ('iPhone', 'iPad', 'iPod')):
+        device_type, operating_system = 'Mobile', 'iOS'
+    elif 'Windows' in user_agent:
+        device_type, operating_system = 'PC', 'Windows'
+    elif 'Mac OS X' in user_agent:
+        device_type, operating_system = 'PC', 'macOS'
+    else:
+        device_type, operating_system = 'Unknown', 'Unknown'
+    if 'Edg/' in user_agent:
+        browser = 'Edge'
+    elif 'Chrome/' in user_agent:
+        browser = 'Chrome'
+    elif 'Safari/' in user_agent and 'Chrome/' not in user_agent:
+        browser = 'Safari'
+    elif 'Firefox/' in user_agent:
+        browser = 'Firefox'
+    else:
+        browser = 'Unknown'
+    client_metadata_map[token_id] = {
+        'device_name': (request.headers.get('X-Client-Device') or '').strip()[:120],
+        'device_type': device_type,
+        'operating_system': operating_system,
+        'browser': browser,
+        'user_agent': user_agent,
+        'accept_language': (request.headers.get('Accept-Language') or '').strip()[:120],
+        'screen_size': (request.headers.get('X-Client-Screen') or '').strip()[:40],
+        'timezone': (request.headers.get('X-Client-Timezone') or '').strip()[:80],
+        'last_seen': datetime.datetime.now().isoformat(timespec='seconds'),
+    }
+    device_name = client_metadata_map[token_id]['device_name']
     return token, token_id, client_ip, device_name
 
 
@@ -632,12 +737,41 @@ def identity_response(payload, token):
     return response
 
 
+def apply_client_metadata(session, token_id):
+    """Copy browser-supplied automatic metadata into the persisted session record."""
+    metadata = client_metadata_map.get(token_id, {})
+    for key, value in metadata.items():
+        if value:
+            session[key] = value
+    session.setdefault('first_seen', metadata.get('last_seen', ''))
+    session['last_seen'] = metadata.get('last_seen', session.get('last_seen', ''))
+
+
 def append_usage_log(log_type, session, **overrides):
     """Append an immutable request/approval event to the usage history."""
     record = dict(session)
     record.update(overrides)
     record['log_type'] = log_type
     usage_history.append(record)
+    try:
+        app_database.save_event(record)
+        app_database.save_session(session)
+    except (OSError, sqlite3.Error):
+        pass
+
+
+def get_record_price(record):
+    """Return the price fixed at approval time, with a legacy fare fallback."""
+    value = record.get('approved_price')
+    if value is None:
+        value = record.get('requested_price')
+    try:
+        if value is not None and float(value) > 0:
+            return float(value)
+    except (TypeError, ValueError):
+        pass
+    match = re.search(r'\(([0-9]+(?:\.[0-9]+)?)\s*PHP\)', str(record.get('fare', '')))
+    return float(match.group(1)) if match else 0.0
 
 
 def is_client_internet_approved(client_ip):
@@ -808,6 +942,7 @@ def customer_scan():
     response = make_response(render_template(
         'portal.html',
         status_poll_interval=runtime_settings.get('status_poll_interval', DEFAULT_STATUS_POLL_INTERVAL),
+        internet_fares=runtime_settings.get('internet_fares', DEFAULT_INTERNET_FARES),
     ))
     response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
     response.headers['Pragma'] = 'no-cache'
@@ -846,7 +981,8 @@ def file_share_page():
 
 @web_app.route('/request')
 def customer_request():
-    allowed_minutes = {30, 60, 90, 120, 180, 240}
+    fare_map = {int(item['minutes']): item for item in runtime_settings.get('internet_fares', DEFAULT_INTERNET_FARES)}
+    allowed_minutes = set(fare_map)
     try:
         minutes = int(request.args.get('min', 60))
     except (TypeError, ValueError):
@@ -855,7 +991,8 @@ def customer_request():
         return {'msg': 'Select one of the available usage times.'}, 400
 
     token, token_id, client_ip, device_name = get_client_identity()
-    dur_str = f"{minutes} Min Pass" if minutes < 60 else f"{minutes//60} Hour Pass"
+    fare = fare_map[minutes]['price']
+    dur_str = f"{minutes} Min Pass ({fare:g} PHP)" if minutes < 60 else f"{minutes//60} Hour Pass ({fare:g} PHP)"
     existing_session = shared_sessions.get(client_ip)
     if existing_session:
         existing_status = get_client_session(client_ip).get('status')
@@ -870,6 +1007,7 @@ def customer_request():
                 'extension_pending': True,
                 'extension_minutes': minutes,
                 'extension_fare': dur_str,
+                'extension_price': fare,
                 'extension_request_time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
             })
             append_usage_log(
@@ -919,6 +1057,8 @@ def customer_request():
     session_record = {
         'status': 'Pending',
         'requested_minutes': minutes,
+        'requested_price': fare,
+        'approved_price': None,
         'fare': dur_str,
         'client_ip': client_ip,
         'client_token_id': token_id,
@@ -934,6 +1074,7 @@ def customer_request():
         'internet_status': '확인 중',
         'total_used_seconds': 0,
     }
+    apply_client_metadata(session_record, token_id)
     shared_sessions[client_ip] = session_record
     append_usage_log('request', session_record)
     threading.Thread(
@@ -990,6 +1131,7 @@ def get_status():
     if session:
         session['last_seen'] = datetime.datetime.now().isoformat(timespec='seconds')
         session['client_token_id'] = token_id
+        apply_client_metadata(session, token_id)
         if device_name:
             session['device_name'] = device_name
     if wait_for_change:
@@ -1011,6 +1153,7 @@ def report_internet_status():
         return identity_response({'status': 'None'}, token), 404
     session['last_seen'] = datetime.datetime.now().isoformat(timespec='seconds')
     session['client_token_id'] = token_id
+    apply_client_metadata(session, token_id)
     if device_name:
         session['device_name'] = device_name
     payload = request.get_json(silent=True) or {}
@@ -1032,6 +1175,10 @@ def report_internet_status():
         session['internet_checked_at'] = str(payload['checked_at'])[:80]
     if payload.get('test_result'):
         session['internet_test_result'] = str(payload['test_result'])[:20]
+    try:
+        app_database.save_session(session)
+    except (OSError, sqlite3.Error):
+        pass
     if internet_status in ('확인 중', '사용 가능', '확인 실패'):
         if session.get('internet_status') != internet_status:
             session['internet_status'] = internet_status
@@ -1195,6 +1342,19 @@ class IntegratedSettingsDialog(QDialog):
         self.approval_sound_checkbox.setChecked(self.approval_sound_enabled)
         sound_layout.addWidget(self.approval_sound_checkbox)
         sound_layout.addWidget(QLabel("승인 시 재생할 사운드를 등록하고 하나를 선택하세요."))
+        self.internet_fares = load_app_settings().get('internet_fares', DEFAULT_INTERNET_FARES)
+        fare_tab = QWidget(); fare_layout = QVBoxLayout(fare_tab)
+        fare_layout.addWidget(QLabel('<h3>인터넷 사용요금표</h3>'))
+        self.fare_list = QListWidget(); fare_layout.addWidget(self.fare_list)
+        fare_input = QHBoxLayout()
+        self.fare_minutes_input = QSpinBox(); self.fare_minutes_input.setRange(1, 1440); self.fare_minutes_input.setSuffix(' 분')
+        self.fare_price_input = QSpinBox(); self.fare_price_input.setRange(0, 1000000); self.fare_price_input.setSuffix(' PHP')
+        fare_input.addWidget(self.fare_minutes_input); fare_input.addWidget(self.fare_price_input); fare_layout.addLayout(fare_input)
+        fare_buttons = QHBoxLayout()
+        for text, slot in (("Add", self.add_fare), ("Edit", self.edit_fare), ("Remove", self.remove_fare)):
+            button = QPushButton(text); button.clicked.connect(slot); fare_buttons.addWidget(button)
+        fare_layout.addLayout(fare_buttons); settings_tabs.addTab(fare_tab, '인터넷 요금')
+        self.refresh_fare_list()
         self.sound_radio_group = QButtonGroup(self)
         self.sound_radio_group.setExclusive(True)
         self.sound_radios = []
@@ -1304,6 +1464,28 @@ class IntegratedSettingsDialog(QDialog):
             if display_name == selected or ip == selected:
                 combo.setCurrentIndex(index)
 
+    def refresh_fare_list(self):
+        self.fare_list.clear()
+        for fare in sorted(self.internet_fares, key=lambda item: item['minutes']):
+            self.fare_list.addItem(f"{fare['minutes']}분 - {fare['price']:g} PHP")
+
+    def add_fare(self):
+        self.internet_fares.append({'minutes': self.fare_minutes_input.value(), 'price': self.fare_price_input.value()})
+        self.refresh_fare_list()
+
+    def edit_fare(self):
+        row = self.fare_list.currentRow()
+        if row < 0 or row >= len(self.internet_fares): return
+        self.internet_fares[row] = {'minutes': self.fare_minutes_input.value(), 'price': self.fare_price_input.value()}
+        self.refresh_fare_list()
+
+    def remove_fare(self):
+        row = self.fare_list.currentRow()
+        if row >= 0: self.internet_fares.pop(row); self.refresh_fare_list()
+
+    def get_internet_fares(self):
+        return sorted(self.internet_fares, key=lambda item: item['minutes']) or DEFAULT_INTERNET_FARES
+
     def browse_hotspot_image(self):
         image_path, _ = QFileDialog.getOpenFileName(
             self, "Select Hotspot Image", self.image_path_input.text(),
@@ -1407,6 +1589,7 @@ class IntegratedSettingsDialog(QDialog):
 class IntegratedManagerApp(QMainWindow):
     file_signal = Signal(list, str, str)
     delete_signal = Signal(str, list)
+    database_loaded = Signal(object, object)
 
     def __init__(self):
         super().__init__()
@@ -1426,6 +1609,9 @@ class IntegratedManagerApp(QMainWindow):
         self.linkshare_splitter_sizes = app_settings.get('linkshare_splitter_sizes', [520, 260])
         self.max_connections = app_settings['max_connections']
         self.status_poll_interval = app_settings.get('status_poll_interval', DEFAULT_STATUS_POLL_INTERVAL)
+        self.expiration_check_interval = app_settings.get(
+            'expiration_check_interval', DEFAULT_EXPIRATION_CHECK_INTERVAL
+        )
         self.windows_hotspot_limit = app_settings['windows_hotspot_limit']
         self.approval_sound_enabled = app_settings.get('approval_sound_enabled', DEFAULT_APPROVAL_SOUND_ENABLED)
         self.approval_sounds = app_settings.get('approval_sounds', DEFAULT_APPROVAL_SOUNDS)
@@ -1445,6 +1631,7 @@ class IntegratedManagerApp(QMainWindow):
         })
         runtime_settings['max_connections'] = self.max_connections
         runtime_settings['status_poll_interval'] = self.status_poll_interval
+        runtime_settings['internet_fares'] = app_settings.get('internet_fares', DEFAULT_INTERNET_FARES)
         self.internet_nic = {'display': app_settings['internet_nic'], 'ip': app_settings['internet_ip']}
         self.hotspot_nic = {'display': app_settings['hotspot_nic'], 'ip': app_settings['hotspot_ip']}
         self.load_saved_defaults(app_settings)
@@ -1479,11 +1666,20 @@ class IntegratedManagerApp(QMainWindow):
         self.batch_timer.timeout.connect(self.show_batch_notification)
 
         self.connection_timer = QTimer(self)
-        self.connection_timer.setInterval(2000)
+        self.connection_timer.setInterval(self.expiration_check_interval * 1000)
         self.connection_timer.timeout.connect(self.update_connection_summary)
         self.connection_timer.start()
 
+        self.usage_history_timer = QTimer(self)
+        self.usage_history_timer.setInterval(1000)
+        self.usage_history_timer.timeout.connect(self.update_selected_usage_history)
+        self.usage_history_timer.start()
+
+        self.database_loaded.connect(self.apply_database_state, Qt.QueuedConnection)
+        threading.Thread(target=self.load_database_state, daemon=True).start()
+
         self.resize(1150, 750)
+        self.update_connection_summary()
         self.update_qr_code()
 
         self.file_signal.connect(self.handle_incoming_files)
@@ -1499,6 +1695,21 @@ class IntegratedManagerApp(QMainWindow):
         self.start_captive_portal()
         self.persist_settings()
         QTimer.singleShot(250, self.diagnose_hotspot)
+
+    def load_database_state(self):
+        """Load persisted sessions/history off the GUI thread so startup remains responsive."""
+        sessions, history = app_database.load()
+        self.database_loaded.emit(sessions, history)
+
+    @Slot(object, object)
+    def apply_database_state(self, sessions, history):
+        shared_sessions.update(sessions)
+        usage_history.extend(history)
+        for client_ip, session in sessions.items():
+            token_id = session.get('client_token_id')
+            if token_id:
+                client_identity_map[token_id] = client_ip
+        self.update_connection_summary()
 
     def load_saved_defaults(self, app_settings):
         global DEFAULT_UPLOAD_FOLDER, DEFAULT_ZONES, DEFAULT_SAVE_TABS
@@ -1608,6 +1819,7 @@ class IntegratedManagerApp(QMainWindow):
             self.windows_hotspot_limit = dialog.get_windows_hotspot_limit()
             self.approval_sound_enabled = dialog.get_approval_sound_enabled()
             self.approval_sounds = dialog.get_approval_sounds()
+            runtime_settings['internet_fares'] = dialog.get_internet_fares()
             runtime_settings['max_connections'] = self.max_connections
 
             new_fare_path = dialog.get_fare_path()
@@ -1679,6 +1891,13 @@ class IntegratedManagerApp(QMainWindow):
                     session['status'] = 'Expired'
                     session['connection_status'] = '종료'
                     session['remaining_seconds'] = 0
+                    session['completed_time'] = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    append_usage_log('completed', session)
+                    try:
+                        app_database.save_session(session)
+                    except (OSError, sqlite3.Error):
+                        pass
+                    notify_status_change()
 
         active_statuses = {'Pending', 'Approved'}
         active_count = sum(
@@ -1699,22 +1918,89 @@ class IntegratedManagerApp(QMainWindow):
                 self.windows_hotspot_clients_label.setText(error)
         self.update_usage_history_tables()
 
+    def update_selected_usage_history(self):
+        """Refresh the usage-history screen once per second only while selected."""
+        if not hasattr(self, 'usage_history_tabs'):
+            return
+        if self.usage_history_tabs.currentIndex() == self.usage_history_tabs.count() - 1:
+            self.update_usage_history_tables()
+
+    def on_usage_history_tab_changed(self, _index):
+        """Refresh the newly selected status/history tab immediately."""
+        self.update_usage_history_tables()
+
+    def refresh_all_views(self):
+        """Refresh every manager view immediately (used by F5)."""
+        self.update_connection_summary()
+        self.update_usage_history_tables()
+        self.update_save_tab_combo_items()
+        self.update_zone_combo_items()
+        self.diagnose_hotspot()
+        self.update_qr_code()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_F5:
+            self.refresh_all_views()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
     def update_usage_history_tables(self):
         if not hasattr(self, 'usage_history_tables'):
             return
 
         table_records = {
             '연결상태': (usage_history, [
-                'connection_status', 'request_time', 'start_time', 'end_time', 'remaining', 'client_ip'
+                'connection_status', 'request_time', 'start_time', 'end_time', 'remaining', 'client_ip', 'user_info'
             ]),
             '사용요청': ([record for record in usage_history if record.get('log_type') == 'request'], [
-                'usage_request', 'request_time', 'client_ip'
+                'usage_request', 'request_time', 'client_ip', 'user_info'
             ]),
             '사용허가': (
                 [record for record in usage_history if record.get('log_type') == 'approval'],
-                ['usage_approval', 'approval_time', 'requested_time', 'client_ip']
+                ['usage_approval', 'approval_time', 'requested_time', 'client_ip', 'user_info']
             ),
         }
+        history_records = list(reversed(usage_history))
+        if hasattr(self, 'usage_history_filter'):
+            filter_name = self.usage_history_filter.currentText()
+            today = datetime.date.today()
+            start_text = self.usage_history_start.text().strip()
+            end_text = self.usage_history_end.text().strip()
+            def history_date(record):
+                raw = (record.get('completed_time') or record.get('approval_time') or
+                       record.get('request_time') or '')
+                try:
+                    return datetime.datetime.strptime(raw[:10], '%Y-%m-%d').date()
+                except ValueError:
+                    return None
+            if filter_name == '오늘':
+                history_records = [r for r in history_records if history_date(r) == today]
+            elif filter_name == '이번 달':
+                history_records = [r for r in history_records if history_date(r) and
+                                   history_date(r).year == today.year and history_date(r).month == today.month]
+            elif filter_name == '기간':
+                try:
+                    start_date = datetime.datetime.strptime(start_text, '%Y-%m-%d').date()
+                    end_date = datetime.datetime.strptime(end_text, '%Y-%m-%d').date()
+                    history_records = [r for r in history_records if history_date(r) and
+                                       start_date <= history_date(r) <= end_date]
+                except ValueError:
+                    history_records = []
+        table_records['사용내역'] = (history_records, [
+            'log_type', 'status', 'request_time', 'approval_time', 'completed_time', 'client_ip'
+        ])
+        approved_history = [r for r in history_records if r.get('log_type') == 'approval' and
+                            str(r.get('usage_approval', '')).startswith('Approved')]
+        total_minutes = sum(int(r.get('requested_minutes', 0)) for r in approved_history)
+        total_amount = sum(get_record_price(r) for r in approved_history)
+        if hasattr(self, 'usage_history_total_label'):
+            self.usage_history_total_label.setText(
+                f'사용시간 누적: {total_minutes}분                         금액 누적: {total_amount:g} PHP'
+            )
+        table_records['사용내역'] = (approved_history, [
+            'request_time', 'approval_time', 'requested_time', 'requested_price', 'user_info'
+        ])
         connection_tab_name = next(iter(table_records))
         latest_by_client = {}
         requested_seconds_by_client = {}
@@ -1730,7 +2016,7 @@ class IntegratedManagerApp(QMainWindow):
         table_records[connection_tab_name] = (
             list(latest_by_client.values()),
             ['connection_status', 'usage_approval', 'internet_status',
-             'request_time', 'start_time', 'end_time', 'total_requested', 'remaining', 'client_ip']
+             'request_time', 'start_time', 'end_time', 'total_requested', 'remaining', 'client_ip', 'user_info']
         )
 
         for tab_name, (records, fields) in table_records.items():
@@ -1751,6 +2037,9 @@ class IntegratedManagerApp(QMainWindow):
                     if requested_hours else f'{requested_minutes}분'
                 )
                 values = {
+                    'log_type': record.get('log_type', '-'),
+                    'status': record.get('status', '-'),
+                    'completed_time': record.get('completed_time', '-'),
                     'connection_status': record.get('connection_status', '-'),
                     'internet_status': record.get('internet_status', '확인 중'),
                     'usage_request': record.get('usage_request', record.get('fare', '-')),
@@ -1760,6 +2049,12 @@ class IntegratedManagerApp(QMainWindow):
                     'requested_time': (
                         f"{record.get('requested_minutes', 0)}분"
                         if record.get('requested_minutes') else record.get('usage_request', '-')
+                    ),
+                    'requested_price': f"{get_record_price(record):g} PHP",
+                    'user_info': (
+                        f"{record.get('device_name', '알 수 없는 기기')} / "
+                        f"{record.get('device_type', 'Unknown')} / "
+                        f"{record.get('browser', 'Unknown')} / {record.get('client_ip', '-')}"
                     ),
                     'start_time': record.get('start_time', '-'),
                     'end_time': record.get('end_time', '-'),
@@ -1865,6 +2160,8 @@ class IntegratedManagerApp(QMainWindow):
             'hotspot_gateway': self.hotspot_gateway,
             'max_connections': self.max_connections,
             'status_poll_interval': self.status_poll_interval,
+            'expiration_check_interval': self.expiration_check_interval,
+            'internet_fares': runtime_settings.get('internet_fares', DEFAULT_INTERNET_FARES),
             'approval_sound_enabled': self.approval_sound_enabled,
             'approval_sounds': self.approval_sounds,
             'qr_output_formats': self.qr_output_formats,
@@ -2260,9 +2557,14 @@ class IntegratedManagerApp(QMainWindow):
                     'end_timestamp': end.timestamp(),
                     'remaining_seconds': max(0, int(end.timestamp() - start.timestamp())),
                     'usage_approval': 'Approved (additional)',
+                    'approved_price': float(session.get('extension_price', 0) or 0),
                     'total_used_seconds': int(session.get('total_used_seconds', 0)) + minutes * 60,
                 })
-                append_usage_log('approval', session, requested_minutes=minutes)
+                append_usage_log(
+                    'approval', session,
+                    requested_minutes=minutes,
+                    approved_price=session.get('approved_price', 0),
+                )
                 notify_status_change()
                 self.show_auto_close_message(
                     QMessageBox.Information,
@@ -2282,9 +2584,14 @@ class IntegratedManagerApp(QMainWindow):
                 'end_timestamp': end.timestamp(),
                 'remaining_seconds': minutes * 60,
                 'total_used_seconds': int(session.get('total_used_seconds', 0)) + minutes * 60,
+                'approved_price': float(session.get('requested_price', 0) or 0),
             })
             session['usage_approval'] = 'Approved (first)'
-            append_usage_log('approval', session, requested_minutes=minutes)
+            append_usage_log(
+                'approval', session,
+                requested_minutes=minutes,
+                approved_price=session.get('approved_price', 0),
+            )
             notify_status_change()
             self.show_auto_close_message(
                 QMessageBox.Information,
@@ -2325,13 +2632,19 @@ class IntegratedManagerApp(QMainWindow):
 
     def bring_to_front(self):
         """Restore and activate the manager when a customer request arrives."""
-        self.showNormal()
-        self.setWindowState((self.windowState() & ~Qt.WindowMinimized) | Qt.WindowActive)
+        was_maximized = bool(self.windowState() & Qt.WindowMaximized)
+        if was_maximized:
+            self.setWindowState(
+                (self.windowState() & ~Qt.WindowMinimized) | Qt.WindowMaximized | Qt.WindowActive
+            )
+        else:
+            self.showNormal()
+            self.setWindowState((self.windowState() & ~Qt.WindowMinimized) | Qt.WindowActive)
         self.raise_()
         self.activateWindow()
         try:
             hwnd = int(self.winId())
-            ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            ctypes.windll.user32.ShowWindow(hwnd, 3 if was_maximized else 9)  # SW_MAXIMIZE/SW_RESTORE
             ctypes.windll.user32.SetForegroundWindow(hwnd)
         except (AttributeError, OSError, TypeError, ValueError):
             pass

@@ -40,6 +40,7 @@
     <h1>인터넷 사용 신청</h1>
     <div class="notice">인터넷 사용 시간을 선택한 후 사용요청을 눌러주세요.</div>
     <div class="options" id="timeOptions">
+        {% for fare in internet_fares %}<button class="time configured-fare" data-min="{{ fare.minutes }}" data-price="{{ fare.price }}">{{ fare.minutes }}분 · {{ '%g'|format(fare.price) }} PHP</button>{% endfor %}
         <button class="time" data-min="30">30분</button>
         <button class="time" data-min="60">1시간</button>
         <button class="time" data-min="90">1시간 30분</button>
@@ -74,7 +75,13 @@
     function clientHeaders() {
         const platform = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
         const mobile = /android|iphone|ipad|ipod/i.test(navigator.userAgent) ? '모바일' : 'PC';
-        return {'X-Client-Device': `${mobile} · ${platform}`.slice(0, 120)};
+        let timezone = '';
+        try { timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (_) {}
+        return {
+            'X-Client-Device': `${mobile} · ${platform}`.slice(0, 120),
+            'X-Client-Screen': `${screen.width}x${screen.height}`,
+            'X-Client-Timezone': timezone.slice(0, 80)
+        };
     }
     // 캡티브 포털의 구형 브라우저에서 fetch가 없는 경우를 지원한다.
     function requestJson(url, options) {
@@ -130,6 +137,9 @@
         installArea.classList.add('hidden');
     });
 
+    if (document.querySelectorAll('.configured-fare').length) {
+        document.querySelectorAll('.time:not(.configured-fare)').forEach(button => button.remove());
+    }
     document.querySelectorAll('.time').forEach(button => {
         button.addEventListener('click', () => {
             document.querySelectorAll('.time').forEach(item => item.classList.remove('selected'));
