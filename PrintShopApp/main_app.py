@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, 
     QHBoxLayout, QLabel, QLineEdit, QPushButton, 
     QTableWidget, QTableWidgetItem, QComboBox, QMessageBox, QFileDialog,
-    QCheckBox, QMenu, QDialog, QListWidget, QTabWidget, QGridLayout, QSpinBox,
+    QCheckBox, QMenu, QDialog, QListWidget, QTabWidget, QGridLayout, QSpinBox, QHeaderView,
     QRadioButton, QButtonGroup, QDateEdit
 )
 from PySide6.QtGui import QPixmap, QImage, QColor, QAction, QPainter, QFont, QFontMetrics, QPageSize
@@ -120,6 +120,34 @@ def format_size(size_bytes):
     if size_bytes < 1024 * 1024:
         return f"{size_bytes / 1024:.1f} KB"
     return f"{size_bytes / (1024 * 1024):.1f} MB"
+
+
+def clean_transfer_folder(target_folder, records):
+    """Remove non-summary files that do not match the persisted transfer log."""
+    if not os.path.isdir(target_folder):
+        return
+    expected = {
+        (str(record.get('filename', '')), str(record.get('size', '')))
+        for record in records
+        if record.get('filename')
+    }
+    for name in os.listdir(target_folder):
+        if name.startswith('summary_') or name == 'transfer_summary.txt':
+            continue
+        path = os.path.join(target_folder, name)
+        if not os.path.isfile(path):
+            continue
+        actual = (name, format_size(os.path.getsize(path)))
+        if actual not in expected:
+            try:
+                os.remove(path)
+                logging.getLogger(__name__).warning(
+                    'Removed unmatched transfer file: %s', path
+                )
+            except OSError:
+                logging.getLogger(__name__).exception(
+                    'Failed to remove unmatched transfer file: %s', path
+                )
 
 
 def safe_folder_part(value, fallback='Unknown'):
@@ -1190,7 +1218,7 @@ def file_share_upload():
             continue
         received.append((user_name, user_info, cookie_id, zone, filename, copy_count,
                          file_size,
-                         datetime.datetime.now().strftime('%H:%M:%S'),
+                         datetime.datetime.now().strftime('%Y%m%d_%H%M%S'),
                          'Completed (100%)', color_value))
         client_transfer_records.append({
             'folder': target_folder,
@@ -1201,7 +1229,7 @@ def file_share_upload():
             'cookie': cookie_id,
             'zone': zone,
             'size': file_size,
-            'received_time': datetime.datetime.now().strftime('%H:%M:%S'),
+            'received_time': datetime.datetime.now().strftime('%Y%m%d_%H%M%S'),
             'status': 'Completed (100%)',
             'color': color_value,
             'task_completed': False,
@@ -1267,7 +1295,24 @@ def transfer_status():
         if version <= since:
             transfer_change_condition.wait(timeout=25)
         version = transfer_change_versions.get(token_id, 0)
-        records = [dict(record) for record in transfer_records_by_client.get(token_id, [])]
+        # The QR screen represents files that can actually be downloaded or
+        # acted on. Keep historical records in the admin DB, but do not sync
+        # records whose physical file has been removed or moved.
+        records = [
+            dict(record)
+            for record in transfer_records_by_client.get(token_id, [])
+            if not str(record.get('filename', '')).startswith('summary_')
+            and str(record.get('filename', '')) != 'transfer_summary.txt'
+            and os.path.isfile(os.path.join(
+                str(record.get('folder', '')), str(record.get('filename', ''))
+            ))
+            and (
+                not record.get('size')
+                or format_size(os.path.getsize(os.path.join(
+                    str(record.get('folder', '')), str(record.get('filename', ''))
+                ))) == str(record.get('size'))
+            )
+        ]
     response = make_response({'version': version, 'changed': version != since, 'records': records})
     response.set_cookie(CLIENT_COOKIE_NAME, _token, max_age=60 * 60 * 24 * 30,
                         httponly=True, samesite='Lax')
@@ -2201,7 +2246,10 @@ class IntegratedManagerApp(QMainWindow):
                 shared_sessions[client_ip] = session
         usage_history.extend(history)
         for (target_folder, identity), records in transfer_logs.items():
-            if os.path.isdir(target_folder) and records:
+            # Keep the DB record visible even when the physical file is gone;
+            # the row is marked as missing below. User synchronization applies
+            # the stricter physical-file check separately.
+            if records:
                 file_list = [(
                     record.get('user_name', 'Guest'), record.get('user_info', 'Unknown'),
                     record.get('cookie', ''), record.get('zone', 'Default'),
@@ -2821,11 +2869,24 @@ class IntegratedManagerApp(QMainWindow):
         for index in range(self.tab_widget.count()):
             table = self.tab_widget.widget(index)
             visible = True
-            if isinstance(table, QTableWidget) and not show_completed:
-                visible = any(
-                    not bool(table.item(row, 6).data(Qt.UserRole + 3))
-                    for row in range(table.rowCount()) if table.item(row, 6)
+            if isinstance(table, QTableWidget):
+                # The checkbox filters whole tabs. When checked, all tabs
+                # matching the period are shown; when unchecked, completed-
+                # only tabs are hidden. Rows inside a visible tab are not
+                # hidden.
+                for row in range(table.rowCount()):
+                    table.setRowHidden(row, False)
+                has_valid_file = any(
+                    not bool(table.item(row, 3).data(Qt.UserRole + 4))
+                    for row in range(table.rowCount()) if table.item(row, 3)
                 )
+                visible = has_valid_file
+                if visible and not show_completed:
+                    visible = any(
+                        not bool(table.item(row, 6).data(Qt.UserRole + 3))
+                        and not bool(table.item(row, 3).data(Qt.UserRole + 4))
+                        for row in range(table.rowCount()) if table.item(row, 6)
+                    )
             if start is not None and isinstance(table, QTableWidget):
                 folder_date = None
                 for row in range(table.rowCount()):
@@ -2875,6 +2936,7 @@ class IntegratedManagerApp(QMainWindow):
                 transfer_change_versions[client_id] = transfer_change_versions.get(client_id, 0) + 1
             if changed_clients:
                 transfer_change_condition.notify_all()
+        self.apply_transfer_tab_filter()
 
     def set_completion_checkbox(self, table, row, completed=False):
         toggle = QPushButton(table)
@@ -3345,13 +3407,25 @@ class IntegratedManagerApp(QMainWindow):
         tab_user = safe_folder_part(first_record[0] if first_record else 'Guest', 'Guest')
         folder_match = re.search(r'_(\d{1,3}(?:\.\d{1,3}){3})_\d{8}-\d{6}$', os.path.basename(target_folder))
         tab_ip = folder_match.group(1) if folder_match else safe_folder_part(identity, 'UnknownIP')
-        tab_name = f'{safe_folder_part(first_record[3] if len(first_record) > 3 else "Default", "Default")}_{tab_user}_{tab_ip}'
+        # Keep each upload batch in its own admin tab, matching the QR view.
+        # Previously only zone/user/IP were used, so repeated uploads from
+        # the same user were merged into one tab.
+        target_folder_name = os.path.basename(target_folder)
+        transfer_match = re.search(r'(\d{8}-\d{6})$', target_folder_name)
+        transfer_batch = safe_folder_part(
+            transfer_match.group(1) if transfer_match else target_folder_name,
+            'Transfer'
+        )
+        tab_name = (
+            f'{safe_folder_part(first_record[3] if len(first_record) > 3 else "Default", "Default")}_'
+            f'{tab_user}_{tab_ip}_{transfer_batch}'
+        )
         table = self.get_or_create_file_table(tab_name)
         sorting_enabled = table.isSortingEnabled()
         table.setSortingEnabled(False)
         # Remove incomplete rows left by the pre-metadata table format.
         for old_row in range(table.rowCount() - 1, -1, -1):
-            old_file = table.item(old_row, 4)
+            old_file = table.item(old_row, 3)
             if old_file is None or not old_file.text().strip():
                 table.removeRow(old_row)
 
@@ -3360,18 +3434,32 @@ class IntegratedManagerApp(QMainWindow):
         reported_names = {
             str(record[4]) for record in file_list if len(record) >= 9 and record[4]
         }
-        template_record = list(file_list[0]) if file_list else ['Guest', 'Unknown', '', zone, '', 1, '', '', 'Completed (100%)']
-        for saved_name in os.listdir(target_folder):
-            saved_path = os.path.join(target_folder, saved_name)
-            if (os.path.isfile(saved_path) and not saved_name.startswith('summary_')
-                    and saved_name != 'transfer_summary.txt' and saved_name not in reported_names):
-                file_list.append((
-                    template_record[0], template_record[1], template_record[2], zone,
-                    saved_name, 1, DEFAULT_COLOR_OPTIONS[0],
-                    format_size(os.path.getsize(saved_path)),
-                    datetime.datetime.now().strftime('%H:%M:%S'), 'Completed (100%)'
-                ))
+        # Keep the canonical incoming tuple order here:
+        # user, info, cookie, zone, filename, copies, size, time, status, color.
+        # The old fallback omitted ``color`` and shifted every following
+        # field, which made the admin and customer views disagree after a
+        # missing/legacy record was reconstructed.
+        template_record = list(file_list[0]) if file_list else [
+            'Guest', 'Unknown', '', zone, '', 1, '', '',
+            'Completed (100%)', DEFAULT_COLOR_OPTIONS[0]
+        ]
+        if os.path.isdir(target_folder):
+            for saved_name in os.listdir(target_folder):
+                saved_path = os.path.join(target_folder, saved_name)
+                if (os.path.isfile(saved_path) and not saved_name.startswith('summary_')
+                        and saved_name != 'transfer_summary.txt' and saved_name not in reported_names):
+                    file_list.append((
+                        template_record[0], template_record[1], template_record[2], zone,
+                        saved_name, 1, format_size(os.path.getsize(saved_path)),
+                        datetime.datetime.now().strftime('%Y%m%d_%H%M%S'),
+                        'Completed (100%)', DEFAULT_COLOR_OPTIONS[0]
+                    ))
         for file_info in file_list:
+            # Never create a visible row without a filename. If the stored
+            # record is incomplete, the physical-file reconciliation above
+            # will add the real file instead.
+            if len(file_info) < 5 or not str(file_info[4]).strip():
+                continue
             # Keep every received row aligned with the nine-column table,
             # including records produced by older clients.
             if len(file_info) == 6:
@@ -3391,24 +3479,56 @@ class IntegratedManagerApp(QMainWindow):
                 values.append('')
             values = [values[0], values[1], values[3], values[4], values[5],
                       values[6], values[10], values[7], values[8], values[9], values[2]]
+            # The filename is the stable fifth field of every modern
+            # incoming tuple. Set it explicitly so legacy/color normalization
+            # can never leave the filename column blank or shifted.
+            if len(file_info) >= 5 and file_info[4]:
+                values[3] = str(file_info[4])
             if not values[4]:
                 values[4] = 1
             row = table.rowCount()
             table.insertRow(row)
             row_color = QColor('#f7fbff' if row % 2 else '#eaf4ff')
+            file_path = os.path.join(target_folder, str(values[3]))
+            file_missing = (
+                not os.path.isfile(file_path)
+                or bool(values[7]) and format_size(os.path.getsize(file_path)) != str(values[7])
+            ) if values[3] else True
             for column, value in enumerate(values):
                 item = QTableWidgetItem(str(value))
-                item.setBackground(QColor('#c9f0d2') if column == 9 else row_color)
+                missing_color = QColor('#ffcdd2')
+                item.setBackground(
+                    missing_color if file_missing
+                    else QColor('#c9f0d2') if column == 9 else row_color
+                )
+                if file_missing:
+                    item.setForeground(QColor('#b71c1c'))
+                    item.setToolTip('파일이 없거나 저장된 파일 크기와 일치하지 않습니다.')
                 item.setData(Qt.UserRole, target_folder)
+                item.setData(Qt.UserRole + 4, file_missing)
                 item.setData(Qt.UserRole + 2, identity)
                 table.setItem(row, column, item)
             table.item(row, 6).setData(Qt.UserRole + 3, False)
             self.set_copy_controls(table, row, int(values[4]) or 1)
             self.set_color_control(table, row, str(values[5] or DEFAULT_COLOR_OPTIONS[0]))
             self.set_completion_checkbox(table, row, False)
+            if file_missing:
+                for control_column in (4, 5, 6):
+                    control = table.cellWidget(row, control_column)
+                    if control is not None:
+                        control.setEnabled(False)
+                        control.setToolTip('파일이 없거나 크기가 일치하지 않아 사용할 수 없습니다.')
             if persist:
                 self.pending_batch_files.append(file_info)
+        table.resizeColumnToContents(3)
+        table.setColumnWidth(3, min(max(table.columnWidth(3), 260), 520))
+        # Keep the copy controls compact; their child buttons must not cause
+        # the whole column to expand to the available table width.
+        table.setColumnWidth(4, 150)
         table.setSortingEnabled(sorting_enabled)
+        # Reapply visibility after rows are inserted. A newly created table
+        # was previously filtered while empty and could remain hidden.
+        self.apply_transfer_tab_filter()
         if persist:
             self.batch_timer.start()
 
@@ -3441,9 +3561,14 @@ class IntegratedManagerApp(QMainWindow):
         )
         table.verticalHeader().setDefaultSectionSize(38)
         table.horizontalHeader().setMinimumSectionSize(80)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        table.horizontalHeader().sectionDoubleClicked.connect(
+            lambda column, t=table: t.resizeColumnToContents(column)
+        )
         for column, width in enumerate((140, 240, 120, 110, 280, 90, 100, 100, 110, 150, 90)):
             table.setColumnWidth(column, width)
         table.horizontalHeader().setStretchLastSection(True)
+        table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Interactive)
         self.tab_tables[tab_name] = table
         self.tab_widget.addTab(table, tab_name)
         self.tab_widget.setTabToolTip(self.tab_widget.indexOf(table), tab_name)
@@ -3477,9 +3602,8 @@ class IntegratedManagerApp(QMainWindow):
         layout.addWidget(value)
         layout.addWidget(up)
         table.setCellWidget(row, 4, container)
-        item = table.item(row, 3)
+        item = table.item(row, 4)
         if item is not None:
-            item.setText('')
             item.setData(Qt.UserRole + 1, int(count))
 
     def set_color_control(self, table, row, color):
@@ -3695,7 +3819,7 @@ class IntegratedManagerApp(QMainWindow):
         try:
             os.makedirs(target_folder, exist_ok=True)
             records = []
-            user_name = user_info = cookie = zone = ''
+            user_name = user_info = cookie = zone = request_time = ''
             for row in range(table.rowCount()):
                 file_item = table.item(row, 3)
                 if file_item is None or str(file_item.data(Qt.UserRole) or '') != str(target_folder):
@@ -3704,29 +3828,41 @@ class IntegratedManagerApp(QMainWindow):
                 values = [cell.text() if cell else '' for cell in cells]
                 if not user_name:
                     user_name, user_info, zone, cookie = values[0], values[1], values[2], values[10]
+                    request_time = values[8]
                 if table.cellWidget(row, 4) is not None:
                     labels = table.cellWidget(row, 4).findChildren(QLabel)
                     values[4] = labels[0].text() if labels else values[4]
                 color_combo = table.cellWidget(row, 5)
                 if isinstance(color_combo, QComboBox):
                     values[5] = color_combo.currentText()
-                records.append((values[3], values[4], values[5] if len(values) > 5 else DEFAULT_COLOR_OPTIONS[0]))
+                completed = bool(table.item(row, 6).data(Qt.UserRole + 3))
+                records.append((
+                    values[3], values[4],
+                    values[5] if len(values) > 5 else DEFAULT_COLOR_OPTIONS[0],
+                    '완료' if completed else '미완료'
+                ))
             records.sort(key=lambda record: record[0].lower())
             with open(summary_path, 'w', encoding='utf-8') as summary:
                 summary.write(f'사용자명: {user_name}\n')
                 summary.write(f'사용자 부가정보: {user_info}\n')
                 summary.write(f'쿠키: {cookie}\n')
-                summary.write(f'구역: {zone}\n\n')
+                summary.write(f'구역: {zone}\n')
+                summary.write(f'요청시간: {request_time}\n\n')
                 filename_width = max([len('파일명')] + [len(str(record[0])) for record in records])
                 color_width = max([len('컬러유무')] + [len(str(record[2])) for record in records])
+                completed_width = max([len('완료여부')] + [len(str(record[3])) for record in records])
                 summary.write(
-                    f'{"파일명":<{filename_width}}  {"카피수":>6}  {"컬러유무":<{color_width}}\n'
+                    f'{"파일명":<{filename_width}}  {"카피수":>6}  {"컬러유무":<{color_width}}  '
+                    f'{"완료여부":<{completed_width}}\n'
                 )
-                summary.write(f'{"-" * filename_width}  {"-" * 6}  {"-" * color_width}\n')
-                for filename, copy_count, color_value in records:
+                summary.write(
+                    f'{"-" * filename_width}  {"-" * 6}  {"-" * color_width}  '
+                    f'{"-" * completed_width}\n'
+                )
+                for filename, copy_count, color_value, completed_value in records:
                     summary.write(
                         f'{str(filename):<{filename_width}}  {str(copy_count):>6}  '
-                        f'{str(color_value):<{color_width}}\n'
+                        f'{str(color_value):<{color_width}}  {str(completed_value):<{completed_width}}\n'
                     )
             return summary_path
         except OSError as exc:

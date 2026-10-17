@@ -222,7 +222,10 @@ def setup_integrated_ui(window, current_upload_folder, current_zones, current_sa
     bottom_layout.addWidget(QLabel("📂 LinkBox Received Transfer Log:"))
     
     transfer_filter_layout = QHBoxLayout()
-    window.completed_only_checkbox = QCheckBox("완료된 것")
+    window.completed_only_checkbox = QCheckBox("완료된 것도 표시")
+    # Show persisted transfer tabs on startup; users can uncheck this to hide
+    # tabs that contain completed records only.
+    window.completed_only_checkbox.setChecked(True)
     transfer_filter_layout.addWidget(window.completed_only_checkbox)
     transfer_filter_layout.addWidget(QLabel("표시기간:"))
     window.transfer_period_combo = QComboBox()

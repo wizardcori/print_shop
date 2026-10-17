@@ -2,15 +2,6 @@
 chcp 65001 > nul
 title PrintShopApp Runner
 
-rem Always run the application elevated.  The shortcut already contains the
-rem RunAs flag, but this also covers direct execution of run.bat.
-fltmc >nul 2>&1
-if errorlevel 1 (
-    echo [INFO] Administrator permission is required. Requesting UAC approval...
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%ComSpec%' -Verb RunAs -ArgumentList '/c ""%~f0""'"
-    exit /b
-)
-
 echo ===================================================
 echo   Starting PrintShopApp...
 echo ===================================================
