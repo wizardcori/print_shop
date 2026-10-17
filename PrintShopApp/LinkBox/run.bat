@@ -3,8 +3,8 @@ chcp 65001 > nul
 title LinkBox Launcher
 
 if not exist .venv goto error_no_venv
-if not exist cert.pem goto error_no_ssl
-if not exist key.pem goto error_no_ssl
+if not exist ..\..\secrets\cert.pem goto error_no_ssl
+if not exist ..\..\secrets\key.pem goto error_no_ssl
 
 call .venv\Scripts\activate.bat
 python linkbox_app.py

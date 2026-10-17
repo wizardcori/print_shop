@@ -5,7 +5,7 @@ a = Analysis(
     ['linkbox_app.py'],
     pathex=[],
     binaries=[],
-    datas=[('templates', 'templates'), ('cert.pem', '.'), ('key.pem', '.')],
+    datas=[('templates', 'templates'), ('../../secrets/cert.pem', '.'), ('../../secrets/key.pem', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

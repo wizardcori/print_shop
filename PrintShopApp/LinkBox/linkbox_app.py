@@ -1,5 +1,6 @@
 import sys
 import os
+from pathlib import Path
 import socket
 import urllib.parse
 import http.server
@@ -462,7 +463,15 @@ class ServerThread(QThread):
         socketserver.TCPServer.allow_reuse_address = True
         with socketserver.TCPServer(("0.0.0.0", SERVER_PORT), CustomHTTPRequestHandler) as httpd:
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-            context.load_cert_chain(certfile="cert.pem", keyfile="key.pem")
+            project_root = Path(__file__).resolve().parents[2]
+            secrets_dir = project_root / "secrets"
+            bundled_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+            cert_file = secrets_dir / "cert.pem"
+            key_file = secrets_dir / "key.pem"
+            if not cert_file.exists() or not key_file.exists():
+                cert_file = bundled_dir / "cert.pem"
+                key_file = bundled_dir / "key.pem"
+            context.load_cert_chain(certfile=str(cert_file), keyfile=str(key_file))
             httpd.socket = context.wrap_socket(httpd.socket, server_side=True)
             httpd.serve_forever()
 

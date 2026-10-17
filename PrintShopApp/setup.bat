@@ -46,11 +46,12 @@ echo [INFO] Required packages are already installed. Skipping installation.
 :check_ssl
 echo.
 echo [4/5] Checking SSL certificates for HTTPS (LinkBox)...
-if exist LinkBox\cert.pem if exist LinkBox\key.pem goto skip_ssl
+if exist ..\secrets\cert.pem if exist ..\secrets\key.pem goto skip_ssl
 
 echo [INFO] Generating self-signed SSL certificates via Python for LinkBox...
-python -c "from cryptography import x509; from cryptography.x509.name import Name; from cryptography.hazmat.primitives import hashes; from cryptography.hazmat.primitives.asymmetric import rsa; from cryptography.hazmat.primitives import serialization; import datetime; priv_key = rsa.generate_private_key(public_exponent=65537, key_size=2048); subj = x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, 'PrintShopServer')]); cert = x509.CertificateBuilder().subject_name(subj).issuer_name(subj).public_key(priv_key.public_key()).serial_number(x509.random_serial_number()).not_valid_before(datetime.datetime.now(datetime.timezone.utc)).not_valid_after(datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=365)).sign(priv_key, hashes.SHA256()); open('LinkBox/cert.pem', 'wb').write(cert.public_bytes(serialization.Encoding.PEM)); open('LinkBox/key.pem', 'wb').write(priv_key.private_bytes(encoding=serialization.Encoding.PEM, format=serialization.PrivateFormat.PKCS8, encryption_algorithm=serialization.NoEncryption()))"
-echo SSL certificates generated successfully inside LinkBox/.
+if not exist ..\secrets mkdir ..\secrets
+python -c "from cryptography import x509; from cryptography.x509.name import Name; from cryptography.hazmat.primitives import hashes; from cryptography.hazmat.primitives.asymmetric import rsa; from cryptography.hazmat.primitives import serialization; import datetime; priv_key = rsa.generate_private_key(public_exponent=65537, key_size=2048); subj = x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, 'PrintShopServer')]); cert = x509.CertificateBuilder().subject_name(subj).issuer_name(subj).public_key(priv_key.public_key()).serial_number(x509.random_serial_number()).not_valid_before(datetime.datetime.now(datetime.timezone.utc)).not_valid_after(datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=365)).sign(priv_key, hashes.SHA256()); open(r'..\secrets\cert.pem', 'wb').write(cert.public_bytes(serialization.Encoding.PEM)); open(r'..\secrets\key.pem', 'wb').write(priv_key.private_bytes(encoding=serialization.Encoding.PEM, format=serialization.PrivateFormat.PKCS8, encryption_algorithm=serialization.NoEncryption()))"
+echo SSL certificates generated successfully in the project secrets folder.
 goto create_folder
 
 :skip_ssl
