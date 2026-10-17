@@ -45,5 +45,6 @@ if %ROBOCOPY_EXIT% LEQ 7 (
     echo [ERROR] The backup encountered a problem. Robocopy exit code: %ROBOCOPY_EXIT%
 )
 echo ========================================================
-pause
+
+rem pause
 exit /b %ROBOCOPY_EXIT%
