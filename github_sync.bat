@@ -77,7 +77,19 @@ if errorlevel 1 (
     )
 )
 
-:: 9. Create the GitHub repository if it does not exist
+:: 9. Check GitHub CLI authentication
+echo [INFO] Checking GitHub authentication...
+"%GH_CMD%" auth status >nul 2>&1
+if errorlevel 1 (
+    echo [INFO] GitHub CLI is not authenticated. Starting login...
+    "%GH_CMD%" auth login
+    if errorlevel 1 (
+        echo [ERROR] GitHub authentication failed or was cancelled.
+        goto :error
+    )
+)
+
+:: 10. Create the GitHub repository if it does not exist
 echo [INFO] Checking GitHub repository...
 "%GH_CMD%" repo view "%GH_REPO%" >nul 2>&1
 if errorlevel 1 (
@@ -86,7 +98,7 @@ if errorlevel 1 (
     if errorlevel 1 goto :error
 )
 
-:: 10. Push to GitHub
+:: 11. Push to GitHub
 echo [INFO] Pushing to GitHub...
 git push -u origin master
 if errorlevel 1 goto :error
