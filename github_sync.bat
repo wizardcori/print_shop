@@ -51,22 +51,42 @@ if errorlevel 1 (
     echo [WARNING] No changes to commit or commit failed. Continuing to push anyway...
 )
 
-:: 8. Create the GitHub repository if it does not exist
-echo [INFO] Checking GitHub repository...
-gh repo view "%GH_REPO%" >nul 2>&1
+:: 8. Install GitHub CLI if it is not available
+set "GH_CMD=gh"
+where gh >nul 2>&1
 if errorlevel 1 (
-    echo [INFO] Repository not found. Creating a private repository...
-    where gh >nul 2>&1
+    echo [INFO] GitHub CLI is not installed. Installing with winget...
+    where winget >nul 2>&1
     if errorlevel 1 (
-        echo [ERROR] GitHub CLI ^(gh^) is not installed or not available in PATH.
-        echo Install GitHub CLI and run "gh auth login" first.
+        echo [ERROR] winget is not available. Install GitHub CLI manually:
+        echo https://cli.github.com/
         goto :error
     )
-    gh repo create "%GH_REPO%" --private
+    winget install --id GitHub.cli --exact --source winget --accept-source-agreements --accept-package-agreements
+    if errorlevel 1 goto :error
+
+    if exist "%ProgramFiles%\GitHub CLI\gh.exe" (
+        set "GH_CMD=%ProgramFiles%\GitHub CLI\gh.exe"
+    ) else (
+        where gh >nul 2>&1
+        if errorlevel 1 (
+            echo [ERROR] GitHub CLI was installed, but gh.exe was not found.
+            echo Please restart this terminal and run the script again.
+            goto :error
+        )
+    )
+)
+
+:: 9. Create the GitHub repository if it does not exist
+echo [INFO] Checking GitHub repository...
+"%GH_CMD%" repo view "%GH_REPO%" >nul 2>&1
+if errorlevel 1 (
+    echo [INFO] Repository not found. Creating a private repository...
+    "%GH_CMD%" repo create "%GH_REPO%" --private
     if errorlevel 1 goto :error
 )
 
-:: 9. Push to GitHub
+:: 10. Push to GitHub
 echo [INFO] Pushing to GitHub...
 git push -u origin master
 if errorlevel 1 goto :error
