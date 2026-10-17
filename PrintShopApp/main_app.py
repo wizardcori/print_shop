@@ -52,7 +52,19 @@ from PySide6.QtCore import Qt, QThread, Signal, Slot, QTimer, QObject, QDate
 current_dir = os.path.dirname(os.path.abspath(__file__))
 application_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else current_dir
 resource_dir = getattr(sys, '_MEIPASS', current_dir)
-data_dir = os.environ.get('PRINTSHOP_DATA_DIR', os.path.join(application_dir, 'data'))
+configured_data_dir = os.environ.get('PRINTSHOP_DATA_DIR')
+if configured_data_dir:
+    data_dir = configured_data_dir
+elif getattr(sys, 'frozen', False):
+    # Program Files is read-only for standard users. Keep runtime data in
+    # the per-user directory when the packaged application is installed.
+    data_dir = os.path.join(
+        os.environ.get('LOCALAPPDATA') or os.path.expanduser('~'),
+        'PrintShopApp',
+        'data',
+    )
+else:
+    data_dir = os.path.join(application_dir, 'data')
 os.makedirs(data_dir, exist_ok=True)
 os.chdir(application_dir)
 
@@ -102,7 +114,30 @@ import ui_layout
 
 # --- Configuration & Path Setup ---
 SETTINGS_FILE = os.path.join(data_dir, "wifi_approval_settings.ini")
-WIFI_LOG_FILE = os.path.join(data_dir, "wifi_hotspot.log")
+
+
+def get_writable_log_file(filename):
+    """Return a log path that the current Windows user can write to."""
+    preferred_path = os.path.join(data_dir, filename)
+    try:
+        os.makedirs(os.path.dirname(preferred_path), exist_ok=True)
+        with open(preferred_path, 'a', encoding='utf-8'):
+            pass
+        return preferred_path
+    except OSError:
+        # Installed applications commonly live under C:\\Program Files,
+        # which is not writable by standard users. Use the per-user data
+        # directory for logs instead of requiring administrator privileges.
+        user_data_dir = os.path.join(
+            os.environ.get('LOCALAPPDATA') or os.path.expanduser('~'),
+            'PrintShopApp',
+            'data',
+        )
+        os.makedirs(user_data_dir, exist_ok=True)
+        return os.path.join(user_data_dir, filename)
+
+
+WIFI_LOG_FILE = get_writable_log_file("wifi_hotspot.log")
 wifi_logger = logging.getLogger("printshop.wifi")
 if not wifi_logger.handlers:
     wifi_logger.setLevel(logging.INFO)
@@ -1202,7 +1237,7 @@ def file_share_upload():
     failed_count = 0
     for index, uploaded in enumerate(files):
         try:
-            copy_count = max(1, min(999, int(requested_copies[index])))
+            copy_count = max(0, min(999, int(requested_copies[index])))
         except (IndexError, TypeError, ValueError):
             copy_count = 1
         color_value = str(requested_colors[index]).strip() if index < len(requested_colors) else DEFAULT_COLOR_OPTIONS[0]
@@ -1275,7 +1310,7 @@ def transfer_status():
                     restored.append({
                         'folder': folder,
                         'filename': record.get('filename', ''),
-                        'copies': record.get('copies', 1),
+                        'copies': record.get('copies') if record.get('copies') is not None else 1,
                         'user_name': record.get('user_name', 'Guest'),
                         'user_info': record.get('user_info', 'Unknown'),
                         'cookie': record.get('cookie', token_id[:12]),
@@ -1339,7 +1374,7 @@ def transfer_update():
     filename = str(payload.get('filename', ''))
     folder = str(payload.get('folder', ''))
     try:
-        copies = max(1, min(999, int(payload.get('copies', 1))))
+        copies = max(0, min(999, int(payload.get('copies', 1))))
     except (TypeError, ValueError):
         copies = 1
     color = str(payload.get('color', '')).strip()
@@ -1748,12 +1783,12 @@ class IntegratedSettingsDialog(QDialog):
                     target_layout.addItem(item)
 
         # Keep both adapter selectors together on the Network tab.
-        # Item ranges: hotspot identity/limits/range (0:14), NICs (14:18),
-        # image/log storage (18:22), and table/zone controls (22:).
-        append_settings_items(category_layouts["Hotspot"], general_items[0:17])
-        append_settings_items(category_layouts["Network"], general_items[17:21])
-        append_settings_items(category_layouts["Storage/Display"], general_items[21:25])
-        append_settings_items(category_layouts["Tables/Zones"], general_items[25:])
+        # Item ranges: hotspot identity/limits/range (0:18), NICs (18:22),
+        # image/log storage (22:26), and table/zone controls (26:).
+        append_settings_items(category_layouts["Hotspot"], general_items[0:18])
+        append_settings_items(category_layouts["Network"], general_items[18:22])
+        append_settings_items(category_layouts["Storage/Display"], general_items[22:26])
+        append_settings_items(category_layouts["Tables/Zones"], general_items[26:])
         for tab_title, category_layout in category_layouts.items():
             category_layout.insertWidget(0, QLabel(f"<h3>{tab_title} Settings</h3>"))
             category_layout.addStretch()
@@ -2176,6 +2211,7 @@ class IntegratedManagerApp(QMainWindow):
         )
 
         self.tab_tables = {}
+        self.tab_widget.currentChanged.connect(self.inspect_selected_transfer_tab)
         self.pending_batch_files = []
         self.last_target_folder = ""
         
@@ -2253,7 +2289,8 @@ class IntegratedManagerApp(QMainWindow):
                 file_list = [(
                     record.get('user_name', 'Guest'), record.get('user_info', 'Unknown'),
                     record.get('cookie', ''), record.get('zone', 'Default'),
-                    record.get('filename', ''), record.get('copies', 1),
+                    record.get('filename', ''),
+                    record.get('copies') if record.get('copies') is not None else 1,
                     record.get('size', ''), record.get('received_time', ''),
                     record.get('status', 'Completed (100%)'), record.get('color', DEFAULT_COLOR_OPTIONS[0])
                 ) for record in records]
@@ -2914,6 +2951,43 @@ class IntegratedManagerApp(QMainWindow):
             self.tab_widget.setTabVisible(index, visible)
         self.update_transfer_tab_colors()
 
+    def inspect_selected_transfer_tab(self, index):
+        """Recheck files whenever the administrator selects a transfer tab."""
+        if index < 0:
+            return
+        table = self.tab_widget.widget(index)
+        if table is None:
+            return
+        for row in range(table.rowCount()):
+            folder_item = table.item(row, 3)
+            filename_item = table.item(row, 3)
+            if folder_item is None or filename_item is None:
+                continue
+            target_folder = str(folder_item.data(Qt.UserRole) or '')
+            filename = str(filename_item.text() or '')
+            size_item = table.item(row, 7)
+            stored_size = str(size_item.text() if size_item else '').strip()
+            actual_path = os.path.join(target_folder, filename)
+            missing = not os.path.isfile(actual_path)
+            size_mismatch = False
+            if not missing and stored_size:
+                try:
+                    size_mismatch = format_size(os.path.getsize(actual_path)) != stored_size
+                except OSError:
+                    missing = True
+            invalid = missing or size_mismatch
+            for column in range(table.columnCount()):
+                item = table.item(row, column)
+                if item is not None:
+                    item.setBackground(QColor('#ffd6d6') if invalid else QColor('#ffffff'))
+                    if invalid:
+                        item.setToolTip('File is missing or its size does not match the saved record.')
+            table.item(row, 7).setData(Qt.UserRole + 4, invalid)
+            for column in (4, 5, 6):
+                widget = table.cellWidget(row, column)
+                if widget is not None:
+                    widget.setEnabled(not invalid)
+
     def update_transfer_tab_colors(self, *_args):
         current_index = self.tab_widget.currentIndex()
         for index in range(self.tab_widget.count()):
@@ -3504,10 +3578,21 @@ class IntegratedManagerApp(QMainWindow):
             table.insertRow(row)
             row_color = QColor('#f7fbff' if row % 2 else '#eaf4ff')
             file_path = os.path.join(target_folder, str(values[3]))
-            file_missing = (
-                not os.path.isfile(file_path)
-                or bool(values[7]) and format_size(os.path.getsize(file_path)) != str(values[7])
-            ) if values[3] else True
+            file_missing = True
+            if values[3]:
+                actual_size = None
+                if os.path.isfile(file_path):
+                    try:
+                        actual_size = os.path.getsize(file_path)
+                    except OSError:
+                        # The file may disappear between the existence check
+                        # and the size lookup. Treat it as missing instead of
+                        # aborting the UI update.
+                        pass
+                file_missing = (
+                    actual_size is None
+                    or bool(values[7]) and format_size(actual_size) != str(values[7])
+                )
             for column, value in enumerate(values):
                 item = QTableWidgetItem(str(value))
                 missing_color = QColor('#ffcdd2')
@@ -3523,7 +3608,7 @@ class IntegratedManagerApp(QMainWindow):
                 item.setData(Qt.UserRole + 2, identity)
                 table.setItem(row, column, item)
             table.item(row, 6).setData(Qt.UserRole + 3, False)
-            self.set_copy_controls(table, row, int(values[4]) or 1)
+            self.set_copy_controls(table, row, int(values[4]) if values[4] is not None else 1)
             self.set_color_control(table, row, str(values[5] or DEFAULT_COLOR_OPTIONS[0]))
             self.set_completion_checkbox(table, row, False)
             if file_missing:
@@ -3597,7 +3682,7 @@ class IntegratedManagerApp(QMainWindow):
         layout.setContentsMargins(2, 1, 2, 1)
         layout.setSpacing(3)
         down = QPushButton("−")
-        value = QLabel(str(max(1, min(999, int(count)))))
+        value = QLabel(str(max(0, min(999, int(count)))))
         up = QPushButton("+")
         container.setStyleSheet(
             "QWidget { background-color: #eaf4ff; border-radius: 5px; }"
@@ -3659,17 +3744,19 @@ class IntegratedManagerApp(QMainWindow):
         if changed_clients:
             signals.transfer_updated.emit(
                 target_folder, filename,
-                int(table.item(row, 4).data(Qt.UserRole + 1) or 1), color
+                int(table.item(row, 4).data(Qt.UserRole + 1) if table.item(row, 4).data(Qt.UserRole + 1) is not None else 0), color
             )
 
     def change_copy_count(self, table, row, value_label, delta):
-        count = max(1, min(999, int(value_label.text()) + delta))
+        count = max(0, min(999, int(value_label.text()) + delta))
         value_label.setText(str(count))
         item = table.item(row, 4)
         if item is None:
             item = QTableWidgetItem()
             table.setItem(row, 4, item)
-        original = item.data(Qt.UserRole + 1) or count
+        original = item.data(Qt.UserRole + 1)
+        if original is None:
+            original = count
         if count != int(original):
             value_label.parentWidget().setStyleSheet(
                 "QWidget { background-color: #ffd166; border: 2px solid #e09f00; border-radius: 5px; }"

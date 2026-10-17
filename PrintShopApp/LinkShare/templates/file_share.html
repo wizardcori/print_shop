@@ -67,7 +67,10 @@ document.getElementById('uploadForm').addEventListener('submit', async function(
   resultLabel.textContent = '전송 중...';
   const data = new FormData();
   for (const file of files) data.append('file', file);
-  const copyCounts = Array.from(document.querySelectorAll('.copy-count')).map(item => Number(item.textContent) || 1);
+  const copyCounts = Array.from(document.querySelectorAll('.copy-count')).map(item => {
+    const value = Number(item.textContent);
+    return Number.isFinite(value) ? value : 1;
+  });
   data.append('copies', JSON.stringify(copyCounts));
   const colorValues = Array.from(document.querySelectorAll('.color-choice')).map(item => item.value);
   data.append('colors', JSON.stringify(colorValues));
@@ -124,7 +127,7 @@ document.getElementById('files').addEventListener('change', function() {
     up.type = 'button';
     up.className = 'copy-button';
     up.textContent = '+';
-    down.addEventListener('click', () => { count.textContent = String(Math.max(1, Number(count.textContent) - 1)); });
+    down.addEventListener('click', () => { count.textContent = String(Math.max(0, Number(count.textContent) - 1)); });
     up.addEventListener('click', () => { count.textContent = String(Math.min(999, Number(count.textContent) + 1)); });
     controls.append(down, count, up);
     const color = document.createElement('select');
@@ -177,7 +180,7 @@ function renderTransferRecords(records) {
       color.textContent = record.color || 'Color';
       const copies = document.createElement('span');
       copies.className = 'copy-count';
-      copies.textContent = `${record.copies || 1}카피`;
+      copies.textContent = `${record.copies ?? 1} copies`;
       const colorChoice = document.createElement('select');
       colorChoice.className = 'color-choice';
       for (const option of {{ color_options|tojson }}) {
@@ -185,7 +188,7 @@ function renderTransferRecords(records) {
         if (option === (record.color || 'Color')) choice.selected = true;
         colorChoice.appendChild(choice);
       }
-      copies.textContent = String(record.copies || 1);
+      copies.textContent = String(record.copies ?? 1);
       const down = document.createElement('button'); down.type = 'button'; down.className = 'copy-button'; down.textContent = '−';
       const up = document.createElement('button'); up.type = 'button'; up.className = 'copy-button'; up.textContent = '+';
       let updateQueue = Promise.resolve();
@@ -207,7 +210,7 @@ function renderTransferRecords(records) {
         });
         return updateQueue;
       };
-      down.addEventListener('click', () => { copies.textContent = String(Math.max(1, Number(copies.textContent) - 1)); update(); });
+      down.addEventListener('click', () => { copies.textContent = String(Math.max(0, Number(copies.textContent) - 1)); update(); });
       up.addEventListener('click', () => { copies.textContent = String(Math.min(999, Number(copies.textContent) + 1)); update(); });
       colorChoice.addEventListener('change', update);
       item.append(name, colorChoice, down, copies, up);
