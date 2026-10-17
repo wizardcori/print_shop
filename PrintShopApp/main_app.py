@@ -942,7 +942,7 @@ def is_client_internet_approved(client_ip):
     end_timestamp = session.get('end_timestamp', 0)
     if end_timestamp and end_timestamp <= datetime.datetime.now().timestamp():
         session['status'] = 'Expired'
-        session['connection_status'] = '종료'
+        session['connection_status'] = 'Closed'
         session['remaining_seconds'] = 0
         return False
     return True
@@ -1122,8 +1122,8 @@ def customer_scan():
 @web_app.route('/manifest.webmanifest')
 def app_manifest():
     return Response(json.dumps({
-        'name': '인터넷 사용신청',
-        'short_name': '사용신청',
+        'name': 'Internet Access Request',
+        'short_name': 'Access Request',
         'start_url': '/scan',
         'display': 'standalone',
         'background_color': '#f3f6f8',
@@ -1446,16 +1446,16 @@ def customer_request():
         'fare': dur_str,
         'client_ip': client_ip,
         'client_token_id': token_id,
-        'device_name': device_name or '알 수 없는 기기',
+        'device_name': device_name or 'Unknown Device',
         'last_seen': datetime.datetime.now().isoformat(timespec='seconds'),
         'connection_status': '연결됨',
         'usage_request': dur_str,
-        'usage_approval': '승인대기',
+        'usage_approval': 'Pending Approval',
         'request_time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'approval_time': '-',
         'start_time': '-',
         'end_time': '-',
-        'internet_status': '확인 중',
+        'internet_status': 'Checking',
         'total_used_seconds': 0,
     }
     apply_client_metadata(session_record, token_id)
@@ -1563,11 +1563,11 @@ def report_internet_status():
         app_database.save_session(session)
     except (OSError, sqlite3.Error):
         pass
-    if internet_status in ('확인 중', '사용 가능', '확인 실패'):
+    if internet_status in ('Checking', 'Available', 'Check failed', '확인 중', '사용 가능', '확인 실패'):
         if session.get('internet_status') != internet_status:
             session['internet_status'] = internet_status
             notify_status_change()
-    return {'status': session.get('internet_status', '확인 중')}
+    return {'status': session.get('internet_status', 'Checking')}
 
 # --- Integrated Settings Dialog ---
 class IntegratedSettingsDialog(QDialog):
@@ -1590,32 +1590,32 @@ class IntegratedSettingsDialog(QDialog):
         general_tab = QWidget()
         layout = QVBoxLayout(general_tab)
         category_layouts = {}
-        for tab_title, tab_description in (("핫스팟", "핫스팟 SSID, 접속 수, IP 범위 및 게이트웨이 설정"), ("네트워크", "인터넷 회선과 핫스팟 네트워크 어댑터 설정"), ("저장/표시", "이미지와 로그 저장 위치 설정"), ("테이블·구역", "테이블 및 서비스 구역 설정")):
+        for tab_title, tab_description in (("Hotspot", "Hotspot SSID, client count, IP range, and gateway settings"), ("Network", "Internet connection and hotspot adapter settings"), ("Storage/Display", "Image and log storage settings"), ("Tables/Zones", "Table and service zone settings")):
             category_tab = QWidget()
             category_layout = QVBoxLayout(category_tab)
             category_layouts[tab_title] = category_layout
             settings_tabs.addTab(category_tab, tab_title)
-        settings_tabs.addTab(general_tab, "일반")
+        settings_tabs.addTab(general_tab, "General")
         
         layout.addWidget(QLabel("<b>📶 Hotspot SSID (Name):</b>"))
         self.ssid_input = QLineEdit(current_ssid or DEFAULT_HOTSPOT_SSID)
         self.ssid_input.setMaxLength(32)
         self.ssid_input.setPlaceholderText(DEFAULT_HOTSPOT_SSID)
         layout.addWidget(self.ssid_input)
-        self.startup_checkbox = QCheckBox("Windows 시작프로그램에 자동 등록")
+        self.startup_checkbox = QCheckBox("Register automatically at Windows startup")
         self.startup_checkbox.setChecked(startup_enabled)
-        self.startup_checkbox.setToolTip("Windows 로그인 시 PrintShopApp을 자동으로 관리자 권한 실행합니다.")
+        self.startup_checkbox.setToolTip("Automatically run PrintShopApp with administrator privileges at Windows login.")
         layout.addWidget(self.startup_checkbox)
         self.file_transfer_minutes_input = QSpinBox()
         self.file_transfer_minutes_input.setRange(5, 15)
         self.file_transfer_minutes_input.setValue(file_transfer_minutes)
-        self.file_transfer_minutes_input.setSuffix(" 분")
-        layout.addWidget(QLabel("파일전송 연결 유지시간 (5~15분):"))
+        self.file_transfer_minutes_input.setSuffix(" min")
+        layout.addWidget(QLabel("File transfer connection duration (5-15 min):"))
         layout.addWidget(self.file_transfer_minutes_input)
-        self.file_transfer_internet_checkbox = QCheckBox("파일전송 중 인터넷 사용 허용")
+        self.file_transfer_internet_checkbox = QCheckBox("Allow Internet access during file transfer")
         self.file_transfer_internet_checkbox.setChecked(provide_internet_for_file_transfer)
         self.file_transfer_internet_checkbox.setToolTip(
-            "파일전송 연결은 별도로 기록되며 인터넷 사용요금에 포함되지 않습니다."
+            "File transfers are logged separately and are not included in Internet usage charges."
         )
         layout.addWidget(self.file_transfer_internet_checkbox)
 
@@ -1626,16 +1626,16 @@ class IntegratedSettingsDialog(QDialog):
         self.password_input.setMaxLength(63)
         self.password_input.setPlaceholderText(DEFAULT_HOTSPOT_PASSWORD)
         password_layout.addWidget(self.password_input)
-        self.show_password_btn = QPushButton("보기")
+        self.show_password_btn = QPushButton("Show")
         self.show_password_btn.setCheckable(True)
         self.show_password_btn.toggled.connect(self.toggle_password_visibility)
         password_layout.addWidget(self.show_password_btn)
-        default_password_btn = QPushButton("기본값")
+        default_password_btn = QPushButton("Default")
         default_password_btn.clicked.connect(
             lambda: self.password_input.setText(DEFAULT_HOTSPOT_PASSWORD)
         )
         password_layout.addWidget(default_password_btn)
-        random_password_btn = QPushButton("무작위")
+        random_password_btn = QPushButton("Random")
         random_password_btn.clicked.connect(self.generate_random_password)
         password_layout.addWidget(random_password_btn)
         layout.addLayout(password_layout)
@@ -1750,12 +1750,12 @@ class IntegratedSettingsDialog(QDialog):
         # Keep both adapter selectors together on the Network tab.
         # Item ranges: hotspot identity/limits/range (0:14), NICs (14:18),
         # image/log storage (18:22), and table/zone controls (22:).
-        append_settings_items(category_layouts["핫스팟"], general_items[0:17])
-        append_settings_items(category_layouts["네트워크"], general_items[17:21])
-        append_settings_items(category_layouts["저장/표시"], general_items[21:25])
-        append_settings_items(category_layouts["테이블·구역"], general_items[25:])
+        append_settings_items(category_layouts["Hotspot"], general_items[0:17])
+        append_settings_items(category_layouts["Network"], general_items[17:21])
+        append_settings_items(category_layouts["Storage/Display"], general_items[21:25])
+        append_settings_items(category_layouts["Tables/Zones"], general_items[25:])
         for tab_title, category_layout in category_layouts.items():
-            category_layout.insertWidget(0, QLabel(f"<h3>{tab_title} 설정</h3>"))
+            category_layout.insertWidget(0, QLabel(f"<h3>{tab_title} Settings</h3>"))
             category_layout.addStretch()
 
         # The former catch-all tab is no longer exposed; all controls are in category tabs.
@@ -1765,41 +1765,41 @@ class IntegratedSettingsDialog(QDialog):
 
         sound_tab = QWidget()
         sound_layout = QVBoxLayout(sound_tab)
-        settings_tabs.addTab(sound_tab, "승인 알림")
-        self.approval_sound_checkbox = QCheckBox("사용승인 소리알림")
+        settings_tabs.addTab(sound_tab, "Approval Alerts")
+        self.approval_sound_checkbox = QCheckBox("Play sound on approval")
         self.approval_sound_checkbox.setChecked(self.approval_sound_enabled)
         sound_layout.addWidget(self.approval_sound_checkbox)
-        sound_layout.addWidget(QLabel("승인 시 재생할 사운드를 등록하고 하나를 선택하세요."))
+        sound_layout.addWidget(QLabel("Add sounds to play on approval and select one."))
         self.internet_fares = load_app_settings().get('internet_fares', DEFAULT_INTERNET_FARES)
         fare_tab = QWidget(); fare_layout = QVBoxLayout(fare_tab)
-        fare_layout.addWidget(QLabel('<h3>인터넷 사용요금표</h3>'))
+        fare_layout.addWidget(QLabel('<h3>Internet Rate Table</h3>'))
         self.fare_list = QListWidget(); fare_layout.addWidget(self.fare_list)
         fare_input = QHBoxLayout()
-        self.fare_minutes_input = QSpinBox(); self.fare_minutes_input.setRange(1, 1440); self.fare_minutes_input.setSuffix(' 분')
+        self.fare_minutes_input = QSpinBox(); self.fare_minutes_input.setRange(1, 1440); self.fare_minutes_input.setSuffix(' min')
         self.fare_price_input = QSpinBox(); self.fare_price_input.setRange(0, 1000000); self.fare_price_input.setSuffix(' PHP')
         fare_input.addWidget(self.fare_minutes_input); fare_input.addWidget(self.fare_price_input); fare_layout.addLayout(fare_input)
         fare_buttons = QHBoxLayout()
         for text, slot in (("Add", self.add_fare), ("Edit", self.edit_fare), ("Remove", self.remove_fare)):
             button = QPushButton(text); button.clicked.connect(slot); fare_buttons.addWidget(button)
-        fare_layout.addLayout(fare_buttons); settings_tabs.addTab(fare_tab, '인터넷 요금')
+        fare_layout.addLayout(fare_buttons); settings_tabs.addTab(fare_tab, 'Internet Rates')
         self.refresh_fare_list()
         color_tab = QWidget(); color_layout = QVBoxLayout(color_tab)
-        color_layout.addWidget(QLabel('<h3>컬러 출력 옵션</h3>'))
+        color_layout.addWidget(QLabel('<h3>Color Output Options</h3>'))
         self.color_list = QListWidget(); self.color_list.addItems(self.color_options)
         color_layout.addWidget(self.color_list)
         color_input = QHBoxLayout(); self.color_input = QLineEdit()
-        self.color_input.setPlaceholderText('예: Color, B&W, Grayscale')
+        self.color_input.setPlaceholderText('Example: Color, B&W, Grayscale')
         color_input.addWidget(self.color_input)
-        add_color = QPushButton('추가'); add_color.clicked.connect(self.add_color_option)
-        edit_color = QPushButton('수정'); edit_color.clicked.connect(self.edit_color_option)
-        remove_color = QPushButton('삭제'); remove_color.clicked.connect(self.remove_color_option)
+        add_color = QPushButton('Add'); add_color.clicked.connect(self.add_color_option)
+        edit_color = QPushButton('Edit'); edit_color.clicked.connect(self.edit_color_option)
+        remove_color = QPushButton('Remove'); remove_color.clicked.connect(self.remove_color_option)
         color_input.addWidget(add_color); color_input.addWidget(edit_color); color_input.addWidget(remove_color)
-        color_layout.addLayout(color_input); settings_tabs.addTab(color_tab, '컬러 출력')
+        color_layout.addLayout(color_input); settings_tabs.addTab(color_tab, 'Color Output')
         self.sound_radio_group = QButtonGroup(self)
         self.sound_radio_group.setExclusive(True)
         self.sound_radios = []
         self.selected_sound_index = -1
-        self.play_sound_button = QPushButton("▶ 재생 사운드")
+        self.play_sound_button = QPushButton("▶ Play Sound")
         self.play_sound_button.clicked.connect(self.play_selected_approval_sound)
         self.play_sound_button.setEnabled(False)
         sound_layout.addWidget(self.play_sound_button)
@@ -1812,14 +1812,14 @@ class IntegratedSettingsDialog(QDialog):
             self.sound_radio_group.addButton(sound_radio, index)
             self.sound_radios.append(sound_radio)
             sound_row.addWidget(sound_radio)
-            sound_row.addWidget(QLabel(f"사운드 {index + 1}"))
+            sound_row.addWidget(QLabel(f"Sound {index + 1}"))
             sound_input = QLineEdit(self.approval_sounds[index] if index < len(self.approval_sounds) else '')
             self.sound_inputs.append(sound_input)
             sound_row.addWidget(sound_input)
-            browse_sound_btn = QPushButton("선택")
+            browse_sound_btn = QPushButton("Select")
             browse_sound_btn.clicked.connect(lambda checked=False, i=index: self.browse_approval_sound(i))
             sound_row.addWidget(browse_sound_btn)
-            delete_sound_btn = QPushButton("삭제")
+            delete_sound_btn = QPushButton("Delete")
             delete_sound_btn.clicked.connect(lambda checked=False, i=index: self.delete_approval_sound(i))
             sound_row.addWidget(delete_sound_btn)
             sound_layout.addLayout(sound_row)
@@ -1842,7 +1842,7 @@ class IntegratedSettingsDialog(QDialog):
 
     def browse_approval_sound(self, index):
         path, _ = QFileDialog.getOpenFileName(
-            self, "승인 알림 사운드 선택", self.sound_inputs[index].text(),
+            self, "Select Approval Alert Sound", self.sound_inputs[index].text(),
             "Wave files (*.wav);;All files (*.*)"
         )
         if path:
@@ -1857,7 +1857,7 @@ class IntegratedSettingsDialog(QDialog):
                 self.sound_radios[index].setChecked(True)
                 self.update_sound_button_text()
             except OSError as exc:
-                QMessageBox.warning(self, "사운드 복사 실패", str(exc))
+                QMessageBox.warning(self, "Sound copy failed", str(exc))
 
     def delete_approval_sound(self, index):
         current_path = self.sound_inputs[index].text().strip()
@@ -1867,7 +1867,7 @@ class IntegratedSettingsDialog(QDialog):
                 if os.path.commonpath([sound_root, os.path.abspath(current_path)]) == sound_root:
                     os.remove(current_path)
         except (OSError, ValueError) as exc:
-            QMessageBox.warning(self, "사운드 삭제 실패", str(exc))
+            QMessageBox.warning(self, "Sound deletion failed", str(exc))
         self.sound_inputs[index].clear()
         self.sound_radios[index].setChecked(False)
         self.sound_radios[index].setEnabled(False)
@@ -1881,7 +1881,7 @@ class IntegratedSettingsDialog(QDialog):
     def update_sound_button_text(self):
         index = self.selected_sound_index
         path = self.sound_inputs[index].text().strip() if 0 <= index < len(self.sound_inputs) else ''
-        self.play_sound_button.setText(f"▶ {os.path.basename(path)}" if path else "▶ 재생 사운드")
+        self.play_sound_button.setText(f"▶ {os.path.basename(path)}" if path else "▶ Play Sound")
         self.play_sound_button.setEnabled(bool(path and os.path.isfile(path)))
 
     def play_selected_approval_sound(self):
@@ -1907,7 +1907,7 @@ class IntegratedSettingsDialog(QDialog):
     def refresh_fare_list(self):
         self.fare_list.clear()
         for fare in sorted(self.internet_fares, key=lambda item: item['minutes']):
-            self.fare_list.addItem(f"{fare['minutes']}분 - {fare['price']:g} PHP")
+            self.fare_list.addItem(f"{fare['minutes']} min - {fare['price']:g} PHP")
 
     def add_fare(self):
         self.internet_fares.append({'minutes': self.fare_minutes_input.value(), 'price': self.fare_price_input.value()})
@@ -2009,7 +2009,7 @@ class IntegratedSettingsDialog(QDialog):
         self.password_input.setEchoMode(
             QLineEdit.Normal if visible else QLineEdit.Password
         )
-        self.show_password_btn.setText("숨기기" if visible else "보기")
+        self.show_password_btn.setText("Hide" if visible else "Show")
 
     def generate_random_password(self):
         alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'
@@ -2089,7 +2089,7 @@ class IntegratedManagerApp(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        privilege_label = "관리자 권한" if is_running_as_administrator() else "일반 권한"
+        privilege_label = "Administrator privileges" if is_running_as_administrator() else "Standard privileges"
         self.setWindowTitle(f"PrintShop Integrated Manager (HTTPS) - {privilege_label}")
 
         app_settings = load_app_settings()
@@ -2384,7 +2384,7 @@ class IntegratedManagerApp(QMainWindow):
                 changed, message = set_current_hotspot_ssid(new_ssid, new_password)
                 log_wifi(f"SSID changed by settings: {message}")
                 if not changed:
-                    QMessageBox.warning(self, "SSID 변경 실패", message)
+                    QMessageBox.warning(self, "SSID change failed", message)
                 else:
                     self.hotspot_password = new_password
                     self.hotspot_password_user_set = True
@@ -2404,7 +2404,7 @@ class IntegratedManagerApp(QMainWindow):
             try:
                 set_startup_registration(application_dir, self.startup_enabled)
             except (OSError, RuntimeError) as exc:
-                QMessageBox.warning(self, "시작프로그램 등록 실패", str(exc))
+                QMessageBox.warning(self, "Startup registration failed", str(exc))
             runtime_settings['internet_fares'] = dialog.get_internet_fares()
             runtime_settings['max_connections'] = self.max_connections
 
@@ -2479,7 +2479,7 @@ class IntegratedManagerApp(QMainWindow):
                 session['remaining_seconds'] = remaining
                 if remaining == 0:
                     session['status'] = 'Expired'
-                    session['connection_status'] = '종료'
+                    session['connection_status'] = 'Closed'
                     session['remaining_seconds'] = 0
                     session['completed_time'] = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     append_usage_log('completed', session)
@@ -2563,13 +2563,13 @@ class IntegratedManagerApp(QMainWindow):
         )
 
         table_records = {
-            '연결상태': (usage_history, [
+            'Connection Status': (usage_history, [
                 'connection_status', 'request_time', 'start_time', 'end_time', 'remaining', 'client_ip', 'client_token_id', 'user_info'
             ]),
-            '사용요청': (request_records, [
+            'Usage Requests': (request_records, [
                 'usage_request', 'request_time', 'client_ip', 'client_token_id', 'user_info'
             ]),
-            '사용허가': (
+            'Usage Approvals': (
                 approval_records,
                 ['usage_approval', 'approval_time', 'requested_time', 'client_ip', 'client_token_id', 'user_info']
             ),
@@ -2587,12 +2587,12 @@ class IntegratedManagerApp(QMainWindow):
                     return datetime.datetime.strptime(raw[:10], '%Y-%m-%d').date()
                 except ValueError:
                     return None
-            if filter_name == '오늘':
+            if filter_name in ('오늘', 'Today'):
                 history_records = [r for r in history_records if history_date(r) == today]
-            elif filter_name == '이번 달':
+            elif filter_name in ('이번 달', 'This month'):
                 history_records = [r for r in history_records if history_date(r) and
                                    history_date(r).year == today.year and history_date(r).month == today.month]
-            elif filter_name == '기간':
+            elif filter_name in ('기간', 'Custom'):
                 try:
                     start_date = datetime.datetime.strptime(start_text, '%Y-%m-%d').date()
                     end_date = datetime.datetime.strptime(end_text, '%Y-%m-%d').date()
@@ -2600,7 +2600,7 @@ class IntegratedManagerApp(QMainWindow):
                                        start_date <= history_date(r) <= end_date]
                 except ValueError:
                     history_records = []
-        table_records['사용내역'] = (history_records, [
+        table_records['Usage History'] = (history_records, [
             'log_type', 'status', 'request_time', 'approval_time', 'completed_time', 'client_ip'
         ])
         approved_history = [r for r in history_records if r.get('log_type') == 'approval' and
@@ -2611,7 +2611,7 @@ class IntegratedManagerApp(QMainWindow):
             self.usage_history_total_label.setText(
                 f'사용시간 누적: {total_minutes}분                         금액 누적: {total_amount:g} PHP'
             )
-        table_records['사용내역'] = (approved_history, [
+        table_records['Usage History'] = (approved_history, [
             'request_time', 'approval_time', 'requested_time', 'requested_price', 'client_token_id', 'user_info'
         ])
         connection_tab_name = next(iter(table_records))
@@ -2645,33 +2645,33 @@ class IntegratedManagerApp(QMainWindow):
                 remaining = record.get('remaining_seconds', 0)
                 if record.get('status') == 'Approved' and remaining > 0:
                     minutes, seconds = divmod(remaining, 60)
-                    remaining_text = f'{minutes:02d}분 {seconds:02d}초'
+                    remaining_text = f'{minutes:02d} min {seconds:02d} sec'
                 else:
                     remaining_text = '-'
                 total_requested = requested_seconds_by_client.get(record.get('client_ip', '-'), 0)
                 requested_minutes, requested_seconds = divmod(total_requested, 60)
                 requested_hours, requested_minutes = divmod(requested_minutes, 60)
                 total_requested_text = (
-                    f'{requested_hours}시간 {requested_minutes:02d}분'
-                    if requested_hours else f'{requested_minutes}분'
+                    f'{requested_hours} hr {requested_minutes:02d} min'
+                    if requested_hours else f'{requested_minutes} min'
                 )
                 values = {
                     'log_type': record.get('log_type', '-'),
                     'status': record.get('status', '-'),
                     'completed_time': record.get('completed_time', '-'),
                     'connection_status': record.get('connection_status', '-'),
-                    'internet_status': record.get('internet_status', '확인 중'),
+                    'internet_status': record.get('internet_status', 'Checking'),
                     'usage_request': record.get('usage_request', record.get('fare', '-')),
                     'usage_approval': record.get('usage_approval', '-'),
                     'request_time': record.get('request_time', '-'),
                     'approval_time': record.get('approval_time', '-'),
                     'requested_time': (
-                        f"{record.get('requested_minutes', 0)}분"
+                        f"{record.get('requested_minutes', 0)} min"
                         if record.get('requested_minutes') else record.get('usage_request', '-')
                     ),
                     'requested_price': f"{get_record_price(record):g} PHP",
                     'user_info': (
-                        f"{record.get('device_name', '알 수 없는 기기')} / "
+                        f"{record.get('device_name', 'Unknown Device')} / "
                         f"{record.get('device_type', 'Unknown')} / "
                         f"{record.get('browser', 'Unknown')} / {record.get('client_ip', '-')}"
                     ),
@@ -2682,6 +2682,20 @@ class IntegratedManagerApp(QMainWindow):
                     'client_ip': record.get('client_ip', '-'),
                     'client_token_id': record.get('client_token_id', '-') or '-',
                 }
+                legacy_status_labels = {
+                    '\uc885\ub8cc': 'Closed',
+                    '\uc0ac\uc6a9 \uac00\ub2a5': 'Available',
+                    '\ud655\uc778 \uc911': 'Checking',
+                    '\ud655\uc778 \uc2e4\ud328': 'Check failed',
+                    '\uc2b9\uc778\ub300\uae30': 'Pending Approval',
+                    '\ud5c8\uac00': 'Approved',
+                    '\uac70\ubd80': 'Rejected',
+                    '\uc54c \uc218 \uc5c6\ub294 \uae30\uae30': 'Unknown Device',
+                }
+                values = {
+                    key: legacy_status_labels.get(str(value), value)
+                    for key, value in values.items()
+                }
                 for column, field in enumerate(fields):
                     table.setItem(row, column, QTableWidgetItem(str(values[field])))
 
@@ -2691,13 +2705,13 @@ class IntegratedManagerApp(QMainWindow):
         )
         if hasattr(self, 'hotspot_status_btn'):
             if result['active']:
-                self.hotspot_status_btn.setText('현재 상태: 켜짐')
+                self.hotspot_status_btn.setText('Current status: On')
                 self.hotspot_status_btn.setStyleSheet(
                     "QLabel { background-color: #e8f5e9; color: #1b5e20; font-weight: bold; "
                         "border: 1px solid #1b5e20; border-radius: 4px; padding: 5px 10px; }"
                 )
             else:
-                self.hotspot_status_btn.setText('현재 상태: 꺼짐')
+                self.hotspot_status_btn.setText('Current status: Off')
                 self.hotspot_status_btn.setStyleSheet(
                     "QLabel { background-color: #ffebee; color: #b71c1c; font-weight: bold; "
                         "border: 1px solid #8e0000; border-radius: 4px; padding: 5px 10px; }"
@@ -2855,12 +2869,12 @@ class IntegratedManagerApp(QMainWindow):
         period = self.transfer_period_combo.currentText()
         today = datetime.date.today()
         start = end = None
-        if period == '오늘':
+        if period in ('오늘', 'Today'):
             start = end = today
-        elif period == '이번 달':
+        elif period in ('이번 달', 'This month'):
             start = today.replace(day=1)
             end = (start.replace(day=28) + datetime.timedelta(days=4)).replace(day=1) - datetime.timedelta(days=1)
-        elif period == '기간':
+        elif period in ('기간', 'Custom'):
             start = self.transfer_start_date.date().toPython()
             end = self.transfer_end_date.date().toPython()
             if start > end:
@@ -2953,7 +2967,7 @@ class IntegratedManagerApp(QMainWindow):
         background = '#4db6ac' if completed else '#f1f5f9'
         border = '#00695c' if completed else '#607d8b'
         text_color = '#003c36' if completed else '#263238'
-        toggle.setText('완료' if completed else '미완료')
+        toggle.setText('Complete' if completed else 'Incomplete')
         toggle.setStyleSheet(
             f"QPushButton {{ color: {text_color}; background-color: {background}; "
             f"border: 3px solid {border}; border-radius: 5px; padding: 5px 8px; "
@@ -3095,8 +3109,8 @@ class IntegratedManagerApp(QMainWindow):
             self.hotspot_qr_label.setPixmap(
                 self.hotspot_qr_pixmap.scaled(qr_size, qr_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             )
-            self.hotspot_qr_caption.setText("이 QR 코드는 인터넷 사용신청용입니다.")
-            self.hotspot_url_label.setText(f"사용신청 URL: {portal_url}")
+            self.hotspot_qr_caption.setText("This QR code is for Internet access requests.")
+            self.hotspot_url_label.setText(f"Access Request URL: {portal_url}")
 
             wifi_ssid = self.hotspot_ssid or 'hbwifi'
             wifi_password = self.hotspot_password or ''
@@ -3543,8 +3557,8 @@ class IntegratedManagerApp(QMainWindow):
         ])
         table.setHorizontalHeaderItem(10, QTableWidgetItem("완료"))
         table.setHorizontalHeaderLabels([
-            "사용자명", "사용자 부가정보", "구역", "파일명", "카피수", "컬러",
-            "완료", "크기", "수신시간", "상태", "쿠키"
+            "User Name", "User Info", "Zone", "File Name", "Copies", "Color",
+            "Complete", "Size", "Received Time", "Status", "Cookie"
         ])
         table.setAlternatingRowColors(True)
         table.setEditTriggers(QTableWidget.NoEditTriggers)

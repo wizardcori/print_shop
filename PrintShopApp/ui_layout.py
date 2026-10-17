@@ -25,10 +25,10 @@ class CollapsibleStatusLabel(QLabel):
 
     def _refresh_display(self):
         if self._expanded:
-            display_text = f"{self._full_text}  (축약하려면 클릭)"
+            display_text = f"{self._full_text}  (Click to collapse)"
         else:
             summary = self._full_text.split(" | ", 1)[0]
-            suffix = "  … (상세 보기)" if summary != self._full_text else ""
+            suffix = "  … (View details)" if summary != self._full_text else ""
             display_text = summary + suffix
         super().setText(display_text)
 
@@ -222,14 +222,14 @@ def setup_integrated_ui(window, current_upload_folder, current_zones, current_sa
     bottom_layout.addWidget(QLabel("📂 LinkBox Received Transfer Log:"))
     
     transfer_filter_layout = QHBoxLayout()
-    window.completed_only_checkbox = QCheckBox("완료된 것도 표시")
+    window.completed_only_checkbox = QCheckBox("Show completed too")
     # Show persisted transfer tabs on startup; users can uncheck this to hide
     # tabs that contain completed records only.
     window.completed_only_checkbox.setChecked(True)
     transfer_filter_layout.addWidget(window.completed_only_checkbox)
-    transfer_filter_layout.addWidget(QLabel("표시기간:"))
+    transfer_filter_layout.addWidget(QLabel("Display period:"))
     window.transfer_period_combo = QComboBox()
-    window.transfer_period_combo.addItems(["전체", "오늘", "이번 달", "기간"])
+    window.transfer_period_combo.addItems(["All", "Today", "This month", "Custom"])
     transfer_filter_layout.addWidget(window.transfer_period_combo)
     window.transfer_start_date = QDateEdit(QDate.currentDate())
     window.transfer_start_date.setCalendarPopup(True)
@@ -278,7 +278,7 @@ def setup_integrated_ui(window, current_upload_folder, current_zones, current_sa
     window.hotspot_control_layout = hotspot_control_layout
     hotspot_controls = QHBoxLayout()
     hotspot_controls.setSpacing(6)
-    window.hotspot_status_btn = QLabel("상태 확인 중")
+    window.hotspot_status_btn = QLabel("Checking status")
     window.hotspot_status_btn.setAlignment(Qt.AlignCenter)
     window.hotspot_status_btn.setMinimumHeight(32)
     window.hotspot_status_btn.setStyleSheet(
@@ -286,7 +286,7 @@ def setup_integrated_ui(window, current_upload_folder, current_zones, current_sa
         "border: 1px solid #455a64; border-radius: 4px; padding: 5px 10px; }"
     )
     hotspot_controls.addWidget(window.hotspot_status_btn)
-    window.hotspot_on_btn = QPushButton("Hotspot 켜기")
+    window.hotspot_on_btn = QPushButton("Turn Hotspot On")
     window.hotspot_on_btn.clicked.connect(lambda: window.set_hotspot_state(True))
     window.hotspot_on_btn.setMinimumHeight(32)
     window.hotspot_on_btn.setStyleSheet(
@@ -295,7 +295,7 @@ def setup_integrated_ui(window, current_upload_folder, current_zones, current_sa
         "QPushButton:hover { background-color: #388e3c; }"
     )
     hotspot_controls.addWidget(window.hotspot_on_btn)
-    window.hotspot_off_btn = QPushButton("Hotspot 끄기")
+    window.hotspot_off_btn = QPushButton("Turn Hotspot Off")
     window.hotspot_off_btn.clicked.connect(lambda: window.set_hotspot_state(False))
     window.hotspot_off_btn.setMinimumHeight(32)
     window.hotspot_off_btn.setStyleSheet(
@@ -304,7 +304,7 @@ def setup_integrated_ui(window, current_upload_folder, current_zones, current_sa
         "QPushButton:hover { background-color: #d32f2f; }"
     )
     hotspot_controls.addWidget(window.hotspot_off_btn)
-    window.hotspot_diagnose_btn = QPushButton("상태 진단 실행")
+    window.hotspot_diagnose_btn = QPushButton("Run Diagnostics")
     window.hotspot_diagnose_btn.clicked.connect(window.diagnose_hotspot)
     window.hotspot_diagnose_btn.setMinimumHeight(32)
     window.hotspot_diagnose_btn.setStyleSheet(
@@ -386,7 +386,7 @@ def setup_integrated_ui(window, current_upload_folder, current_zones, current_sa
     window.hotspot_qr_label.setMinimumSize(0, 0)
     window.hotspot_qr_label.setMaximumSize(220, 220)
     window.hotspot_qr_label.setStyleSheet("border: 1px solid #ccc; background-color: #f9f9f9; border-radius: 5px;")
-    window.hotspot_qr_caption = QLabel("이 QR 코드는 인터넷 사용신청용입니다.")
+    window.hotspot_qr_caption = QLabel("This QR code is for Internet access requests.")
     window.hotspot_qr_caption.setAlignment(Qt.AlignCenter)
     window.hotspot_qr_caption.setStyleSheet("font-size: 9px; font-weight: bold; color: #16803c; margin: 0;")
     window.hotspot_url_label = QLabel("Generated URL: ")
@@ -446,16 +446,16 @@ def setup_integrated_ui(window, current_upload_folder, current_zones, current_sa
     window.usage_history_tabs = QTabWidget()
     window.usage_history_tables = {}
     usage_tabs = {
-        "연결상태": ["연결상태", "요청시간", "시작시간", "종료시간", "남은시간", "IP 주소"],
-        "사용요청": ["사용요청", "요청시간", "IP 주소"],
-        "사용허가": ["사용허가", "승인시간", "시작시간", "종료시간", "남은시간", "IP 주소"],
+        "Connection Status": ["Connection Status", "Request Time", "Start Time", "End Time", "Remaining", "IP Address"],
+        "Usage Requests": ["Usage Request", "Request Time", "IP Address"],
+        "Usage Approvals": ["Usage Approval", "Approval Time", "Start Time", "End Time", "Remaining", "IP Address"],
     }
     connection_tab_name = next(iter(usage_tabs))
-    usage_tabs[connection_tab_name] = ["연결상태", "사용승인", "인터넷연결", "요청시간", "시작시간", "종료시간", "총사용요청시간", "남은시간", "IP 주소"]
+    usage_tabs[connection_tab_name] = ["Connection Status", "Usage Approval", "Internet Connection", "Request Time", "Start Time", "End Time", "Total Requested", "Remaining", "IP Address"]
     approval_tab_name = list(usage_tabs)[2]
-    usage_tabs[approval_tab_name] = ["사용허가", "승인시간", "요청사용시간", "IP 주소"]
+    usage_tabs[approval_tab_name] = ["Usage Approval", "Approval Time", "Requested Usage Time", "IP Address"]
     for tab_name, headers in usage_tabs.items():
-        headers = headers + ["쿠키", "사용자정보"]
+        headers = headers + ["Cookie", "User Info"]
         usage_tab = QWidget()
         usage_tab_layout = QVBoxLayout(usage_tab)
         table = QTableWidget(0, len(headers))
@@ -477,25 +477,25 @@ def setup_integrated_ui(window, current_upload_folder, current_zones, current_sa
     history_layout = QVBoxLayout(history_tab)
     history_filter_layout = QHBoxLayout()
     window.usage_history_filter = QComboBox()
-    window.usage_history_filter.addItems(["전체", "오늘", "이번 달", "기간"])
+    window.usage_history_filter.addItems(["All", "Today", "This month", "Custom"])
     window.usage_history_start = QLineEdit()
-    window.usage_history_start.setPlaceholderText("시작일 YYYY-MM-DD")
+    window.usage_history_start.setPlaceholderText("Start date YYYY-MM-DD")
     window.usage_history_end = QLineEdit()
-    window.usage_history_end.setPlaceholderText("종료일 YYYY-MM-DD")
+    window.usage_history_end.setPlaceholderText("End date YYYY-MM-DD")
     history_filter_layout.addWidget(window.usage_history_filter)
     history_filter_layout.addWidget(window.usage_history_start)
     history_filter_layout.addWidget(window.usage_history_end)
     history_layout.addLayout(history_filter_layout)
-    window.usage_history_total_label = QLabel("사용시간 누적: 0분                         금액 누적: 0 PHP")
+    window.usage_history_total_label = QLabel("Total usage: 0 min                         Total amount: 0 PHP")
     history_layout.addWidget(window.usage_history_total_label)
     history_table = QTableWidget(0, 6)
-    history_table.setHorizontalHeaderLabels(["요청시간", "승인시간", "사용시간", "금액", "쿠키", "사용자정보"])
+    history_table.setHorizontalHeaderLabels(["Request Time", "Approval Time", "Usage Time", "Amount", "Cookie", "User Info"])
     history_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
     history_table.horizontalHeader().setStretchLastSection(True)
     history_table.setEditTriggers(QTableWidget.NoEditTriggers)
     history_layout.addWidget(history_table)
-    window.usage_history_tables["사용내역"] = history_table
-    window.usage_history_tabs.addTab(history_tab, "사용내역")
+    window.usage_history_tables["Usage History"] = history_table
+    window.usage_history_tabs.addTab(history_tab, "Usage History")
     window.usage_history_filter.currentIndexChanged.connect(window.update_usage_history_tables)
     window.usage_history_start.textChanged.connect(window.update_usage_history_tables)
     window.usage_history_end.textChanged.connect(window.update_usage_history_tables)
