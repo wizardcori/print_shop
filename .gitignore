@@ -69,6 +69,8 @@ venv/
 env/
 ENV/
 .env/
+**/.env
+!**/.env.example
 
 
 # ==========================================
@@ -95,6 +97,9 @@ MANIFEST
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
+
+# Installer
+installer/
 
 # Unit test / coverage reports
 htmlcov/
