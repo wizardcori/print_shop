@@ -1,0 +1,14 @@
+@echo off
+chcp 65001 > nul
+
+if not exist "secrets\GROQ_API_KEY" (
+    echo [ERROR] secrets\GROQ_API_KEY file not found!
+    pause
+    exit /b 1
+)
+
+:: Read key from file
+set /p GROQ_API_KEY=<secrets\GROQ_API_KEY
+
+:: Launch VS Code with inherited environment variables
+code .

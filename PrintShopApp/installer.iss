@@ -17,7 +17,7 @@ UninstallDisplayIcon={app}\PrintShopApp.exe
 
 [Files]
 Source: "{#SourceDir}\dist\PrintShopApp\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
-Source: "{#SourceDir}\data\approval_sounds\*.wav"; DestDir: "{app}\data\approval_sounds"; Flags: ignoreversion
+Source: "{#SourceDir}\data\sound\approval_sounds\*.wav"; DestDir: "{app}\data\sound\approval_sounds"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\PrintShopApp"; Filename: "{app}\PrintShopApp.exe"

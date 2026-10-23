@@ -10,7 +10,7 @@ echo ========================================================
 set "SRC_DIR=%~dp0"
 :: Remove the trailing backslash so quoted paths are parsed correctly by Robocopy.
 set "SRC_DIR=%SRC_DIR:~0,-1%"
-set "DEST_DIR=G:\My Drive\1print_shop"
+set "DEST_DIR=C:\gdrive_hwlee\1print_shop"
 
 :: Folders regenerated during Python/PySide development and build output
 set "EXCLUDE_DIRS=__pycache__ .venv venv env .git .idea .vscode build dist *.egg-info"
@@ -23,8 +23,8 @@ echo Source path: %SRC_DIR%
 echo Destination path: %DEST_DIR%
 echo.
 
-if not exist "G:\" (
-    echo [ERROR] G: drive was not found. Make sure Google Drive is connected.
+if not exist "C:\gdrive_hwlee\1print_shop" (
+    echo [ERROR] Destination directory not found.
     pause
     exit /b 1
 )

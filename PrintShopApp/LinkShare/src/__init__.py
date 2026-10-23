@@ -1,0 +1,1 @@
+"""LinkShare Python source package."""

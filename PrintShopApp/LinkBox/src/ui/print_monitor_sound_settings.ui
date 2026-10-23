@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>PrintMonitorSoundSettings</class>
+ <widget class="QWidget" name="PrintMonitorSoundSettings">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>420</width>
+    <height>220</height>
+   </rect>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <!-- 검출 사운드 그룹 -->
+   <item>
+    <widget class="QGroupBox" name="detectionGroup">
+     <property name="title"><string>검출 사운드</string></property>
+     <layout class="QHBoxLayout" name="layoutDetection">
+      <item>
+       <widget class="QLineEdit" name="detectionEdit"/>
+      </item>
+      <item>
+       <widget class="QPushButton" name="detectionBrowse"><property name="text"><string>찾기</string></property></widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="detectionTest"><property name="text"><string>테스트</string></property></widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <!-- 트리 사운드 그룹 -->
+   <item>
+    <widget class="QGroupBox" name="treeGroup">
+     <property name="title"><string>트리 추가 사운드</string></property>
+     <layout class="QHBoxLayout" name="layoutTree">
+      <item>
+       <widget class="QLineEdit" name="treeEdit"/>
+      </item>
+      <item>
+       <widget class="QPushButton" name="treeBrowse"><property name="text"><string>찾기</string></property></widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="treeTest"><property name="text"><string>테스트</string></property></widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <!-- 저장 & 상태 -->
+   <item>
+    <widget class="QPushButton" name="saveButton"><property name="text"><string>저장</string></property></widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="statusLabel"/>
+   </item>
+   <item>
+    <spacer name="verticalSpacer"/>
+   </item>
+  </layout>
+ </widget>
+</ui>

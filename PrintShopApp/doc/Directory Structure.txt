@@ -1,44 +1,14 @@
 PrintShopApp/
-├── main_app.py                 # LinkBox와 LinkShare를 하나의 데스크톱 앱으로 통합하는 진입점
-├── ui_layout.py                # 통합 관리자 화면의 Qt 위젯 레이아웃
-├── setup.bat                   # Python 3.11 가상 환경과 의존성, SSL 인증서, 데이터 폴더 설정
-├── run.bat                     # 가상 환경에서 통합 앱 실행
-├── dist.bat                    # PyInstaller onedir 배포본 생성
-├── LinkBox/
-│   ├── linkbox_app.py          # HTTPS 파일 수신 서버와 파일 전송 관리 화면
-│   ├── ui_layout.py            # LinkBox 단독 실행 화면 레이아웃
-│   ├── templates/index.html    # 파일 선택·업로드·삭제 웹 화면
-│   ├── linkbox_config.ini      # 저장 위치, 영역, 탭, 창 배치 설정
-│   ├── cert.pem                # LinkBox HTTPS 서버 인증서
-│   ├── key.pem                 # LinkBox HTTPS 서버 개인 키
-│   ├── setup.bat / run.bat     # LinkBox 단독 실행 환경 설정 및 실행
-│   └── dist.bat                # LinkBox 단독 배포본 생성
-├── LinkShare/
-│   ├── linkshare_app.py        # Wi-Fi 이용권 승인·세션·요금 로그 관리 화면
-│   ├── setup.bat / run.bat     # LinkShare 단독 실행 환경 설정 및 실행
-│   ├── dist.bat                # LinkShare 단독 배포본 생성
-│   └── fare/                   # 실행 중 생성되는 이용권 로그 저장 위치
-└── doc/
-    └── Directory Structure.txt # 현재 프로젝트 구조
+|-- src/main_app.py                 Integrated desktop application entry point
+|-- src/ui_layout.py                Integrated Qt layout
+|-- Common/                          Shared database, orders, and workflow services
+|-- LinkBox/src/                     Upload, printer monitor, and LinkBox UI modules
+|-- LinkBox/templates/file_share.html  Mobile file upload page
+|-- LinkShare/src/                   Wi-Fi approval and captive-portal modules
+|-- LinkShare/templates/portal.html  Wi-Fi approval page
+|-- setup.bat                        Environment and dependency setup
+|-- run.bat                          Integrated application launcher
+|-- bdist.bat                        Integrated PyInstaller build
+`-- doc/                             Project documentation
 
-실행 중 생성되는 항목
-----------------------
-- .venv/: Python 가상 환경
-- LinkBox/LinkBox_Files/: 업로드된 파일
-- LinkShare/fare/: 암호화된 이용권·세션 로그
-- wifi_approval_settings.ini: 통합 앱의 SSID와 Fernet 키 설정
-- dist/ 또는 각 모듈의 dist/: PyInstaller 결과물
-
-INI 설정 섹션
--------------
-- [Settings]: 핫스팟 SSID, 핫스팟 이미지 경로, 이용권 로그 폴더, 최대 연결 수
-- [Network]: 인터넷용 NIC와 핫스팟용 무선 NIC의 이름·IP, 핫스팟 IPv4 CIDR 대역과 게이트웨이
-- [Storage]: 업로드 폴더, 구역 목록, 저장 탭 목록
-- [Security]: LinkShare Fernet 암호화 키
-
-참고
-----
-- 통합 앱의 Flask 라우트는 LinkShare/templates/portal.html과
-  LinkShare/templates/file_share.html을 참조한다. 현재 저장소에는 해당 템플릿이
-  포함되어 있지 않으므로 /scan 및 /file_share 화면을 사용하려면 템플릿을 추가해야 한다.
-- cert.pem과 key.pem은 배포 환경마다 새로 생성하는 것을 권장한다.
+Standalone LinkBox and LinkShare entry points are intentionally not part of this tree.

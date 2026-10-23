@@ -1,0 +1,90 @@
+2026-10-18 12:49:25,577 [INFO] Previous sound stopped: generation=1 discarded_queued=0
+2026-10-18 12:49:25,578 [INFO] Sound playback started: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/detect.wav
+2026-10-18 12:49:25,578 [INFO] Sound request queued: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/detect.wav
+2026-10-18 12:49:25,755 [INFO] Sound playback completed: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/detect.wav
+2026-10-18 12:49:29,231 [INFO] Previous sound stopped: generation=2 discarded_queued=0
+2026-10-18 12:49:29,232 [INFO] Sound playback started: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:49:29,232 [INFO] Sound request queued: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:49:29,972 [INFO] Sound playback completed: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:49:30,135 [INFO] Previous sound stopped: generation=3 discarded_queued=0
+2026-10-18 12:49:30,135 [INFO] Sound request queued: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:49:30,136 [INFO] Sound playback started: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:49:30,873 [INFO] Previous sound stopped: generation=4 discarded_queued=0
+2026-10-18 12:49:30,875 [INFO] Sound playback completed: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:49:30,875 [INFO] Sound request queued: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:49:30,875 [INFO] Sound playback started: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:49:31,607 [INFO] Previous sound stopped: generation=5 discarded_queued=0
+2026-10-18 12:49:31,608 [INFO] Sound playback completed: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:49:31,609 [INFO] Sound request queued: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:49:31,609 [INFO] Sound playback started: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:49:32,343 [INFO] Sound playback completed: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:49:32,343 [INFO] Previous sound stopped: generation=6 discarded_queued=0
+2026-10-18 12:49:32,344 [INFO] Sound playback started: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:49:32,344 [INFO] Sound request queued: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:49:33,079 [INFO] Sound playback completed: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:49:33,079 [INFO] Sound request queued: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:49:33,080 [INFO] Sound playback started: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:49:33,815 [INFO] Sound playback completed: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:49:33,815 [INFO] Previous sound stopped: generation=8 discarded_queued=0
+2026-10-18 12:49:33,815 [INFO] Sound request queued: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:49:33,817 [INFO] Sound playback started: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:49:34,552 [INFO] Previous sound stopped: generation=9 discarded_queued=0
+2026-10-18 12:49:34,552 [INFO] Sound playback completed: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:49:34,552 [INFO] Sound request queued: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:49:34,552 [INFO] Sound playback started: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:49:35,282 [INFO] Sound playback completed: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:49:35,282 [INFO] Previous sound stopped: generation=10 discarded_queued=0
+2026-10-18 12:49:35,283 [INFO] Sound playback started: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:49:35,284 [INFO] Sound request queued: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:49:36,015 [INFO] Sound playback completed: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:51:21,699 [INFO] Previous sound stopped: generation=1 discarded_queued=0
+2026-10-18 12:51:21,700 [INFO] Sound request queued: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/detect.wav
+2026-10-18 12:51:21,700 [INFO] Sound playback started: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/detect.wav
+2026-10-18 12:51:21,870 [INFO] Sound playback completed: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/detect.wav
+2026-10-18 12:51:22,426 [INFO] Previous sound stopped: generation=2 discarded_queued=0
+2026-10-18 12:51:22,426 [INFO] Sound request queued: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:51:22,427 [INFO] Sound playback started: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:51:23,154 [INFO] Sound playback completed: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 12:53:59,203 [INFO] Previous sound stopped: generation=1 discarded_queued=0
+2026-10-18 12:53:59,204 [INFO] Sound request queued: path=C:\1print_shop\PrintShopApp\data\approval_sounds\Alarm03.wav
+2026-10-18 12:53:59,205 [INFO] Sound playback started: path=C:\1print_shop\PrintShopApp\data\approval_sounds\Alarm03.wav
+2026-10-18 12:54:03,362 [INFO] Sound playback completed: path=C:\1print_shop\PrintShopApp\data\approval_sounds\Alarm03.wav
+2026-10-18 12:54:03,362 [INFO] Previous sound stopped: generation=2 discarded_queued=0
+2026-10-18 12:54:51,262 [INFO] Previous sound stopped: generation=3 discarded_queued=0
+2026-10-18 12:54:51,263 [INFO] Sound request queued: path=C:\1print_shop\PrintShopApp\data\approval_sounds\Alarm03.wav
+2026-10-18 12:54:51,263 [INFO] Sound playback started: path=C:\1print_shop\PrintShopApp\data\approval_sounds\Alarm03.wav
+2026-10-18 12:54:55,380 [INFO] Sound playback completed: path=C:\1print_shop\PrintShopApp\data\approval_sounds\Alarm03.wav
+2026-10-18 12:54:55,380 [INFO] Previous sound stopped: generation=4 discarded_queued=0
+2026-10-18 13:07:38,218 [INFO] Previous sound stopped: generation=1 discarded_queued=0
+2026-10-18 13:07:38,219 [INFO] Sound request queued: path=C:\1print_shop\PrintShopApp\data\approval_sounds\Alarm03.wav
+2026-10-18 13:07:38,219 [INFO] Sound playback started: path=C:\1print_shop\PrintShopApp\data\approval_sounds\Alarm03.wav
+2026-10-18 13:07:42,397 [INFO] Previous sound stopped: generation=2 discarded_queued=0
+2026-10-18 13:07:42,398 [INFO] Sound playback completed: path=C:\1print_shop\PrintShopApp\data\approval_sounds\Alarm03.wav
+2026-10-18 13:25:18,669 [INFO] Previous sound stopped: generation=1 discarded_queued=0
+2026-10-18 13:25:18,670 [INFO] Sound request queued: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 13:25:18,672 [INFO] Sound playback started: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 13:25:19,465 [INFO] Sound playback completed: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 13:29:37,104 [INFO] Previous sound stopped: generation=2 discarded_queued=0
+2026-10-18 13:29:37,105 [INFO] Sound playback started: path=C:\1print_shop\PrintShopApp\data\approval_sounds\Alarm03.wav
+2026-10-18 13:29:37,105 [INFO] Sound request queued: path=C:\1print_shop\PrintShopApp\data\approval_sounds\Alarm03.wav
+2026-10-18 13:29:41,248 [INFO] Sound playback completed: path=C:\1print_shop\PrintShopApp\data\approval_sounds\Alarm03.wav
+2026-10-18 13:29:41,248 [INFO] Previous sound stopped: generation=3 discarded_queued=0
+2026-10-18 13:30:19,782 [INFO] Previous sound stopped: generation=4 discarded_queued=0
+2026-10-18 13:30:19,782 [INFO] Sound playback started: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 13:30:19,782 [INFO] Sound request queued: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 13:30:20,545 [INFO] Sound playback completed: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 13:30:20,545 [INFO] Previous sound stopped: generation=5 discarded_queued=0
+2026-10-18 13:30:20,546 [INFO] Sound request queued: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 13:30:20,546 [INFO] Sound playback started: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 13:30:21,278 [INFO] Sound playback completed: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 13:30:21,279 [INFO] Sound request queued: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 13:30:21,279 [INFO] Sound playback started: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 13:30:22,006 [INFO] Sound playback completed: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 13:30:22,006 [INFO] Previous sound stopped: generation=7 discarded_queued=0
+2026-10-18 13:30:22,007 [INFO] Sound request queued: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 13:30:22,007 [INFO] Sound playback started: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 13:30:22,742 [INFO] Sound playback completed: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 13:30:58,671 [INFO] Previous sound stopped: generation=8 discarded_queued=0
+2026-10-18 13:30:58,672 [INFO] Sound request queued: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 13:30:58,673 [INFO] Sound playback started: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav
+2026-10-18 13:30:59,439 [INFO] Sound playback completed: path=C:/1print_shop/PrintShopApp/data/sound/print_monitor_sounds/insert.wav

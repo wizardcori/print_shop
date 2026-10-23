@@ -2,15 +2,15 @@
 
 
 a = Analysis(
-    ['main_app.py'],
-    pathex=[],
+    ['src/main_app.py'],
+    pathex=['.', 'src'],
     binaries=[('C:/Espressif/tools/python/python311.dll', '.'), ('C:/Espressif/tools/python/vcruntime140.dll', '.'), ('C:/Espressif/tools/python/vcruntime140_1.dll', '.')],
-    datas=[('LinkBox/templates', 'LinkBox/templates'), ('LinkShare/templates', 'LinkShare/templates')],
+    datas=[('LinkBox/templates', 'LinkBox/templates'), ('LinkShare/templates', 'LinkShare/templates'), ('.env.feature.runtime', '.'), ('LinkBox/src/ui', 'LinkBox/src/ui')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=['LinkBox.src.printer_monitor_service'],
     noarchive=False,
     optimize=0,
 )

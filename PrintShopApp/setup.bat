@@ -2,13 +2,36 @@
 chcp 65001 > nul
 title PrintShopApp Environment Setup Script
 
+set "SETUP_NO_PAUSE="
+if /i "%~1"=="nopause" set "SETUP_NO_PAUSE=1"
+
 echo ===================================================
 echo   Starting PrintShopApp (Python 3.11) Environment Setup
 echo ===================================================
 echo.
 
-python -c "import sys; exit(0 if sys.version_info[:2] == (3, 11) else 1)" > nul 2>&1
-if %errorlevel% neq 0 (
+set "PYTHON_CMD="
+if exist ".venv\Scripts\python.exe" (
+    ".venv\Scripts\python.exe" -c "import sys; exit(0 if sys.version_info[:2] == (3, 11) else 1)" > nul 2>&1
+    if not errorlevel 1 set "PYTHON_CMD=.venv\Scripts\python.exe"
+)
+if not defined PYTHON_CMD (
+    python -c "import sys; exit(0 if sys.version_info[:2] == (3, 11) else 1)" > nul 2>&1
+    if not errorlevel 1 set "PYTHON_CMD=python"
+)
+if not defined PYTHON_CMD if exist "C:\Espressif\tools\python\python.exe" (
+    "C:\Espressif\tools\python\python.exe" -c "import sys; exit(0 if sys.version_info[:2] == (3, 11) else 1)" > nul 2>&1
+    if not errorlevel 1 set "PYTHON_CMD=C:\Espressif\tools\python\python.exe"
+)
+if not defined PYTHON_CMD if exist "%LOCALAPPDATA%\Programs\Python\Python311\python.exe" (
+    "%LOCALAPPDATA%\Programs\Python\Python311\python.exe" -c "import sys; exit(0 if sys.version_info[:2] == (3, 11) else 1)" > nul 2>&1
+    if not errorlevel 1 set "PYTHON_CMD=%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
+)
+if not defined PYTHON_CMD if exist "C:\Program Files\Python311\python.exe" (
+    "C:\Program Files\Python311\python.exe" -c "import sys; exit(0 if sys.version_info[:2] == (3, 11) else 1)" > nul 2>&1
+    if not errorlevel 1 set "PYTHON_CMD=C:\Program Files\Python311\python.exe"
+)
+if not defined PYTHON_CMD (
     echo [ERROR] Python 3.11 is required, but a different version was found or Python is not recognized.
     echo Please ensure Python 3.11 is installed and added to your system PATH.
     goto error_exit
@@ -19,7 +42,7 @@ echo.
 
 if exist .venv goto skip_venv
 echo [2/5] Creating Python 3.11 virtual environment (.venv)...
-python -m venv .venv
+"%PYTHON_CMD%" -m venv .venv
 echo Virtual environment created.
 goto check_packages
 
@@ -71,11 +94,11 @@ echo   PrintShopApp environment setup is complete!
 echo   You can run 'run.bat' to start the program.
 echo ===================================================
 echo.
-pause
+if not defined SETUP_NO_PAUSE pause
 exit /b
 
 :error_exit
 echo.
 echo [FAILED] Setup terminated due to an error.
-pause
+if not defined SETUP_NO_PAUSE pause
 exit /b

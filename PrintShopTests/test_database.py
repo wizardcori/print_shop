@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "PrintShopApp"))
-from db import AppDatabase  # noqa: E402
+from Common.db import AppDatabase  # noqa: E402
 
 
 class TestDatabase(unittest.TestCase):
@@ -45,7 +45,24 @@ class TestDatabase(unittest.TestCase):
         with sqlite3.connect(self.database.path) as connection:
             tables = {row[0] for row in connection.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'")}
-        self.assertTrue({"sessions", "usage_events", "file_transfers", "transfer_log"} <= tables)
+        self.assertTrue({"sessions", "usage_events", "file_transfers", "transfer_log",
+                         "print_pricing", "print_logs"} <= tables)
+
+    def test_print_workflow_bills_snmp_delta(self):
+        from Common.print_workflow import PrintJob, PrintWorkflow
+        counter = iter([100, 103])
+        workflow = PrintWorkflow(self.database, lambda: next(counter))
+        state = workflow.begin(PrintJob('client-a', 'mono', 'a4', 5))
+        record = workflow.complete(state)
+        self.assertEqual((record['actual_pages'], record['unit_price'], record['total_price']),
+                         (3, 50, 150))
+
+    def test_cancelled_job_is_not_billed(self):
+        from Common.print_workflow import PrintJob, PrintWorkflow
+        counter = iter([10, 12])
+        workflow = PrintWorkflow(self.database, lambda: next(counter))
+        record = workflow.complete(workflow.begin(PrintJob('client-a', 'COLOR', 'A4', 2)), 'JAMMED')
+        self.assertEqual((record['actual_pages'], record['total_price'], record['status']), (0, 0, 'JAMMED'))
 
 
 if __name__ == "__main__":

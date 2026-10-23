@@ -1,0 +1,35 @@
+2026-10-18 13:25:18,668 [INFO] Tree item added: printer=Microsoft Print to PDF document=c:\users\hwlee\documents\sasasasasasasasasasasasasasasasa.pdf source_path=<unavailable> output_path=C:\Users\hwlee\Documents\sasasasasasasasasasasasasasasasa.pdf job_id=50 status=SUCCESS tag=임의로 출력
+2026-10-18 13:30:58,669 [INFO] Tree item added: printer=Microsoft Print to PDF document=c:\users\hwlee\documents\ssaaaaaaaaaaaa.pdf source_path=<unavailable> output_path=C:\Users\hwlee\Documents\ssaaaaaaaaaaaa.pdf job_id=51 status=SUCCESS tag=임의로 출력
+2026-10-18 13:34:27,979 [WARNING] Transfer file registration skipped: invalid received_time=3.9 MB filename=20261015_121144.jpg
+2026-10-18 13:34:27,983 [WARNING] Transfer file registration skipped: invalid received_time=2.2 MB filename=20261015_081312.jpg
+2026-10-18 13:34:27,987 [WARNING] Transfer file registration skipped: invalid received_time=2.3 MB filename=20261015_080419.jpg
+2026-10-18 13:34:28,010 [WARNING] Transfer file registration skipped: invalid received_time=2.3 MB filename=20261015_080419.jpg
+2026-10-18 13:34:28,014 [WARNING] Transfer file registration skipped: invalid received_time=1.7 MB filename=20261010_140117.jpg
+2026-10-18 13:34:28,017 [WARNING] Transfer file registration skipped: invalid received_time=1.6 MB filename=20261010_140114.jpg
+2026-10-18 13:34:28,041 [WARNING] Transfer file registration skipped: invalid received_time=2.2 MB filename=20261015_081312.jpg
+2026-10-18 13:34:28,044 [WARNING] Transfer file registration skipped: invalid received_time=2.3 MB filename=20261015_080419.jpg
+2026-10-18 13:34:28,048 [WARNING] Transfer file registration skipped: invalid received_time=1.7 MB filename=20261010_140117.jpg
+2026-10-18 13:34:28,072 [WARNING] Transfer file registration skipped: invalid received_time=4.9 MB filename=20261017_033555.jpg
+2026-10-18 13:34:28,075 [WARNING] Transfer file registration skipped: invalid received_time=3.9 MB filename=20261015_121144.jpg
+2026-10-18 13:34:28,079 [WARNING] Transfer file registration skipped: invalid received_time=2.2 MB filename=20261015_081312.jpg
+2026-10-18 13:34:28,102 [WARNING] Transfer file registration skipped: invalid received_time=2.2 MB filename=20261015_081312.jpg
+2026-10-18 13:34:28,106 [WARNING] Transfer file registration skipped: invalid received_time=2.3 MB filename=20261015_080419.jpg
+2026-10-18 13:34:28,109 [WARNING] Transfer file registration skipped: invalid received_time=1.7 MB filename=20261010_140117.jpg
+2026-10-18 13:34:28,134 [WARNING] Transfer file registration skipped: invalid received_time=2.3 MB filename=20261015_080419.jpg
+2026-10-18 13:34:28,137 [WARNING] Transfer file registration skipped: invalid received_time=1.7 MB filename=20261010_140117.jpg
+2026-10-18 13:34:28,141 [WARNING] Transfer file registration skipped: invalid received_time=1.6 MB filename=20261010_140114.jpg
+2026-10-18 13:34:28,165 [WARNING] Transfer file registration skipped: invalid received_time=3.9 MB filename=20261015_121144.jpg
+2026-10-18 13:34:28,168 [WARNING] Transfer file registration skipped: invalid received_time=2.2 MB filename=20261015_081312.jpg
+2026-10-18 13:34:28,172 [WARNING] Transfer file registration skipped: invalid received_time=2.3 MB filename=20261015_080419.jpg
+2026-10-18 13:34:28,197 [WARNING] Transfer file registration skipped: invalid received_time=2.2 MB filename=20261015_081312.jpg
+2026-10-18 13:34:28,201 [WARNING] Transfer file registration skipped: invalid received_time=2.3 MB filename=20261015_080419.jpg
+2026-10-18 13:34:28,205 [WARNING] Transfer file registration skipped: invalid received_time=1.7 MB filename=20261010_140117.jpg
+2026-10-18 13:34:28,230 [WARNING] Transfer file registration skipped: invalid received_time=3.9 MB filename=20261015_121144.jpg
+2026-10-18 13:34:28,234 [WARNING] Transfer file registration skipped: invalid received_time=2.2 MB filename=20261015_081312.jpg
+2026-10-18 13:34:28,260 [WARNING] Transfer file registration skipped: invalid received_time=4.9 MB filename=20261017_033555.jpg
+2026-10-18 13:34:28,263 [WARNING] Transfer file registration skipped: invalid received_time=3.9 MB filename=20261015_121144.jpg
+2026-10-18 13:34:28,267 [WARNING] Transfer file registration skipped: invalid received_time=2.2 MB filename=20261015_081312.jpg
+2026-10-18 13:34:28,300 [WARNING] Transfer file registration skipped: invalid received_time=260.7 KB filename=Screenshot_20261017_205144_YouTube.jpg
+2026-10-18 13:34:28,305 [WARNING] Transfer file registration skipped: invalid received_time=161.6 KB filename=Screenshot_20261017_132036_Google.jpg
+2026-10-18 13:34:28,309 [WARNING] Transfer file registration skipped: invalid received_time=260.2 KB filename=Screenshot_20261017_131500_Google.jpg
+2026-10-18 13:34:28,313 [WARNING] Transfer file registration skipped: invalid received_time=212.8 KB filename=Screenshot_20261017_131434_Google.jpg

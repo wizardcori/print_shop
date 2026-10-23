@@ -1,6 +1,6 @@
 # PrintShop
 
-PrintShop is a Windows desktop application for managing customer file transfers and Wi-Fi access requests from a single store computer.
+PrintShop is a Windows desktop application for automating a print shop workflow from file upload through validation, printer routing, completion, and post-payment handover.
 
 ## Features
 
@@ -12,6 +12,10 @@ PrintShop is a Windows desktop application for managing customer file transfers 
 - **QR access links**: Generates QR codes for the active store network and hotspot address.
 - **Encrypted settings**: Protects LinkShare security data with Fernet encryption.
 - **Configurable connection limit**: Applies an application-level maximum connection limit.
+- **Order state machine**: Tracks `UPLOADED` through `PAID_HANDOVER` with rollback rules and audit history.
+- **Automated validation**: Checks file existence, format, size, paper size, and print options before acceptance.
+- **Smart printer routing**: Selects an available printer by paper/color capability and queue length.
+- **Centralized pricing and audit data**: Persists orders, per-file options, notifications, state history, and print logs in SQLite.
 
 ## Technology
 
@@ -22,6 +26,7 @@ PrintShop is a Windows desktop application for managing customer file transfers 
 - cryptography
 - psutil
 - PyInstaller
+- SQLite (local order and audit persistence)
 
 ## Project Structure
 

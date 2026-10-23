@@ -1,0 +1,11 @@
+# Integrated PrintShop architecture notes
+
+The application runs as one desktop process from src/main_app.py.
+
+- LinkBox owns file upload, transfer status, order creation, validation, and printer monitoring.
+- LinkShare owns the Wi-Fi approval UI, captive portal transport, sessions, and fare settings.
+- Windows Mobile Hotspot supplies NAT. The app provides DNS/HTTP captive-portal handling only.
+- Firewall, HTTPS interception, DoH/VPN blocking, and packet-level filtering are outside the current scope.
+
+The standalone LinkBox and LinkShare launchers were removed. Use the root run.bat or
+PrintShopApp/run.bat to launch the integrated application.
