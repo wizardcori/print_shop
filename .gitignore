@@ -122,6 +122,7 @@ cover/
 # ==========================================
 /Authenticate/Authenticate.txt
 /secrets/
+.continue/
 *.pem
 *.key
 .DS_Store
