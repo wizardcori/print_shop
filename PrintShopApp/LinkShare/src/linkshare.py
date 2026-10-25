@@ -1,4 +1,3 @@
-from curses import window
 import os
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget, 
@@ -332,7 +331,7 @@ def create_tab(window, current_ssid, hotspot_nic, hotspot_image, hotspot_network
         window.usage_history_tabs.removeTab(0)
 
     # 3. 정의된 순서대로 4개 탭을 반복문으로 일괄 생성 및 등록
-    for tab_name, headers in usage_tabs.items]:
+    for tab_name, headers in usage_tabs.items():
         headers = headers + ["Cookie", "User Info"]
         usage_tab = QWidget()
         usage_tab_layout = QVBoxLayout(usage_tab)
@@ -386,6 +385,105 @@ def create_tab(window, current_ssid, hotspot_nic, hotspot_image, hotspot_network
     window.usage_history_end = tab2_widget.findChild(QLineEdit, "usage_history_end")
     
     window.usage_history_total_label = tab2_widget.findChild(QLabel, "usage_history_total_label")
+
+    # 💡 3. 필터 콤보박스 변경 함수
+    def on_filter_combo_changed(index):
+        if window._is_updating_filter_ui:
+            return
+            
+        current_tab_idx = window.usage_history_tabs.currentIndex()
+        current_tab_name = window.usage_history_tabs.tabText(current_tab_idx)
+        
+        combo_text = window.usage_history_filter.currentText()
+        
+        # 날짜 계산 로직 (오늘 기준)
+        from datetime import datetime, timedelta
+        today = datetime.now().date()
+        
+        start_date = ""
+        end_date = ""
+        
+        if combo_text == "Today":
+            start_date = end_date = today.strftime("%Y-%m-%d")
+        elif combo_text == "Yesterday":
+            d = today - timedelta(days=1)
+            start_date = end_date = d.strftime("%Y-%m-%d")
+        elif "days ago" in combo_text:
+            # 예: "2 days ago" -> 숫자 추출
+            days_num = int(combo_text.split()[0])
+            d = today - timedelta(days=days_num)
+            start_date = end_date = d.strftime("%Y-%m-%d")
+        elif combo_text == "All":
+            start_date = ""
+            end_date = ""
+            
+        window._is_updating_filter_ui = True
+        if combo_text != "Custom":
+            window.usage_history_start.setText(start_date)
+            window.usage_history_end.setText(end_date)
+        window._is_updating_filter_ui = False
+        
+        # 현재 탭 상태에 저장
+        window.tab_filter_states[current_tab_name] = {
+            "combo_index": index,
+            "start": window.usage_history_start.text(),
+            "end": window.usage_history_end.text()
+        }
+        
+        # 테이블 필터링 실행
+        window.update_usage_history_tables()
+
+    # 💡 4. 날짜(Start/End) 변경 시그널 및 필터 날짜 변경 처리 함수
+    def on_date_field_changed():
+        if window._is_updating_filter_ui:
+            return
+            
+        current_tab_idx = window.usage_history_tabs.currentIndex()
+        current_tab_name = window.usage_history_tabs.tabText(current_tab_idx)
+        
+        start_val = window.usage_history_start.text().strip()
+        end_val = window.usage_history_end.text().strip()
+        
+        # 사용자가 직접 날짜를 수정했으므로 콤보박스를 'Custom'으로 변경 (Custom이 마지막 인덱스라 가정)
+        if start_val or end_val:
+            window._is_updating_filter_ui = True
+            custom_idx = window.usage_history_filter.count() - 1
+            window.usage_history_filter.setCurrentIndex(custom_idx)
+            window._is_updating_filter_ui = False
+
+        # 상태 기억 저장
+        window.tab_filter_states[current_tab_name] = {
+            "combo_index": window.usage_history_filter.currentIndex(),
+            "start": start_val,
+            "end": end_val
+        }
+        
+        # 필터 날짜 변경 시그널 발생 및 현재 열린 탭에 적용하여 필터링
+        window.update_usage_history_tables()
+
+    # 💡 5. 탭 전환 시 실행되는 함수
+    def custom_tab_changed(index):
+        tab_name = window.usage_history_tabs.tabText(index)
+        state = window.tab_filter_states.get(tab_name, {"combo_index": 0, "start": "", "end": ""})
+        
+        window._is_updating_filter_ui = True
+        window.usage_history_filter.setCurrentIndex(state["combo_index"])
+        window.usage_history_start.setText(state["start"])
+        window.usage_history_end.setText(state["end"])
+        window._is_updating_filter_ui = False
+        
+        # 기존 정의된 탭 변경 핸들러 호출 및 현재 탭 필터링 갱신
+        if hasattr(window, 'on_usage_history_tab_changed'):
+            window.on_usage_history_tab_changed(index)
+        window.update_usage_history_tables()
+
+    # 시그널 연결
+    window.usage_history_filter.currentIndexChanged.connect(on_filter_combo_changed)
+    window.usage_history_start.textChanged.connect(on_date_field_changed)
+    window.usage_history_end.textChanged.connect(on_date_field_changed)
+    window.usage_history_tabs.currentChanged.connect(custom_tab_changed)        
+
+
     
     # 💡 [개선 반영] 누적 사용량/금액 라벨 가독성 및 컬러 명시[cite: 1, 2]
     window.usage_history_total_label.setStyleSheet(
@@ -442,104 +540,6 @@ def update_captive_portal_status(window, text):
     label = getattr(window, 'captive_portal_status_label', None)
     if label is not None:
         label.setText(text)
-
-
-# 💡 3. 필터 콤보박스 변경 함수
-def on_filter_combo_changed(index):
-    if window._is_updating_filter_ui:
-        return
-        
-    current_tab_idx = window.usage_history_tabs.currentIndex()
-    current_tab_name = window.usage_history_tabs.tabText(current_tab_idx)
-    
-    combo_text = window.usage_history_filter.currentText()
-    
-    # 날짜 계산 로직 (오늘 기준)
-    from datetime import datetime, timedelta
-    today = datetime.now().date()
-    
-    start_date = ""
-    end_date = ""
-    
-    if combo_text == "Today":
-        start_date = end_date = today.strftime("%Y-%m-%d")
-    elif combo_text == "Yesterday":
-        d = today - timedelta(days=1)
-        start_date = end_date = d.strftime("%Y-%m-%d")
-    elif "days ago" in combo_text:
-        # 예: "2 days ago" -> 숫자 추출
-        days_num = int(combo_text.split()[0])
-        d = today - timedelta(days=days_num)
-        start_date = end_date = d.strftime("%Y-%m-%d")
-    elif combo_text == "All":
-        start_date = ""
-        end_date = ""
-        
-    window._is_updating_filter_ui = True
-    if combo_text != "Custom":
-        window.usage_history_start.setText(start_date)
-        window.usage_history_end.setText(end_date)
-    window._is_updating_filter_ui = False
-    
-    # 현재 탭 상태에 저장
-    window.tab_filter_states[current_tab_name] = {
-        "combo_index": index,
-        "start": window.usage_history_start.text(),
-        "end": window.usage_history_end.text()
-    }
-    
-    # 테이블 필터링 실행
-    window.update_usage_history_tables()
-
-# 💡 4. 날짜(Start/End) 변경 시그널 및 필터 날짜 변경 처리 함수
-def on_date_field_changed():
-    if window._is_updating_filter_ui:
-        return
-        
-    current_tab_idx = window.usage_history_tabs.currentIndex()
-    current_tab_name = window.usage_history_tabs.tabText(current_tab_idx)
-    
-    start_val = window.usage_history_start.text().strip()
-    end_val = window.usage_history_end.text().strip()
-    
-    # 사용자가 직접 날짜를 수정했으므로 콤보박스를 'Custom'으로 변경 (Custom이 마지막 인덱스라 가정)
-    if start_val or end_val:
-        window._is_updating_filter_ui = True
-        custom_idx = window.usage_history_filter.count() - 1
-        window.usage_history_filter.setCurrentIndex(custom_idx)
-        window._is_updating_filter_ui = False
-
-    # 상태 기억 저장
-    window.tab_filter_states[current_tab_name] = {
-        "combo_index": window.usage_history_filter.currentIndex(),
-        "start": start_val,
-        "end": end_val
-    }
-    
-    # 필터 날짜 변경 시그널 발생 및 현재 열린 탭에 적용하여 필터링
-    window.update_usage_history_tables()
-
-# 💡 5. 탭 전환 시 실행되는 함수
-def custom_tab_changed(index):
-    tab_name = window.usage_history_tabs.tabText(index)
-    state = window.tab_filter_states.get(tab_name, {"combo_index": 0, "start": "", "end": ""})
-    
-    window._is_updating_filter_ui = True
-    window.usage_history_filter.setCurrentIndex(state["combo_index"])
-    window.usage_history_start.setText(state["start"])
-    window.usage_history_end.setText(state["end"])
-    window._is_updating_filter_ui = False
-    
-    # 기존 정의된 탭 변경 핸들러 호출 및 현재 탭 필터링 갱신
-    if hasattr(window, 'on_usage_history_tab_changed'):
-        window.on_usage_history_tab_changed(index)
-    window.update_usage_history_tables()
-
-# 시그널 연결
-window.usage_history_filter.currentIndexChanged.connect(on_filter_combo_changed)
-window.usage_history_start.textChanged.connect(on_date_field_changed)
-window.usage_history_end.textChanged.connect(on_date_field_changed)
-window.usage_history_tabs.currentChanged.connect(custom_tab_changed)        
 
 
 TAB_TITLE = "🌐 Wi-Fi Pass Manager (LinkShare)"
