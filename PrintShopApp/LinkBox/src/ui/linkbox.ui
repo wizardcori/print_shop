@@ -1,0 +1,296 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>Tab1Widget</class>
+ <widget class="QWidget" name="Tab1Widget">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>950</width>
+    <height>750</height>
+   </rect>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QSplitter" name="main_splitter">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+     <widget class="QGroupBox" name="config_group_box">
+      <property name="sizePolicy">
+       <sizepolicy hsizetype="Preferred" vsizetype="Maximum">
+        <horstretch>0</horstretch>
+        <verstretch>0</verstretch>
+       </sizepolicy>
+      </property>
+      <property name="checkable">
+       <bool>true</bool>
+      </property>
+      <property name="checked">
+       <bool>true</bool>
+      </property>
+      <property name="title">
+       <string>Server &amp; Location Configuration</string>
+      </property>
+      <layout class="QVBoxLayout" name="config_layout">
+       <item>
+        <widget class="QSplitter" name="top_splitter">
+         <property name="orientation">
+          <enum>Qt::Horizontal</enum>
+         </property>
+         <widget class="QGroupBox" name="group_box">
+          <property name="title">
+           <string>Server &amp; Connection Settings</string>
+          </property>
+          <layout class="QVBoxLayout" name="left_layout">
+           <item>
+            <layout class="QHBoxLayout" name="folder_layout">
+             <item>
+              <widget class="QLabel" name="label_folder">
+               <property name="text">
+                <string>Save Location:</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLineEdit" name="folder_input">
+               <property name="readOnly">
+                <bool>true</bool>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="folder_btn">
+               <property name="text">
+                <string>Browse...</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+           <item>
+            <layout class="QHBoxLayout" name="nic_layout">
+             <item>
+              <widget class="QLabel" name="label_nic">
+               <property name="text">
+                <string>Internet NIC:</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QComboBox" name="nic_combo"/>
+             </item>
+             <item>
+              <widget class="QPushButton" name="rescan_nic_btn">
+               <property name="text">
+                <string>Rescan NIC</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+           <item>
+            <layout class="QHBoxLayout" name="save_tab_layout">
+             <item>
+              <widget class="QLabel" name="label_save_tab">
+               <property name="text">
+                <string>Save Tab:</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QComboBox" name="save_tab_combo"/>
+             </item>
+            </layout>
+           </item>
+          </layout>
+         </widget>
+         <widget class="QGroupBox" name="qr_group_box">
+          <property name="title">
+           <string>QR Code &amp; URL</string>
+          </property>
+          <layout class="QVBoxLayout" name="qr_layout">
+           <item>
+            <widget class="QLabel" name="qr_label">
+             <property name="minimumSize">
+              <size>
+               <width>210</width>
+               <height>210</height>
+              </size>
+             </property>
+             <property name="alignment">
+              <set>Qt::AlignCenter</set>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="url_label">
+             <property name="text">
+              <string>Generated URL: </string>
+             </property>
+             <property name="alignment">
+              <set>Qt::AlignCenter</set>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+         <widget class="QGroupBox" name="zone_group_box">
+          <property name="title">
+           <string>QR Location &amp; Table Selection</string>
+          </property>
+          <layout class="QVBoxLayout" name="zone_group_layout">
+           <item>
+            <layout class="QHBoxLayout" name="top_zone_layout">
+             <item>
+              <widget class="QLabel" name="label_location">
+               <property name="text">
+                <string>Location:</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QComboBox" name="zone_combo"/>
+             </item>
+             <item>
+              <widget class="QLineEdit" name="zone_input">
+               <property name="enabled">
+                <bool>false</bool>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+           <item>
+            <widget class="QWidget" name="zone_buttons_widget">
+             <layout class="QGridLayout" name="zone_buttons_layout"/>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QGroupBox" name="bottom_group_box">
+      <property name="title">
+       <string>Print Jobs Management</string>
+      </property>
+      <layout class="QVBoxLayout" name="bottom_group_layout">
+       <item>
+        <widget class="QGroupBox" name="print_job_group_box">
+         <property name="title">
+          <string></string>
+         </property>
+         <layout class="QVBoxLayout" name="print_job_group_layout">
+          <item>
+           <layout class="QHBoxLayout" name="transfer_filter_layout">
+            <item>
+             <widget class="QCheckBox" name="completed_only_checkbox">
+              <property name="text">
+               <string>Show completed too</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QLabel" name="label_period">
+              <property name="text">
+               <string>Display period:</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QComboBox" name="transfer_period_combo"/>
+            </item>
+            <item>
+             <widget class="QDateEdit" name="transfer_start_date">
+              <property name="calendarPopup">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QLabel" name="label_tilde">
+              <property name="text">
+               <string>~</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QDateEdit" name="transfer_end_date">
+              <property name="calendarPopup">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <widget class="QTabWidget" name="tab_widget">
+         <widget class="QWidget" name="print_jobs_tab">
+          <attribute name="title">
+           <string>Print Jobs</string>
+          </attribute>
+          <layout class="QVBoxLayout" name="print_jobs_layout">
+           <item>
+            <widget class="QTableWidget" name="print_job_table">
+             <column>
+              <property name="text">
+               <string>Printer</string>
+              </property>
+             </column>
+             <column>
+              <property name="text">
+               <string>File Name</string>
+              </property>
+             </column>
+             <column>
+              <property name="text">
+               <string>Job ID</string>
+              </property>
+             </column>
+             <column>
+              <property name="text">
+               <string>Status</string>
+              </property>
+             </column>
+             <column>
+              <property name="text">
+               <string>Tag</string>
+              </property>
+             </column>
+             <column>
+              <property name="text">
+               <string>Output Path</string>
+              </property>
+             </column>
+             <column>
+              <property name="text">
+               <string>Detected Time</string>
+              </property>
+             </column>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections>
+  <connection>
+   <sender>config_group_box</sender>
+   <signal>toggled(bool)</signal>
+   <receiver>top_splitter</receiver>
+   <slot>setVisible(bool)</slot>
+  </connection>
+ </connections>
+</ui>

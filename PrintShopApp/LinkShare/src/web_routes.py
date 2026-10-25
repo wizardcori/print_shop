@@ -11,6 +11,7 @@ import subprocess
 import socketserver
 
 from flask import Response, make_response, redirect, render_template, request
+from Common.globals import CONFIG_ENCODING
 
 from LinkShare.src.client_identity_service import get_client_identity as resolve_client_identity
 from LinkShare.src.customer_request_service import customer_request as handle_customer_request

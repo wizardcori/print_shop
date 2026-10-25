@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QTabWidget
 from PySide6.QtGui import QAction
-from LinkBox.src.ui_linkbox_layout import create_tab as create_linkbox_tab
-from LinkShare.src.ui_linkshare_layout import create_tab as create_linkshare_tab
+from LinkBox.src.linkbox import create_tab as create_linkbox_tab
+from LinkShare.src.linkshare import create_tab as create_linkshare_tab
 
 def setup_integrated_ui(window, current_upload_folder, current_zones, current_save_tabs, interfaces, current_ssid, internet_nic, hotspot_nic, hotspot_image, hotspot_network, hotspot_gateway, max_connections, current_main_tab='file_receiver'):
     window.settings_action = QAction('Open Settings', window)

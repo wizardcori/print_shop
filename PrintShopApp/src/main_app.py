@@ -158,7 +158,7 @@ from LinkShare.src.network_adapter_service import (
     get_network_interfaces as linkshare_get_network_interfaces,
     log_wifi as linkshare_log_wifi,
 )
-from LinkShare.src.ui_linkshare_layout import update_captive_portal_status
+from LinkShare.src.linkshare import update_captive_portal_status
 
 # --- Path and Subfolder Integration ---
 # Source mode uses the project folder.  Frozen deployments use the executable

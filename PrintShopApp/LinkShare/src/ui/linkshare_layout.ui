@@ -1,0 +1,202 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>LinkShareWidget</class>
+ <widget class="QWidget" name="LinkShareWidget">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1200</width>
+    <height>800</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Wi-Fi Pass Manager (LinkShare)</string>
+  </property>
+  <layout class="QVBoxLayout" name="tab2_layout">
+   <item>
+    <widget class="QSplitter" name="linkshare_splitter">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+     <property name="opaqueResize">
+      <bool>true</bool>
+     </property>
+     <property name="childrenCollapsible">
+      <bool>false</bool>
+     </property>
+     <property name="handleWidth">
+      <number>12</number>
+     </property>
+     
+     <!-- 1. 상단 핫스팟 정보 및 컨트롤 영역 -->
+     <widget class="QGroupBox" name="hotspot_info_group">
+      <property name="title">
+       <string>Current Hotspot SSID</string>
+      </property>
+      <layout class="QHBoxLayout" name="hotspot_info_layout">
+       <item>
+        <widget class="QSplitter" name="hotspot_horizontal_splitter">
+         <property name="orientation">
+          <enum>Qt::Horizontal</enum>
+         </property>
+         
+         <!-- 핫스팟 제어 패널 -->
+         <widget class="QGroupBox" name="hotspot_control_group">
+          <property name="title">
+           <string>Hotspot Control</string>
+          </property>
+          <layout class="QVBoxLayout" name="hotspot_control_layout">
+           <item>
+            <layout class="QHBoxLayout" name="hotspot_controls"/>
+           </item>
+           <item>
+            <widget class="QLabel" name="hotspot_name_label">
+             <property name="text">
+              <string>Active Hotspot Name: -</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="hotspot_nic_label">
+             <property name="text">
+              <string>Hotspot NIC: -</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="hotspot_network_label">
+             <property name="text">
+              <string>Hotspot IP range: -</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="CollapsibleStatusLabel" name="captive_portal_status_label">
+             <property name="text">
+              <string>Captive Portal: starting...</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="CollapsibleStatusLabel" name="hotspot_status_label">
+             <property name="text">
+              <string>Hotspot status: checking...</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="hotspot_image_label">
+             <property name="alignment">
+              <set>Qt::AlignCenter</set>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+         
+         <!-- QR 코드 공유 패널 -->
+         <widget class="QGroupBox" name="qr_group">
+          <property name="title">
+           <string>Internet Sharing QR Code</string>
+          </property>
+          <layout class="QVBoxLayout" name="qr_layout"/>
+         </widget>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+     
+     <!-- 2. 세션 및 사용 모니터 그룹 (필터, 상태 요약, 탭 영역 통합) -->
+     <widget class="QGroupBox" name="session_monitor_group">
+      <property name="title">
+       <string>Session &amp; Usage Monitor</string>
+      </property>
+      <layout class="QVBoxLayout" name="session_monitor_layout">
+       
+       <!-- 필터 그룹박스 -->
+       <item>
+        <widget class="QGroupBox" name="linkshare_filter_group">
+         <property name="title">
+          <string>Filter Options</string>
+         </property>
+         <layout class="QVBoxLayout" name="history_filter_group_layout">
+          <item>
+           <layout class="QHBoxLayout" name="history_filter_layout">
+            <item>
+             <widget class="QComboBox" name="usage_history_filter"/>
+            </item>
+            <item>
+             <widget class="QLineEdit" name="usage_history_start">
+              <property name="placeholderText">
+               <string>Start date YYYY-MM-DD</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QLineEdit" name="usage_history_end">
+              <property name="placeholderText">
+               <string>End date YYYY-MM-DD</string>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+         </layout>
+        </widget>
+       </item>
+
+       <!-- 상태 요약 및 사용 기록 탭 영역 -->
+       <item>
+        <widget class="QWidget" name="status_panel">
+         <layout class="QVBoxLayout" name="status_panel_layout">
+          <item>
+           <widget class="QGroupBox" name="status_group">
+            <layout class="QHBoxLayout" name="status_layout"/>
+           </widget>
+          </item>
+          <item>
+           <widget class="QTabWidget" name="usage_history_tabs">
+            <widget class="QWidget" name="history_tab">
+             <attribute name="title">
+              <string>Usage History</string>
+             </attribute>
+             <layout class="QVBoxLayout" name="history_layout">
+              <item>
+               <widget class="QLabel" name="usage_history_total_label">
+                <property name="text">
+                 <string>Total usage: 0 min                         Total amount: 0 PHP</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QTableWidget" name="history_table"/>
+              </item>
+             </layout>
+            </widget>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+
+      </layout>
+     </widget>
+
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>CollapsibleStatusLabel</class>
+   <extends>QLabel</extends>
+   <header>ui_linkshare_layout</header>
+  </customwidget>
+  <customwidget>
+   <class>AutoFitTextLabel</class>
+   <extends>QLabel</extends>
+   <header>ui_linkshare_layout</header>
+  </customwidget>
+ </customwidgets>
+</ui>
