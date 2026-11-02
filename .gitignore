@@ -116,6 +116,13 @@ coverage.xml
 .pytest_cache/
 cover/
 
+# 캐시 및 파싱 파일 제외
+**/cache/
+*.sisc
+
+# 가상환경 폴더 제외 (보통 루트에 있는 경우)
+.venv/
+venv/
 
 # ==========================================
 # Credentials & OS Files
