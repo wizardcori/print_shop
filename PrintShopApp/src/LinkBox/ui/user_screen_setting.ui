@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>UserScreenSetting</class>
+ <widget class="QWidget" name="UserScreenSetting">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>450</width>
+    <height>280</height>
+   </rect>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <!-- 서비스 아이피 설정 그룹 -->
+   <item>
+    <widget class="QGroupBox" name="ipGroup">
+     <property name="title"><string>서비스 아이피 설정</string></property>
+     <layout class="QHBoxLayout" name="layoutIp">
+      <item>
+       <widget class="QLineEdit" name="ipEdit"/>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <!-- QR 코드 저장 폴더 그룹 -->
+   <item>
+    <widget class="QGroupBox" name="qrFolderGroup">
+     <property name="title"><string>QR 코드 저장 폴더</string></property>
+     <layout class="QHBoxLayout" name="layoutQrFolder">
+      <item>
+       <widget class="QLineEdit" name="qrFolderEdit"/>
+      </item>
+      <item>
+       <widget class="QPushButton" name="qrFolderBrowse">
+        <property name="text"><string>찾기</string></property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <!-- 파일 전송 완료 사운드 그룹 -->
+   <item>
+    <widget class="QGroupBox" name="soundGroup">
+     <property name="title"><string>파일 전송 완료 사운드 파일 풀패스</string></property>
+     <layout class="QHBoxLayout" name="layoutSound">
+      <item>
+       <widget class="QLineEdit" name="soundEdit"/>
+      </item>
+      <item>
+       <widget class="QPushButton" name="soundBrowse">
+        <property name="text"><string>찾기</string></property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <!-- 저장 & 상태 -->
+   <item>
+    <widget class="QPushButton" name="saveButton">
+     <property name="text"><string>저장</string></property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="statusLabel"/>
+   </item>
+   <item>
+    <spacer name="verticalSpacer">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+     <property name="sizetype">
+      <enum>QSizePolicy::Expanding</enum>
+     </property>
+    </spacer>
+   </item>
+  </layout>
+ </widget>
+</ui>

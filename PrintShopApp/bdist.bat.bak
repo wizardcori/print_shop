@@ -30,10 +30,10 @@ for /f %%A in ('powershell.exe -NoProfile -Command "$v='%USE_PRINTER_WATCH%'.Tri
 for /f %%A in ('powershell.exe -NoProfile -Command "$v='%USE_BUILD_TIME_TEST%'.Trim().ToLowerInvariant(); if ($v -in @('1','true','yes','on')) {'true'} else {'false'}"') do set "USE_BUILD_TIME_TEST=%%A"
 for /f %%A in ('powershell.exe -NoProfile -Command "$v='%MODE%'.Trim().ToLowerInvariant(); if ($v -eq 'development') {'development'} else {'production'}"') do set "MODE=%%A"
 set "PYINSTALLER_EXCLUDES="
-if /i "%USE_PRINTER_WATCH%"=="false" set "PYINSTALLER_EXCLUDES=--exclude-module LinkBox.src.printer_monitor_service"
-if /i "%USE_PRINTER_WATCH%"=="0" set "PYINSTALLER_EXCLUDES=--exclude-module LinkBox.src.printer_monitor_service"
-if /i "%USE_PRINTER_WATCH%"=="no" set "PYINSTALLER_EXCLUDES=--exclude-module LinkBox.src.printer_monitor_service"
-if /i "%USE_PRINTER_WATCH%"=="off" set "PYINSTALLER_EXCLUDES=--exclude-module LinkBox.src.printer_monitor_service"
+if /i "%USE_PRINTER_WATCH%"=="false" set "PYINSTALLER_EXCLUDES=--exclude-module LinkBox.printer_monitor_service"
+if /i "%USE_PRINTER_WATCH%"=="0" set "PYINSTALLER_EXCLUDES=--exclude-module LinkBox.printer_monitor_service"
+if /i "%USE_PRINTER_WATCH%"=="no" set "PYINSTALLER_EXCLUDES=--exclude-module LinkBox.printer_monitor_service"
+if /i "%USE_PRINTER_WATCH%"=="off" set "PYINSTALLER_EXCLUDES=--exclude-module LinkBox.printer_monitor_service"
 echo [BUILD CONFIG] MODE=%MODE%
 echo [BUILD CONFIG] USE_PRINTER_WATCH=%USE_PRINTER_WATCH%
 echo [BUILD CONFIG] USE_BUILD_TIME_TEST=%USE_BUILD_TIME_TEST%

@@ -59,7 +59,7 @@ if %errorlevel% equ 0 goto skip_pip
 
 echo [INFO] Installing required packages (PySide6, Flask, qrcode, Pillow, cryptography, psutil, WinRT networking)...
 python -m pip install --upgrade pip > nul
-pip install PySide6 Flask qrcode[pil] cryptography psutil winrt-Windows.Foundation winrt-Windows.Networking.Connectivity winrt-Windows.Networking.NetworkOperators
+pip install PySide6 Flask qrcode[pil] nicegui PyMuPDF cryptography psutil winrt-Windows.Foundation winrt-Windows.Networking.Connectivity winrt-Windows.Networking.NetworkOperators
 echo Package installation complete.
 goto check_ssl
 
@@ -79,6 +79,11 @@ goto create_folder
 
 :skip_ssl
 echo [INFO] SSL certificates already exist. Skipping.
+
+
+REM 1. winget을 이용한 LibreOffice 자동 설치 (선택사항)
+echo LibreOffice 확인 및 설치 중...
+winget install TheDocumentFoundation.LibreOffice --accept-source-agreements --accept-package-agreements
 
 :create_folder
 echo.

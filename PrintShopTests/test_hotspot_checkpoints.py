@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parent
 PROJECT_APP = ROOT.parent / "PrintShopApp"
 sys.path.insert(0, str(PROJECT_APP))
 
-from LinkShare.src.hotspot_service import (
+from LinkShare.hotspot_service import (
     check_hotspot_checkpoints,
     run_hotspot_diagnostics,
     set_hotspot_enabled,
@@ -62,7 +62,7 @@ class TestHotspotCheckpoints(unittest.TestCase):
 
     def test_set_hotspot_enabled_enforces_ingress_media(self):
         """Verify set_hotspot_enabled aborts if ingress adapter has media disconnected."""
-        with patch('LinkShare.src.hotspot_service.check_hotspot_checkpoints') as mock_cp:
+        with patch('LinkShare.hotspot_service.check_hotspot_checkpoints') as mock_cp:
             mock_cp.return_value = {
                 'all_passed': False,
                 'checkpoints': {
@@ -86,7 +86,7 @@ class TestHotspotCheckpoints(unittest.TestCase):
 
     def test_choose_optimal_adapters_rules(self):
         """Test physical adapter selection rules 1 through 6."""
-        from LinkShare.src.network_adapter_service import choose_optimal_adapters
+        from LinkShare.network_adapter_service import choose_optimal_adapters
 
         interfaces = [
             ("Ethernet (192.168.1.10) [MAC: 00:11:22:33:44:55]", "192.168.1.10", True, False),
@@ -98,8 +98,8 @@ class TestHotspotCheckpoints(unittest.TestCase):
         # Case 1: Both Ethernet (wired) and Wi-Fi have internet.
         # Rule 2: Wired preferred for internet, Wi-Fi left for hotspot.
         # Rule 5: Virtual adapter Tailscale excluded.
-        with patch('LinkShare.src.network_adapter_service.get_adapter_hardware_info') as mock_hw, \
-             patch('LinkShare.src.network_adapter_service.check_global_internet', return_value=True):
+        with patch('LinkShare.network_adapter_service.get_adapter_hardware_info') as mock_hw, \
+             patch('LinkShare.network_adapter_service.check_global_internet', return_value=True):
             mock_hw.return_value = (
                 {'Ethernet', 'Wi-Fi', 'Wi-Fi 2'},  # Physical set
                 {'Ethernet': 'Intel Ethernet', 'Wi-Fi': 'Wi-Fi 6E', 'Wi-Fi 2': 'Realtek Wi-Fi'},
@@ -111,8 +111,8 @@ class TestHotspotCheckpoints(unittest.TestCase):
 
         # Case 2: Only Wi-Fi has internet, Wi-Fi 2 has no internet.
         # Rule 3: The one with internet is Internet NIC, the one without is Hotspot NIC.
-        with patch('LinkShare.src.network_adapter_service.get_adapter_hardware_info') as mock_hw, \
-             patch('LinkShare.src.network_adapter_service.check_global_internet', return_value=True):
+        with patch('LinkShare.network_adapter_service.get_adapter_hardware_info') as mock_hw, \
+             patch('LinkShare.network_adapter_service.check_global_internet', return_value=True):
             mock_hw.return_value = (
                 {'Wi-Fi', 'Wi-Fi 2'},
                 {'Wi-Fi': 'Wi-Fi 6E', 'Wi-Fi 2': 'Realtek Wi-Fi'},
@@ -124,8 +124,8 @@ class TestHotspotCheckpoints(unittest.TestCase):
 
         # Case 3: Neither has internet.
         # Rule 4: Internet NIC fails (None/empty).
-        with patch('LinkShare.src.network_adapter_service.get_adapter_hardware_info') as mock_hw, \
-             patch('LinkShare.src.network_adapter_service.check_global_internet', return_value=False):
+        with patch('LinkShare.network_adapter_service.get_adapter_hardware_info') as mock_hw, \
+             patch('LinkShare.network_adapter_service.check_global_internet', return_value=False):
             mock_hw.return_value = (
                 {'Wi-Fi', 'Wi-Fi 2'},
                 {'Wi-Fi': 'Wi-Fi 6E', 'Wi-Fi 2': 'Realtek Wi-Fi'},

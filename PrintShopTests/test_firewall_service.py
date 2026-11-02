@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parent
 PROJECT_APP = ROOT.parent / "PrintShopApp"
 sys.path.insert(0, str(PROJECT_APP))
 
-from LinkShare.src.firewall_service import (
+from LinkShare.firewall_service import (
     apply_hotspot_firewall_rules,
     is_admin_user,
     is_hotspot_subnet_active,
@@ -23,7 +23,7 @@ from LinkShare.src.firewall_service import (
 class TestFirewallService(unittest.TestCase):
     def test_non_admin_fails_check1(self):
         """Verify non-admin execution fails at Step 1 Check 1."""
-        with patch("LinkShare.src.firewall_service.is_admin_user", return_value=False):
+        with patch("LinkShare.firewall_service.is_admin_user", return_value=False):
             res = apply_hotspot_firewall_rules()
             self.assertFalse(res["success"])
             self.assertIn("check1_admin", res["step1_check"])
@@ -32,8 +32,8 @@ class TestFirewallService(unittest.TestCase):
 
     def test_hotspot_inactive_when_enforced_fails_check2(self):
         """Verify inactive hotspot fails at Step 1 Check 2 when enforce_hotspot_active=True."""
-        with patch("LinkShare.src.firewall_service.is_admin_user", return_value=True), \
-             patch("LinkShare.src.firewall_service.is_hotspot_subnet_active", return_value=(False, "Gateway inactive")):
+        with patch("LinkShare.firewall_service.is_admin_user", return_value=True), \
+             patch("LinkShare.firewall_service.is_hotspot_subnet_active", return_value=(False, "Gateway inactive")):
             res = apply_hotspot_firewall_rules(enforce_hotspot_active=True)
             self.assertFalse(res["success"])
             self.assertIn("check2_hotspot_active", res["step1_check"])
@@ -79,10 +79,10 @@ class TestFirewallService(unittest.TestCase):
                 }
             return None
 
-        with patch("LinkShare.src.firewall_service.is_admin_user", return_value=True), \
-             patch("LinkShare.src.firewall_service.is_hotspot_subnet_active", return_value=(True, "Hotspot active")), \
-             patch("LinkShare.src.firewall_service.run_powershell", side_effect=fake_run_ps), \
-             patch("LinkShare.src.firewall_service.query_firewall_rule", side_effect=fake_query_rule):
+        with patch("LinkShare.firewall_service.is_admin_user", return_value=True), \
+             patch("LinkShare.firewall_service.is_hotspot_subnet_active", return_value=(True, "Hotspot active")), \
+             patch("LinkShare.firewall_service.run_powershell", side_effect=fake_run_ps), \
+             patch("LinkShare.firewall_service.query_firewall_rule", side_effect=fake_query_rule):
 
             res = apply_hotspot_firewall_rules(
                 web_port=5000,
