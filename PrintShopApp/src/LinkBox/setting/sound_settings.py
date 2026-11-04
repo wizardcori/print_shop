@@ -9,7 +9,7 @@ except ImportError:
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QLineEdit
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QCheckBox, QPushButton, QHBoxLayout, QRadioButton, QButtonGroup, QFileDialog, QMessageBox
 from Common.config import FileConfigManager, ConfigType
-from Common.settings_dialog import register_settings_tab
+from Common.settings_registry import register_settings_tab
 from Common.paths import APPROVAL_SOUND_DIR
 from LinkBox.print_log_writer import play_notification_sound
 

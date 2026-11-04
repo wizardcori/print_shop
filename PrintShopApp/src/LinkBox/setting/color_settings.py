@@ -1,7 +1,7 @@
 """Color Output options settings and UI component."""
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QListWidget, QHBoxLayout, QLineEdit, QPushButton
 from Common.config import FileConfigManager, ConfigType
-from Common.settings_dialog import register_settings_tab
+from Common.settings_registry import register_settings_tab
 
 DEFAULT_COLOR_OPTIONS = ['Color', 'B&W']
 

@@ -24,6 +24,9 @@ if exist ".venv\Scripts\python.exe" (
 ) else if exist "main_app.exe" (
     powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "& { $p = Join-Path '%~dp0src' 'create_admin_shortcut.py'; if (Get-Command py -ErrorAction SilentlyContinue) { py $p } }"
 )
+
+".venv\Scripts\python.exe" src/build_config_gen.py
+
 if "%PRINTSHOP_ADD_SAMPLE_TREE_ITEM%"=="1" goto run_python
 if exist "main_app.exe" goto run_exe
 :run_python

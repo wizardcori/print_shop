@@ -7,14 +7,14 @@ from PySide6.QtGui  import QPixmap
 
 from Common.config import FileConfigManager, ConfigType
 from Common.paths import DATA_DIR
-from Common.settings_dialog import register_settings_tab
+from Common.settings_registry import register_settings_tab
 
 class StorageDisplayConfig(FileConfigManager):
     section = "StorageDisplayConfig"
     section_order = 20
     schema = {
         'hotspot_image': {"default": "", "type": ConfigType.STRING},
-        'fare_dir': {"default": os.path.join(DATA_DIR, 'fare'), "type": ConfigType.FULLPATH},
+        # 'fare_image_dir': {"default": os.path.join(DATA_DIR, 'fare'), "type": ConfigType.FULLPATH},
     }
 
 class StorageDisplayTab(QWidget):
@@ -25,16 +25,16 @@ class StorageDisplayTab(QWidget):
 
     def init_ui(self):
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("<h3>Storage & Display Settings</h3>"))
+        # layout.addWidget(QLabel("<h3>Storage & Display Settings</h3>"))
         
-        layout.addWidget(QLabel("<b>Log Storage Folder Path:</b>"))
-        path_layout = QHBoxLayout()
-        self.path_input = QLineEdit(self.config.get('fare_dir'))
-        path_layout.addWidget(self.path_input)
-        browse_btn = QPushButton("Browse...")
-        browse_btn.clicked.connect(self.browse_folder)
-        path_layout.addWidget(browse_btn)
-        layout.addLayout(path_layout)
+        # layout.addWidget(QLabel("<b>Log Storage Folder Path:</b>"))
+        # path_layout = QHBoxLayout()
+        # self.path_input = QLineEdit(self.config.get('fare_image_dir'))
+        # path_layout.addWidget(self.path_input)
+        # browse_btn = QPushButton("Browse...")
+        # browse_btn.clicked.connect(self.browse_folder)
+        # path_layout.addWidget(browse_btn)
+        # layout.addLayout(path_layout)
 
         image_layout = QHBoxLayout()
         image_layout.addWidget(QLabel("Hotspot image:"))
@@ -76,7 +76,7 @@ class StorageDisplayTab(QWidget):
         self.image_preview.clear()
 
     def save_to_config(self):
-        self.config.set('fare_dir', self.path_input.text().strip())
+        self.config.set('fare_image_dir', self.path_input.text().strip())
         self.config.set('hotspot_image', self.image_path_input.text().strip())
 
 register_settings_tab('linkbox.storage-display-settings', 'Storage & Display', StorageDisplayTab, order=15)

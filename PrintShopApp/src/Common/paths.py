@@ -3,7 +3,6 @@
 import os
 import sys
 
-
 APP_NAME = 'PrintShopApp'
 
 # 실행 환경에 따라 APPDATA_DIR 설정
@@ -27,11 +26,6 @@ else:
 
 # 프로그램 데이터 폴더 설정
 DATA_DIR = os.path.join(PROGRAM_DATA_DIR, 'data')
-
-print("[INFO] app dir : " + APPLICATION_DIR, flush=True)
-print("[INFO] data dir : " + DATA_DIR, flush=True)
-
-
 CONFIG_DIR = os.path.join(DATA_DIR, 'config')
 CONFIG_FILE = APP_NAME + '.ini'
 
@@ -42,10 +36,18 @@ APPROVAL_SOUND_DIR = os.path.join(SOUND_DIR, 'approval')
 PRINT_MONITOR_SOUND_DIR = os.path.join(SOUND_DIR, 'print_monitor_sounds')
 TRANSFER_REGISTRY_FILE = os.path.join(DATA_DIR, 'linkbox_transfer_files.json')
 
-
 PRINT_REQUEST_QRCODE_FULLPATH = os.path.join(SOUND_DIR, 'print_monitor_sounds')
 PRINT_REQUEST_ADDED_SOUND = os.path.join(DATA_DIR, 'linkbox_transfer_files.json')
 
+DATA_DIR = os.path.join(PROGRAM_DATA_DIR, 'data')
+QRCODE_DIR = os.path.join(DATA_DIR, 'qrcode')
+NETWORK_QR_OUTPUT_DIR = os.path.join(QRCODE_DIR, 'network')
+CAPTIVE_QR_OUTPUT_DIR = os.path.join(QRCODE_DIR, 'captive')
+PRINTJOB_QR_OUTPUT_DIR = os.path.join(QRCODE_DIR, 'printjob')
+
+
+QRCODE_LOG_DIR = os.path.join(LOG_DIR, 'qrcode')
+QRCODE_LOG_FULLPATH = os.path.join(QRCODE_LOG_DIR, 'qrcode.log')
 
 
 def get_ui_file_path(file_path, sub_folder, filename):
@@ -57,3 +59,10 @@ def get_ui_file_path(file_path, sub_folder, filename):
     if not os.path.exists(ui_path):
         ui_path = os.path.join(current_dir, filename)
     return ui_path
+
+def get_ui_file_path(file_path, sub_folder, filename):
+    # 💡 함수 내부에서 필요한 시점에 임포트 (순환 참조 방지)
+    from .log import logd
+    logd("[INFO] APP_NAME        : " + APP_NAME)
+    logd("[INFO] APPLICATION_DIR : " + APPLICATION_DIR)
+    logd("[INFO] DATA_DIR        : " + DATA_DIR)

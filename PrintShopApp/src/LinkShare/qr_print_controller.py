@@ -9,6 +9,10 @@ from PySide6.QtWidgets import (
     QMessageBox, QPushButton, QRadioButton, QVBoxLayout,
 )
 from PySide6.QtGui import QPageSize
+
+from qr_log import QrcodeLog
+
+
 def show_network_qr_print_dialog(window):
     if not hasattr(window, 'hotspot_network_pixmap') or window.hotspot_network_pixmap.isNull():
         QMessageBox.warning(window, "Print QR Code", "The network QR code is not ready yet.")
@@ -174,4 +178,3 @@ def print_qr_code(window, scale):
         QMessageBox.warning(window, "Print QR Code", "The QR code is not ready yet.")
         return
     print_qr_pixmap(window, window.hotspot_qr_pixmap, "Captive Portal QR", scale)
-

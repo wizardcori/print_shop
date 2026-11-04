@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "PrintShopApp"))
-from Common.db import AppDatabase  # noqa: E402
+from Common.db import BaseDb  # noqa: E402
 
 
 class TestDatabase(unittest.TestCase):
@@ -15,7 +15,7 @@ class TestDatabase(unittest.TestCase):
         # SQLite may briefly retain a Windows file handle after a context exits.
         # Ignore cleanup errors because this is an isolated disposable test folder.
         self.temp_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
-        self.database = AppDatabase(str(Path(self.temp_dir.name) / "test.db"))
+        self.database = BaseDb(str(Path(self.temp_dir.name) / "test.db"))
 
     def tearDown(self):
         self.temp_dir.cleanup()

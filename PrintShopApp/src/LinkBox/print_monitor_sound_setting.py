@@ -5,7 +5,7 @@ from PySide6.QtWidgets import QWidget, QLineEdit, QPushButton, QLabel, QFileDial
 from Common.paths import PRINT_MONITOR_SOUND_DIR
 from Common.globals import load_ui_safely
 from Common.config import FileConfigManager, ConfigType
-from Common.settings_dialog import register_settings_tab
+from Common.settings_registry import register_settings_tab
 
 from .print_log_writer import write_system_log
 
@@ -34,13 +34,13 @@ class PrintMonitorSoundSettings(QWidget):
         current_dir = os.path.dirname(os.path.abspath(__file__))
         ui_path = os.path.join(current_dir, "ui", "print_monitor_sound_settings.ui")
         write_system_log('WARNING', f"UI 파일 경로: {ui_path}")
-        print(f"UI 파일 경로: {ui_path}")  # 디버그용 출력
+        logd(f"UI 파일 경로: {ui_path}")  # 디버그용 출력
 
         try:
             # 안전한 로딩 함수 호출
             self.ui = load_ui_safely(ui_path, self)
         except Exception as e:
-            print(e)
+            logd(e)
             write_system_log('ERROR', f"UI 파일 경로 로드 실패 ({ui_path}): {e}")
 
         # 위젯 참조

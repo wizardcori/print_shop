@@ -1,0 +1,412 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>HotspotSettingsWidget</class>
+ <widget class="QWidget" name="HotspotSettingsWidget">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1200</width>
+    <height>950</height>
+   </rect>
+  </property>
+  <layout class="QVBoxLayout" name="main_layout">
+   
+   <!-- 1. Hotspot Control 그룹박스 -->
+   <item>
+    <widget class="QGroupBox" name="hotspot_control_group">
+     <property name="title">
+      <string>Hotspot Control</string>
+     </property>
+     <layout class="QVBoxLayout" name="hotspot_control_layout">
+      <item>
+       <layout class="QHBoxLayout" name="hotspot_controls_layout">
+        <item>
+         <widget class="QLabel" name="hotspot_status_btn">
+          <property name="text"><string>Checking status</string></property>
+          <property name="alignment"><set>Qt::AlignCenter</set></property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="hotspot_on_btn">
+          <property name="text"><string>Turn Hotspot On</string></property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="hotspot_off_btn">
+          <property name="text"><string>Turn Hotspot Off</string></property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="hotspot_diagnose_btn">
+          <property name="text"><string>Run Diagnostics</string></property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="active_info_layout">
+        <item>
+         <widget class="QLabel" name="active_name_label">
+          <property name="text"><string>Active Hotspot Name: -</string></property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="active_nic_label">
+          <property name="text"><string>Hotspot NIC: -</string></property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="active_range_label">
+          <property name="text"><string>Hotspot IP range: -</string></property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
+
+   <!-- 2. Internet Sharing QR Code 그룹박스 (기본 설정 요소들을 QR 코드 밑으로 통합) -->
+   <item>
+    <widget class="QGroupBox" name="qr_group">
+     <property name="sizePolicy">
+      <sizepolicy hsizetype="Preferred" vsizetype="Expanding">
+       <horstretch>0</horstretch>
+       <verstretch>1</verstretch>
+      </sizepolicy>
+     </property>
+     <property name="title">
+      <string>Internet Sharing QR Code &amp; Configuration</string>
+     </property>
+     <layout class="QVBoxLayout" name="qr_outer_layout">
+      
+      <!-- 상단: QR 코드 2분할 영역 (Network Connection / Captive Portal) -->
+      <item>
+       <layout class="QHBoxLayout" name="qr_layout">
+        
+        <!-- Network Connection QR 박스 -->
+        <item>
+         <widget class="QGroupBox" name="network_group">
+          <property name="title"><string>Network Connection</string></property>
+          <layout class="QVBoxLayout" name="network_layout">
+           <item>
+            <widget class="QLabel" name="hotspot_network_qr_label">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+               <horstretch>1</horstretch>
+               <verstretch>1</verstretch>
+              </sizepolicy>
+             </property>
+             <property name="alignment">
+              <set>Qt::AlignCenter</set>
+             </property>
+             <property name="scaledContents">
+              <bool>false</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QWidget" name="net_bottom_container">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Preferred" vsizetype="Maximum">
+               <horstretch>0</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
+             <layout class="QVBoxLayout" name="net_bottom_group_layout">
+              <property name="leftMargin"><number>0</number></property>
+              <property name="topMargin"><number>0</number></property>
+              <property name="rightMargin"><number>0</number></property>
+              <property name="bottomMargin"><number>0</number></property>
+              <property name="spacing"><number>4</number></property>
+              <item>
+               <widget class="QLabel" name="hotspot_network_info_label">
+                <property name="sizePolicy">
+                 <sizepolicy hsizetype="Expanding" vsizetype="Maximum">
+                  <horstretch>0</horstretch>
+                  <verstretch>0</verstretch>
+                 </sizepolicy>
+                </property>
+                <property name="text"><string>SSID: -   |   Password: -</string></property>
+               </widget>
+              </item>
+              <item>
+               <layout class="QHBoxLayout" name="net_btn_layout">
+                <item>
+                 <widget class="QPushButton" name="network_print_btn">
+                  <property name="sizePolicy">
+                   <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+                    <horstretch>1</horstretch>
+                    <verstretch>0</verstretch>
+                   </sizepolicy>
+                  </property>
+                  <property name="text"><string>PRINT</string></property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QPushButton" name="network_folder_btn">
+                  <property name="sizePolicy">
+                   <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+                    <horstretch>1</horstretch>
+                    <verstretch>0</verstretch>
+                   </sizepolicy>
+                  </property>
+                  <property name="text"><string>폴더</string></property>
+                 </widget>
+                </item>
+               </layout>
+              </item>
+             </layout>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+
+        <!-- Captive Portal QR 박스 -->
+        <item>
+         <widget class="QGroupBox" name="captive_group">
+          <property name="title"><string>Captive Portal</string></property>
+          <layout class="QVBoxLayout" name="captive_layout">
+           <item>
+            <widget class="QLabel" name="hotspot_qr_label">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+               <horstretch>1</horstretch>
+               <verstretch>1</verstretch>
+              </sizepolicy>
+             </property>
+             <property name="alignment">
+              <set>Qt::AlignCenter</set>
+             </property>
+             <property name="scaledContents">
+              <bool>false</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QWidget" name="cap_bottom_container">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Preferred" vsizetype="Maximum">
+               <horstretch>0</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
+             <layout class="QVBoxLayout" name="cap_bottom_group_layout">
+              <property name="leftMargin"><number>0</number></property>
+              <property name="topMargin"><number>0</number></property>
+              <property name="rightMargin"><number>0</number></property>
+              <property name="bottomMargin"><number>0</number></property>
+              <property name="spacing"><number>4</number></property>
+              <item>
+               <widget class="QLabel" name="qr_caption">
+                <property name="sizePolicy">
+                 <sizepolicy hsizetype="Expanding" vsizetype="Maximum">
+                  <horstretch>0</horstretch>
+                  <verstretch>0</verstretch>
+                 </sizepolicy>
+                </property>
+                <property name="text"><string>Internet access requests   |   http://192.168.137.1:5000/scan</string></property>
+               </widget>
+              </item>
+              <item>
+               <layout class="QHBoxLayout" name="cap_btn_layout">
+                <item>
+                 <widget class="QPushButton" name="captive_print_btn">
+                  <property name="sizePolicy">
+                   <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+                    <horstretch>1</horstretch>
+                    <verstretch>0</verstretch>
+                   </sizepolicy>
+                  </property>
+                  <property name="text"><string>PRINT</string></property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QPushButton" name="captive_folder_btn">
+                  <property name="sizePolicy">
+                   <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+                    <horstretch>1</horstretch>
+                    <verstretch>0</verstretch>
+                   </sizepolicy>
+                  </property>
+                  <property name="text"><string>폴더</string></property>
+                 </widget>
+                </item>
+               </layout>
+              </item>
+             </layout>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+
+       </layout>
+      </item>
+
+      <!-- 하단: 기존 Hotspot Basic Configuration 설정 요소들 배치 -->
+      <item>
+       <widget class="QGroupBox" name="basic_settings_group">
+        <property name="title">
+         <string>Hotspot Basic Configuration</string>
+        </property>
+        <layout class="QGridLayout" name="basic_settings_grid">
+         <item row="0" column="0" colspan="3">
+          <layout class="QHBoxLayout" name="ssid_row_layout">
+           <item>
+            <widget class="QLabel" name="lbl_ssid">
+             <property name="text"><string>Hotspot SSID (Name):</string></property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLineEdit" name="ssid_input"/>
+           </item>
+          </layout>
+         </item>
+
+         <item row="1" column="0">
+          <widget class="QCheckBox" name="startup_checkbox">
+           <property name="text"><string>Register at Windows startup</string></property>
+          </widget>
+         </item>
+         <item row="1" column="1">
+          <widget class="QCheckBox" name="file_transfer_internet_checkbox">
+           <property name="text"><string>Allow Internet during transfer</string></property>
+          </widget>
+         </item>
+         <item row="1" column="2">
+          <layout class="QHBoxLayout" name="max_conn_layout">
+           <item>
+            <widget class="QLabel" name="lbl_max_conn">
+             <property name="text"><string>Max conn:</string></property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QSpinBox" name="max_connections_input"/>
+           </item>
+          </layout>
+         </item>
+
+         <item row="2" column="0">
+          <widget class="QLabel" name="lbl_password">
+           <property name="text"><string>Hotspot password:</string></property>
+          </widget>
+         </item>
+         <item row="2" column="1">
+          <widget class="QLineEdit" name="password_input">
+           <property name="echoMode"><enum>QLineEdit::Password</enum></property>
+          </widget>
+         </item>
+         <item row="2" column="2">
+          <layout class="QHBoxLayout" name="pwd_btn_layout">
+           <item>
+            <widget class="QPushButton" name="show_password_btn">
+             <property name="text"><string>Show</string></property>
+             <property name="checkable"><bool>true</bool></property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="default_password_btn">
+             <property name="text"><string>Default</string></property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="random_password_btn">
+             <property name="text"><string>Random</string></property>
+            </widget>
+           </item>
+          </layout>
+         </item>
+
+         <item row="3" column="0">
+          <widget class="QLabel" name="lbl_win_limit">
+           <property name="text"><string>Win Hotspot Limit:</string></property>
+          </widget>
+         </item>
+         <item row="3" column="1">
+          <widget class="QSpinBox" name="windows_hotspot_limit_input"/>
+         </item>
+         <item row="3" column="2">
+          <widget class="QPushButton" name="apply_windows_limit_btn">
+           <property name="text"><string>Apply Windows limit (registry)</string></property>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+      </item>
+
+     </layout>
+    </widget>
+   </item>
+
+   <!-- 3. 네트워크 어댑터 및 IP 설정 영역 -->
+   <item>
+    <widget class="QGroupBox" name="net_group">
+     <property name="title">
+      <string>Network Interface &amp; IP Configuration</string>
+     </property>
+     <layout class="QGridLayout" name="net_grid_layout">
+      <item row="0" column="0" colspan="2">
+       <widget class="QPushButton" name="auto_detect_btn">
+        <property name="text">
+         <string>Auto (Re-detect Network Adapters)</string>
+        </property>
+       </widget>
+      </item>
+
+      <item row="1" column="0">
+       <widget class="QLabel" name="lbl_internet_nic">
+        <property name="text"><string>Internet NIC (internet line):</string></property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QComboBox" name="internet_nic_combo"/>
+      </item>
+      <item row="1" column="1">
+       <widget class="QLabel" name="lbl_hotspot_nic">
+        <property name="text"><string>Hotspot NIC (wireless adapter):</string></property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QComboBox" name="hotspot_nic_combo"/>
+      </item>
+
+      <item row="3" column="0">
+       <widget class="QLabel" name="lbl_hotspot_gw">
+        <property name="text"><string>Hotspot gateway IP:</string></property>
+       </widget>
+      </item>
+      <item row="4" column="0">
+       <widget class="QLineEdit" name="hotspot_gateway_input">
+        <property name="placeholderText"><string>192.168.137.1</string></property>
+       </widget>
+      </item>
+      <item row="3" column="1">
+       <widget class="QLabel" name="lbl_hotspot_cidr">
+        <property name="text"><string>Hotspot IPv4 range (CIDR):</string></property>
+       </widget>
+      </item>
+      <item row="4" column="1">
+       <widget class="QLineEdit" name="hotspot_network_input">
+        <property name="placeholderText"><string>192.168.137.0/24</string></property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+
+   <!-- 하단 스페이서 -->
+   <item>
+    <spacer name="verticalSpacer">
+     <property name="orientation"><enum>Qt::Vertical</enum></property>
+     <property name="sizeHint" stdset="0">
+      <size><width>20</width><height>40</height></size>
+     </property>
+    </spacer>
+   </item>
+
+  </layout>
+ </widget>
+</ui>

@@ -1,8 +1,10 @@
 ﻿import sys
 import logging
 from PySide6.QtWidgets import QDialog, QVBoxLayout, QFormLayout, QLineEdit, QCheckBox, QDialogButtonBox, QMessageBox
+from Common.current_user_session import CurrentUserSession
 from setting.general_settings import GeneralSettingsConfig
 from setting.operator_settings import OperatorConfig  # 연동된 Operator DB 설정
+from Common.current_user_session import CurrentUserSession
 
 class LoginDialog(QDialog):
     def __init__(self, parent=None):
@@ -45,10 +47,12 @@ class LoginDialog(QDialog):
     def verify_credentials(self, username, password):
         """DB(operators 테이블)에서 사용자 정보 검색 및 일치 여부 확인"""
         items = self.operator_config.get_items(active_only=True)
+        matched_user_info = None
         for item in items:
             if item["user_name"] == username and str(item["user_password"]) == str(password):
-                return True
-        return False
+                matched_user_info = item
+                break
+        return matched_user_info 
 
     def handle_login(self):
         username = self.username_input.text().strip()
@@ -60,12 +64,21 @@ class LoginDialog(QDialog):
             return
 
         # DB 검증 수행
-        if self.verify_credentials(username, password):
+        matched_user_info = self.verify_credentials(username, password)
+        if matched_user_info:
             # 로그인 성공 시 설정 값 저장
             self.config.set('login_user_name', username)
             self.config.set('login_user_password', password if auto_login else "")
             self.config.set('auto_login', auto_login)
             self.config.save()
+
+            # --- [핵심] 전역 세션 클래스에 사용자, 권한, 특권 업데이트 ---
+            session = CurrentUserSession()
+            session.login(
+                username=matched_user_info.get("user_name"),
+                authority=matched_user_info.get("authority", "user"),  # DB 필드명에 맞게 수정
+                privilege=matched_user_info.get("privilege", {})      # DB 필드명에 맞게 수정
+            )            
             self.accept()
         else:
             # 로그인 다이얼로그에서는 로그인 실패 정보 알림
@@ -85,11 +98,27 @@ def check_login():
     if is_auto_login_valid:
         # DB에서 저장된 정보 검증
         items = operator_config.get_items(active_only=True)
-        matched = any(item["user_name"] == saved_user and str(item["user_password"]) == str(saved_pass) for item in items)
-        
-        if matched:
+        matched_user_info = None
+        for item in items:
+            if item["user_name"] == saved_user and str(item["user_password"]) == str(saved_pass):
+                matched_user_info = item
+                break
+
+        #items = operator_config.get_items(active_only=True)
+        #matched_user_info = next((item for item in items if item["user_name"] == saved_user and str(item["user_password"]) == str(saved_pass)), None)
+
+        if matched_user_info:
             # auto login 성공시 사용자에게 메시지 표시하지 않고 로그만 출력
             logging.info(f"Auto login successful for user: {saved_user}")
+
+            # --- [핵심] 자동 로그인 성공 시에도 전역 세션 업데이트 ---
+            session = CurrentUserSession()
+            session.login(
+                username=matched_user_info.get("user_name"),
+                authority=matched_user_info.get("authority", "user"),
+                privilege=matched_user_info.get("privilege", {})
+            )
+            
             return True
         else:
             # auto login 실패 시 (비밀번호 변경 등) 로그 출력 후 다이얼로그 오픈

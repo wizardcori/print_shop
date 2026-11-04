@@ -7,6 +7,8 @@ from io import BytesIO
 
 import qrcode
 from Common.network_utils import escape_wifi_qr_field
+from qr_log import QrcodeLog
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QFontMetrics, QImage, QPainter, QPixmap
 def update_qr_code(window, run_hotspot_diagnostics):
@@ -45,7 +47,7 @@ def update_qr_code(window, run_hotspot_diagnostics):
         if hasattr(window, 'hotspot_qr_label'):
             update_hotspot_qr_code(window)
     except Exception as e:
-        print(f"QR Gen Error: {e}")
+        logd(f"QR Gen Error: {e}")
 
 def update_hotspot_qr_code(window):
     """Generate a QR code that opens the captive portal immediately."""
@@ -156,4 +158,3 @@ def _export_qr_jpg_worker(window, qr_type, qr_image, guide_text, output_dir, saf
             window.qr_export_completed.emit(qr_type, True, '\n'.join(output_results))
     except Exception as exc:
         window.qr_export_completed.emit(qr_type, False, str(exc))
-

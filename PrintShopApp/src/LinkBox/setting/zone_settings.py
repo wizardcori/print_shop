@@ -1,7 +1,7 @@
 """Zone and Table management settings and UI component."""
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QLineEdit, QPushButton, QListWidget, QHBoxLayout, QMessageBox
 from Common.config import FileConfigManager, ConfigType
-from Common.settings_dialog import register_settings_tab
+from Common.settings_registry import register_settings_tab
 
 DEFAULT_ZONES = ["Counter", "Table01", "Table02", "VIP_Room"]
 DEFAULT_SAVE_TABS = ["DefaultTab"]

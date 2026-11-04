@@ -245,7 +245,7 @@ class LinkShareRuntimeController:
             ),
             'colors': list(window.color_options),
             'fares': list(self.runtime_settings.get('internet_fares', self.default_internet_fares)),
-            'fare_dir': window.fare_base_dir,
+            'fare_image_dir': window.fare_base_dir,
         }
         # Update interfaces list dynamically before opening settings dialog
         window.interfaces = self.get_network_interfaces()
@@ -294,7 +294,7 @@ class LinkShareRuntimeController:
             dialog.get_file_transfer_settings() != before_settings['file_transfer'],
             dialog.get_color_options() != before_settings['colors'],
             dialog.get_internet_fares() != before_settings['fares'],
-            dialog.get_fare_path() != before_settings['fare_dir'],
+            dialog.get_fare_path() != before_settings['fare_image_dir'],
         ))
         self.set_default_zones(list(dialog.zones))
 

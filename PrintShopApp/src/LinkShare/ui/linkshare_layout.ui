@@ -87,9 +87,15 @@
            </item>
            <item>
             <widget class="QLabel" name="hotspot_image_label">
-             <property name="alignment">
-              <set>Qt::AlignCenter</set>
-             </property>
+            <property name="sizePolicy">
+            <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+            <horstretch>0</horstretch>
+            <verstretch>0</verstretch>
+            </sizepolicy>
+            </property>
+            <property name="alignment">
+            <set>Qt::AlignCenter</set>
+            </property>
             </widget>
            </item>
           </layout>

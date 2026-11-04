@@ -11,7 +11,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-
+from Common.log import logd  # 또는 dlog
 
 # Keep the filename ASCII so legacy Windows PowerShell code pages cannot
 # convert the path to '?' before WScript.Shell saves the link.
@@ -97,7 +97,7 @@ def set_startup_registration(project_dir: Path, enabled: bool) -> Path | None:
 if __name__ == "__main__":
     try:
         path = create_admin_shortcut(Path(__file__).parent)
-        print(f"[INFO] Administrator shortcut ready: {path}")
+        logd(f"[INFO] Administrator shortcut ready: {path}")
     except Exception as exc:  # pragma: no cover - startup helper diagnostics
-        print(f"[WARN] Could not create administrator shortcut: {exc}", file=sys.stderr)
+        logd(f"[WARN] Could not create administrator shortcut: {exc}", file=sys.stderr)
         sys.exit(1)

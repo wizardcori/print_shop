@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from Common.config import DbConfigManager
 from Common.paths import CONFIG_DIR
-from Common.settings_dialog import register_settings_tab
+from Common.settings_registry import register_settings_tab
 from Common import globals as app_globals  # 상단에 추가
 
 class OperatorConfig(DbConfigManager):
@@ -61,7 +61,7 @@ class OperatorConfig(DbConfigManager):
                                 cursor.execute(f"DROP TABLE {self.table_name}")
                                 conn.commit()
         except Exception as e:
-            print(f"\033[91m[DB Migration Error] {e}\033[0m")
+            logd(f"\033[91m[DB Migration Error] {e}\033[0m")
 
     def _seed_initial_records(self, cursor, conn):
         if not self.initial_records:

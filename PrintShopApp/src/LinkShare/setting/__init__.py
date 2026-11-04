@@ -6,4 +6,5 @@ registers them automatically.
 
 from . import hotspot_settings
 from . import storage_settings
-from . import rates_settings
+from . import internet_rates_settings
+from . import linkshare_settings

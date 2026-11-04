@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from PySide6.QtPrintSupport import QPrinter, QPrintDialog
 from Common.config import DbConfigManager
-from Common.settings_dialog import register_settings_tab
+from Common.settings_registry import register_settings_tab
 from Common import globals as app_globals  # 상단에 추가
 
 class PrintFareConfig(DbConfigManager):

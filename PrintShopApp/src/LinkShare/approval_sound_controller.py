@@ -30,7 +30,7 @@ class ApprovalSoundController:
             window.approval_sound_playback_timer.timeout.connect(self.stop)
             window.approval_sound_playback_timer.start(15 * 60 * 1000)
         except (OSError, RuntimeError) as exc:
-            print(f"Approval sound playback error: {exc}")
+            logd(f"Approval sound playback error: {exc}")
 
     def stop(self):
         window = self.window

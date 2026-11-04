@@ -11,11 +11,8 @@ if src_dir not in sys.path:
 
 
 from pathlib import Path
-# 현재 파일 기준으로 프로젝트 루트 경로(C:\1print_shop\PrintShopApp) 찾기
-# (폴더 구조에 맞춰 parents 인덱스는 조정이 필요할 수 있습니다)
 grandparent_dir = Path(__file__).resolve().parents[2]
 
-# 문자열로 변환하여 sys.path에 추가
 grandparent_path_str = str(grandparent_dir)
 if grandparent_path_str not in sys.path:
     sys.path.append(grandparent_path_str)
@@ -23,17 +20,19 @@ if grandparent_path_str not in sys.path:
 
 from Common import globals as app_globals  # 전역 변수 모듈 임포트
 from Common.config import FileConfigManager, ConfigType
-from Common.settings_dialog import register_settings_tab
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QCheckBox
+from Common.settings_registry import register_settings_tab
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QSpinBox, QLineEdit, QPushButton, QFileDialog
 
 class GeneralSettingsConfig(FileConfigManager):
     section = "GeneralSettings"
     section_order = 10
     schema = {
-
         'login_user_name': {"default": "", "type": ConfigType.STRING},        
         'login_user_password': {"default": "", "type": ConfigType.STRING},                
         'auto_login': {"default": False, "type": ConfigType.BOOLEAN},                
+
+        # 핫스팟/윈도우 시작 시 자동 등록 설정 이동
+        'startup_enabled': {"default": False, "type": ConfigType.BOOLEAN},
 
         'log_print_enabled': {"default": True, "type": ConfigType.BOOLEAN},
         'print_detect_enabled': {"default": True, "type": ConfigType.BOOLEAN},
@@ -49,42 +48,86 @@ class GeneralSettingsConfig(FileConfigManager):
 
     def __init__(self):
         super().__init__()
-        # 초기화 시점에 파일에서 읽어온 값을 전역 변수에 동기화
         self._sync_to_globals()
 
     _original_set = FileConfigManager.set
 
     def set(self, key: str, value: Any):
-        """설정값이 변경될 때 전역 변수도 함께 업데이트"""
         super().set(key, value)
         if key in ['login_user_name']:
             self._sync_to_globals()
 
     def _sync_to_globals(self):
-        """현재 설정 파일의 값을 전역 변수(app_globals)에 반영"""
         try:
             app_globals.GLOBAL_LOGIN_USER_NAME = self.get('login_user_name')
         except Exception as e:
-            print(f"[Global Sync Error] {e}")    
+            pass
 
-# 필요한 경우 설정 화면 탭 컴포넌트도 함께 구성할 수 있습니다.
+
 class GeneralAppSettingsTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.config = GeneralSettingsConfig()
+        self.widgets = {}
         self.init_ui()
 
     def init_ui(self):
-        layout = QVBoxLayout(self)
+        main_layout = QVBoxLayout(self)
+        
+        scroll_content = QWidget()
+        layout = QVBoxLayout(scroll_content)
+        
         layout.addWidget(QLabel("<h3>General Application Settings</h3>"))
         
-        self.mode_title_cb = QCheckBox("Show mode in window title")
-        #self.mode_title_cb.setChecked(self.config.get('show_mode_in_title'))
-        layout.addWidget(self.mode_title_cb)
-        
+        for key, meta in self.config.schema.items():
+            default_val = meta.get("default")
+            config_type = meta.get("type")
+            current_val = self.config.get(key)
+            
+            row_layout = QHBoxLayout()
+            
+            # 특정 키에 대해 명시적 라벨 지정
+            if key == 'startup_enabled':
+                label_text = "Register automatically at Windows startup"
+            else:
+                label_text = key.replace('_', ' ').title()
+                
+            label = QLabel(label_text)
+            row_layout.addWidget(label)
+            
+            if config_type == ConfigType.BOOLEAN:
+                widget = QCheckBox()
+                widget.setChecked(bool(current_val if current_val is not None else default_val))
+                row_layout.addWidget(widget)
+                
+            elif config_type == ConfigType.INTEGER:
+                widget = QSpinBox()
+                widget.setRange(-999999, 999999)
+                widget.setValue(int(current_val if current_val is not None else default_val))
+                row_layout.addWidget(widget)
+                
+            else:
+                widget = QLineEdit()
+                widget.setText(str(current_val if current_val is not None else default_val))
+                row_layout.addWidget(widget)
+                
+            self.widgets[key] = widget
+            layout.addLayout(row_layout)
+            
         layout.addStretch()
+        main_layout.addWidget(scroll_content)
 
     def save_to_config(self):
-        self.config.set('show_mode_in_title', self.mode_title_cb.isChecked())
+        for key, widget in self.widgets.items():
+            if isinstance(widget, QCheckBox):
+                value = widget.isChecked()
+            elif isinstance(widget, QSpinBox):
+                value = widget.value()
+            elif isinstance(widget, QLineEdit):
+                value = widget.text()
+            else:
+                continue
+                
+            self.config.set(key, value)
 
 register_settings_tab('general-app-settings', 'General', GeneralAppSettingsTab, order=10)

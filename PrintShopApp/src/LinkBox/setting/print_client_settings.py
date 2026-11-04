@@ -4,7 +4,7 @@ from PySide6.QtWidgets import QWidget, QLineEdit, QPushButton, QLabel, QFileDial
 from Common.globals import load_ui_safely
 from Common.paths import PRINT_REQUEST_QRCODE_FULLPATH, PRINT_REQUEST_ADDED_SOUND
 from Common.config import FileConfigManager, ConfigType
-from Common.settings_dialog import register_settings_tab
+from Common.settings_registry import register_settings_tab
 
 
 class PrintClientConfig(FileConfigManager):
@@ -49,7 +49,7 @@ class PrintClientSettingTab(QWidget):
             if self.save_button:
                 self.save_button.clicked.connect(self.save_settings)
         except Exception as e:
-            print(f"UI 파일 로드 실패 또는 생략 ({ui_path}): {e}")
+            logd(f"UI 파일 로드 실패 또는 생략 ({ui_path}): {e}")
             self.init_fallback_ui()
 
         self.load_settings()

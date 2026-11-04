@@ -138,9 +138,9 @@ def enable_mobile_hotspot(ssid_name="hbwifi"):
         # Opening the Settings URI is only a fallback prompt.  Do not wait for
         # the Settings app from the application startup thread.
         os.startfile('ms-settings:network-mobilehotspot')
-        print(f"Hotspot activated / configuration opened for SSID: {ssid_name}")
+        logd(f"Hotspot activated / configuration opened for SSID: {ssid_name}")
     except Exception as e:
-        print(f"Hotspot execution error: {e}")
+        logd(f"Hotspot execution error: {e}")
 
 
 def get_current_hotspot_wifi_info():

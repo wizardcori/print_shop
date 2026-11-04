@@ -13,6 +13,9 @@ os.makedirs(QR_SAVE_FOLDER, exist_ok=True)
 PRINT_PORTAL_SERVICE_IP = '0.0.0.0'
 PRINT_PORTAL_SERVICE_PORT = 8080
 
+PRINT_SERVICE_COOKIE = 'print_service_client_token'
+
+
 state = {
     "zone": "Counter",
     "files": [
@@ -43,7 +46,7 @@ qr_img.save(buf, format="PNG")
 qr_base64 = base64.b64encode(buf.getvalue()).decode("utf-8")
 
 def play_completion_sound():
-    print("[알림] 전송 완료 사운드 재생 트리거됨")
+    logd("[알림] 전송 완료 사운드 재생 트리거됨")
 
 @app.post("/api/upload")
 async def api_upload(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
@@ -178,7 +181,7 @@ def start_print_portal_background(host=PRINT_PORTAL_SERVICE_IP, port=PRINT_PORTA
 
     server_thread = threading.Thread(target=run_server, daemon=True)
     server_thread.start()
-    print(f"[Server] 스마트 프린트 웹 서버가 백그라운드(http://{host}:{port})에서 구동되었습니다.")
+    logd(f"[Server] 스마트 프린트 웹 서버가 백그라운드(http://{host}:{port})에서 구동되었습니다.")
 
 if __name__ in {"__main__", "__mp_main__"}:
     ui.run(host=PRINT_PORTAL_SERVICE_IP, port=PRINT_PORTAL_SERVICE_PORT, title='스마트 프린트 클라이언트', reload=False, dark=True)

@@ -6,7 +6,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'PrintShopApp'))
 
-from Common.db import AppDatabase  # noqa: E402
+from Common.db import BaseDb  # noqa: E402
 from Common.order_service import OrderService  # noqa: E402
 from Common.order_workflow import (  # noqa: E402
     OrderState, PrinterCandidate, choose_printer, estimate_completion_seconds,
@@ -19,7 +19,7 @@ class TestOrderWorkflow(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / 'sample.pdf'
             path.write_bytes(b'%PDF-test')
-            database = AppDatabase(str(Path(folder) / 'orders.db'))
+            database = BaseDb(str(Path(folder) / 'orders.db'))
             service = OrderService(database)
             service.create_from_upload('order-1', [{'path': str(path), 'filename': path.name}])
             self.assertEqual(database.get_order_state('order-1'), OrderState.CONFIGURED.value)
@@ -28,7 +28,7 @@ class TestOrderWorkflow(unittest.TestCase):
 
     def test_invalid_file_is_recorded_as_notification(self):
         with tempfile.TemporaryDirectory() as folder:
-            database = AppDatabase(str(Path(folder) / 'orders.db'))
+            database = BaseDb(str(Path(folder) / 'orders.db'))
             OrderService(database).create_from_upload(
                 'order-2', [{'path': str(Path(folder) / 'missing.docx'), 'filename': 'missing.docx'}])
             with database._connect() as connection:

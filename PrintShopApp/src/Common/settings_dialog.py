@@ -1,15 +1,130 @@
-"""Runtime registry for feature-owned settings tabs."""
+"""Settings Dialog UI Implementation."""
 
-_tabs = {}
+#from curses import window
 
-from PySide6.QtWidgets import QDialog, QVBoxLayout, QTabWidget, QDialogButtonBox
+from PySide6.QtWidgets import QDialog, QVBoxLayout, QTabWidget, QDialogButtonBox, QScrollArea
 from PySide6.QtCore import Qt
+
+from Common.settings_registry import iter_settings_tabs, register_settings_tab
+from setting.general_settings import GeneralSettingsConfig  # noqa: F401
+from setting.env_settings import EnvSettingsConfig  # 개발 모드 확인용 설정 임포트
+
+
+# tab_title_style = """
+#     QTabBar::tab {
+#         background: #263238;     /* 비선택 탭 배경색 (어두운 회색) */
+#         color: #90a4ae;          /* 비선택 탭 글자색 (흐린 회색) */
+#         padding: 6px 14px;
+#         margin-right: 2px;
+#         border-top-left-radius: 4px;
+#         border-top-right-radius: 4px;
+#         border: 1px solid #37474f;
+#         border-bottom: none;
+#         font-weight: normal;
+#     }
+#     QTabBar::tab:selected {
+#         background: #1976d2;     /* 선택된 탭 배경색 (선명한 파란색) */
+#         color: #ffffff;          /* 선택된 탭 글자색 (흰색) */
+#         font-weight: bold;       /* 굵은 글씨로 강조 */
+#         border: 1px solid #2196f3;
+#     }
+#     QTabBar::tab:hover:not(:selected) {
+#         background: #37474f;     /* 마우스 올렸을 때의 색상 */
+#         color: #cfd8dc;
+#     }
+# """
+
+tab_title_style = """
+    QTabBar::tab {
+        background: #263238;     /* 비선택 탭 배경색 (어두운 회색) */
+        color: #90a4ae;          /* 비선택 탭 글자색 (흐린 회색) */
+        padding: 6px 14px;
+        margin-right: 2px;
+        border-top-left-radius: 4px;
+        border-top-right-radius: 4px;
+        border: 1px solid #37474f;
+        border-bottom: none;
+        font-weight: normal;
+    }
+    QTabBar::tab:selected {
+        background: #1976d2;     /* 선택된 탭 배경색 (선명한 파란색) */
+        color: #ffffff;          /* 선택된 탭 글자색 (흰색) */
+        font-weight: bold;       /* 굵은 글씨로 강조 */
+        border: 1px solid #2196f3;
+    }
+    QTabBar::tab:hover:not(:selected) {
+        background: #37474f;     /* 마우스 올렸을 때의 색상 */
+        color: #cfd8dc;
+    }
+    
+    /* 추가: 탭이 넘칠 때 나타나는 좌우 스크롤 버튼 스타일 */
+    QTabBar::scroller {
+        width: 25px;
+    }
+
+    QTabBar QToolButton {
+        background-color: #263238;
+        border: 1px solid #37474f;
+        border-radius: 2px;
+    }
+    QTabBar QToolButton::ubic-left { /* 구버전 호환용 */
+        subcontrol-position: left;
+    }
+    QTabBar QToolButton::right-arrow {
+        image: none; /* 필요시 커스텀 화살표 아이콘 경로 지정 가능 */
+    }
+    QTabBar QToolButton::left-arrow {
+        image: none;
+    }
+    QTabBar QToolButton:hover {
+        background-color: #37474f;
+    }
+"""
+
+# [추가] 각 탭 내부 QScrollArea 및 전체 애플리케이션에서 스크롤바가 명확히 보이도록 설정하는 스타일
+scroll_bar_style = """
+    QScrollBar:vertical {
+        background: #1e272c;
+        width: 24px;
+        margin: 0px;
+        border-radius: 4px;
+    }
+    QScrollBar::handle:vertical {
+        background: #546e7a;
+        min-height: 20px;
+        border-radius: 4px;
+    }
+    QScrollBar::handle:vertical:hover {
+        background: #78909c;
+    }
+    QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+        height: 0px;
+    }
+    
+    QScrollBar:horizontal {
+        background: #1e272c;
+        height: 24px;
+        margin: 0px;
+        border-radius: 4px;
+    }
+    QScrollBar::handle:horizontal {
+        background: #546e7a;
+        min-width: 20px;
+        border-radius: 4px;
+    }
+    QScrollBar::handle:horizontal:hover {
+        background: #78909c;
+    }
+    QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+        width: 0px;
+    }
+"""
+
 
 class SettingsDialog(QDialog):
     _instance = None
 
     def __new__(cls, parent=None):
-        # 싱글톤 패턴 적용: 이미 인스턴스가 존재하면 기존 객체를 반환
         if cls._instance is not None:
             return cls._instance
         cls._instance = super(SettingsDialog, cls).__new__(cls)
@@ -22,13 +137,12 @@ class SettingsDialog(QDialog):
         self._initialized = True
 
         self.setWindowTitle("Preferences / Settings")
-        self.resize(850, 600)
+        self.resize(850, 300)
         
-        # 모달리스 설정 및 닫힐 때 객체 소멸 방지
         self.setModal(False)
         self.setAttribute(Qt.WA_DeleteOnClose, False)
 
-        # UI 및 탭 초기화 함수 호출
+        self.general_settings_config = GeneralSettingsConfig()
         self._init_ui()
 
     def _init_ui(self):
@@ -36,36 +150,101 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(self)
         
         self.settings_tabs = QTabWidget(self)
+
+        # [핵심 추가] 탭 개수가 많아져 창 폭이 좁아질 때 양옆으로 스크롤 화살표 버튼 표시
+        self.settings_tabs.setUsesScrollButtons(True)
+
+        # 탭 바에만 직접 스타일 적용
+        self.settings_tabs.tabBar().setStyleSheet(scroll_bar_style)
+
+        self.settings_tabs.setMinimumWidth(0)
+
         layout.addWidget(self.settings_tabs)
         
-        # 레지스트리 탭 동적 로드 함수 호출
+        # 최초 UI 초기화 시 탭 로드
         self._load_registered_tabs()
+        
+        # 저장된 active 탭이 있으면 해당 탭으로 자동 선택
+        saved_tab_index = self.general_settings_config.get('settings_active_tab')
+        if saved_tab_index is not None and isinstance(saved_tab_index, int):
+            if 0 <= saved_tab_index < self.settings_tabs.count():
+                self.settings_tabs.setCurrentIndex(saved_tab_index)
+
+        # 탭 변경 시그널 연결 (값 자동 저장)
+        self.settings_tabs.currentChanged.connect(self._on_tab_changed)
                 
-        # 하단 닫기 버튼 추가 (클릭 시 창을 숨김)
         button_box = QDialogButtonBox(QDialogButtonBox.Close, self)
-        button_box.rejected.connect(self.hide)  # close() 대신 hide() 연결
+        button_box.rejected.connect(self.hide)
         layout.addWidget(button_box)
 
+    def _on_tab_changed(self, index):
+        """탭이 변경될 때 현재 인덱스를 settings_active_tab으로 저장합니다."""
+        if index >= 0:
+            self.general_settings_config.set('settings_active_tab', index)
+
     def _load_registered_tabs(self):
-        """settings_registry에 등록된 모든 탭 항목을 order 순서대로 순회하여 추가합니다."""
+        from Common.log import logd, loge
+        """settings_registry에 등록된 모든 탭 항목을 order 순서대로 순회하여 추가합니다. (동적 갱신 지원)"""
+
+        if not hasattr(self, '_loaded_tab_ids'):
+            self._loaded_tab_ids = set()
+
+        # runtime_mode가 development인지 확인
+        env_config = EnvSettingsConfig()
+        is_development = (
+            env_config.get('runtime_mode') == 'development' or 
+            __import__('os').environ.get('MODE', '').strip().lower() == 'development'
+        )
+
+        _config_load_count = 0  
         for tab_id, order, title, factory in iter_settings_tabs():
-            print(f"[Debug] Attempting to load tab -> id: {tab_id}, title: {title}, order: {order}")
+            if str(tab_id) in self._loaded_tab_ids:
+                continue  
+
+            # if _config_load_count >= 2:
+            #     logd(f"Skipping loading of tab '{tab_id}' as the limit of 2 tabs per load has been reached.")
+            #     continue
+
             try:
                 tab_widget = factory(self) if callable(factory) else None
-                if tab_widget:
-                    self.settings_tabs.addTab(tab_widget, title)
-                    print(f"[Settings] Successfully loaded tab '{title}'")
-                else:
-                    print(f"[Settings] Factory for '{tab_id}' returned None.")
-            except Exception as e:
-                print(f"[Settings] Error creating settings tab '{tab_id}': {e}")
+                _config_load_count += 1
 
+                if tab_widget:
+                    # 개발 모드인 경우 탭 이름 앞에 order 표시 (예: "[10] General")
+                    display_title = f"[{order}] {title}" if is_development else title
+
+                    # [핵심 추가] 각 탭 위젯을 QScrollArea로 감싸기
+                    scroll_area = QScrollArea(self)
+                    scroll_area.setWidget(tab_widget)
+                    scroll_area.setWidgetResizable(True)  # 창 크기에 맞춰 내부 위젯 너비 자동 조절
+                    scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)  # 가로 스크롤바 (필요할 때만 표시)
+                    scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)    # 세로 스크롤바 (필요할 때만 표시)
+                    # 탭 위젯 대신 스크롤 영역을 추가
+                    self.settings_tabs.addTab(scroll_area, display_title)                    
+                    
+                    #self.settings_tabs.addTab(tab_widget, display_title)
+
+                    self._loaded_tab_ids.add(str(tab_id))
+                    logd(f"{_config_load_count:02d} : Successfully loaded tab '{display_title}'")
+                else:
+                    logd(f"{_config_load_count:02d} : Factory for '{tab_id}' returned None.")
+            except Exception as e:
+                loge(f"{_config_load_count:02d} : Error creating settings tab '{tab_id}': {e}")
 
     @classmethod
     def show_dialog(cls, parent=None):
-        """외부에서 호출 시 생성되어 있거나 숨겨져 있는 창을 활성화하여 표시"""
+        """외부에서 호출 시 생성되어 있거나 숨겨져 있는 창을 활성화하여 표시하며, 최신 등록 탭을 동기화합니다."""
         if cls._instance is None:
             cls._instance = cls(parent)
+        else:
+            # 이미 생성된 다이얼로그라면, 창을 열 때 새로 등록된 탭이 있는지 동기화
+            cls._instance._load_registered_tabs()
+        
+        # 창을 띄울 때도 저장된 활성 탭 인덱스가 유효한지 확인 후 복원
+        saved_tab_index = cls._instance.general_settings_config.get('settings_active_tab')
+        if saved_tab_index is not None and isinstance(saved_tab_index, int):
+            if 0 <= saved_tab_index < cls._instance.settings_tabs.count():
+                cls._instance.settings_tabs.setCurrentIndex(saved_tab_index)
         
         cls._instance.show()
         cls._instance.raise_()
@@ -73,57 +252,5 @@ class SettingsDialog(QDialog):
         return cls._instance
 
     def closeEvent(self, event):
-        """창의 'X' 버튼 등으로 닫을 때, 완전 종료 대신 hide() 처리하고 인스턴스는 유지"""
-        event.ignore()  # 기본 종료 이벤트를 무시
-        self.hide()     # 창을 숨김 처리하여 객체와 상태 유지[cite: 1]
-
-
-def register_settings_tab(*args, **kwargs):
-    """
-    지원하는 호출 형태 (인자 개수별 명확한 분기):
-    1개: register_settings_tab(factory)
-    2개: register_settings_tab(factory, order)
-    3개: register_settings_tab(tab_id, title, factory)
-    4개: register_settings_tab(tab_id, title, factory, order)
-    """
-    num_args = len(args)
-
-    if num_args == 1:
-        # 1개: factory만 전달 (속성 자동 추출, order 기본값 100)
-        factory = args[0]
-        if not callable(factory):
-            raise TypeError("첫 번째 인자는 팩토리(클래스/함수)여야 합니다.")
-        tab_id = getattr(factory, 'tab_id', factory.__name__)
-        title = getattr(factory, 'title', tab_id)
-        order = kwargs.get('order', 100)
-
-    elif num_args == 2:
-        # 2개: factory와 order 전달 (속성 자동 추출)
-        factory = args[0]
-        order = args[1]
-        if not callable(factory):
-            raise TypeError("첫 번째 인자는 팩토리(클래스/함수)여야 합니다.")
-        tab_id = getattr(factory, 'tab_id', factory.__name__)
-        title = getattr(factory, 'title', tab_id)
-
-    elif num_args == 3:
-        # 3개: tab_id, title, factory 전달 (order 기본값 100)
-        tab_id, title, factory = args[0], args[1], args[2]
-        order = kwargs.get('order', 100)
-
-    elif num_args == 4:
-        # 4개: tab_id, title, factory, order 모두 전달
-        tab_id, title, factory, order = args[0], args[1], args[2], args[3]
-
-    else:
-        raise TypeError(f"register_settings_tab 함수는 1~4개의 인자만 허용합니다. (현재 인자 개수: {num_args})")
-
-    # 탭 저장소에 등록
-    _tabs[str(tab_id)] = (int(order), str(title), factory)
-
-    
-
-def iter_settings_tabs():
-    for tab_id, (order, title, factory) in sorted(_tabs.items(), key=lambda item: (item[1][0], item[0])):
-        # order를 함께 yield하도록 수정합니다.
-        yield tab_id, order, title, factory
+        event.ignore()
+        self.hide()

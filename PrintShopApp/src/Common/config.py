@@ -397,7 +397,7 @@ class DbConfigManager:
                     conn.commit()
                     existing_columns.add(col_name)
                 except sqlite3.OperationalError as e:
-                    print(f"[DB Migration Warning] Add column '{col_name}' failed: {e}")
+                    logd(f"[DB Migration Warning] Add column '{col_name}' failed: {e}")
 
         target_col_order = list(target_columns_def.keys())
         filtered_current_order = [col for col in current_col_order if col in target_columns_def]
@@ -429,7 +429,7 @@ class DbConfigManager:
             conn.commit()
         except Exception as e:
             conn.rollback()
-            print(f"[DB Migration Error] Table rebuild failed: {e}")
+            logd(f"[DB Migration Error] Table rebuild failed: {e}")
 
     def _seed_initial_records(self, cursor, conn):
         """자식 스키마 컬럼에 맞춘 동적 시드 데이터 주입"""

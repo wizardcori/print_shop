@@ -59,7 +59,7 @@ if %errorlevel% equ 0 goto skip_pip
 
 echo [INFO] Installing required packages (PySide6, Flask, qrcode, Pillow, cryptography, psutil, WinRT networking)...
 python -m pip install --upgrade pip > nul
-pip install PySide6 Flask qrcode[pil] nicegui PyMuPDF cryptography psutil winrt-Windows.Foundation winrt-Windows.Networking.Connectivity winrt-Windows.Networking.NetworkOperators
+pip install PySide6 colorlog Flask qrcode[pil] nicegui waitress PyMuPDF cryptography psutil winrt-Windows.Foundation winrt-Windows.Networking.Connectivity winrt-Windows.Networking.NetworkOperators
 echo Package installation complete.
 goto check_ssl
 
@@ -75,14 +75,32 @@ echo [INFO] Generating self-signed SSL certificates via Python for LinkBox...
 if not exist ..\secrets mkdir ..\secrets
 python -c "from cryptography import x509; from cryptography.x509.name import Name; from cryptography.hazmat.primitives import hashes; from cryptography.hazmat.primitives.asymmetric import rsa; from cryptography.hazmat.primitives import serialization; import datetime; priv_key = rsa.generate_private_key(public_exponent=65537, key_size=2048); subj = x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, 'PrintShopServer')]); cert = x509.CertificateBuilder().subject_name(subj).issuer_name(subj).public_key(priv_key.public_key()).serial_number(x509.random_serial_number()).not_valid_before(datetime.datetime.now(datetime.timezone.utc)).not_valid_after(datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=365)).sign(priv_key, hashes.SHA256()); open(r'..\secrets\cert.pem', 'wb').write(cert.public_bytes(serialization.Encoding.PEM)); open(r'..\secrets\key.pem', 'wb').write(priv_key.private_bytes(encoding=serialization.Encoding.PEM, format=serialization.PrivateFormat.PKCS8, encryption_algorithm=serialization.NoEncryption()))"
 echo SSL certificates generated successfully in the project secrets folder.
-goto create_folder
+goto check_libreoffice
 
 :skip_ssl
 echo [INFO] SSL certificates already exist. Skipping.
 
+:check_libreoffice
+echo.
+echo [INFO] Checking LibreOffice installation...
+if exist "C:\Program Files\LibreOffice\program\soffice.exe" (
+    echo [INFO] LibreOffice가 이미 설치되어 있습니다. (경로 확인됨)
+    goto create_folder
+)
+if exist "C:\Program Files (x86)\LibreOffice\program\soffice.exe" (
+    echo [INFO] LibreOffice가 이미 설치되어 있습니다. (32비트 경로 확인됨)
+    goto create_folder
+)
+
+:: winget을 통한 설치 여부 확인
+winget list --id TheDocumentFoundation.LibreOffice --exact >nul 2>&1
+if %errorlevel% equ 0 (
+    echo [INFO] LibreOffice가 이미 설치되어 있습니다. (winget 확인됨)
+    goto create_folder
+)
 
 REM 1. winget을 이용한 LibreOffice 자동 설치 (선택사항)
-echo LibreOffice 확인 및 설치 중...
+echo LibreOffice가 감지되지 않았습니다. 설치를 진행합니다...
 winget install TheDocumentFoundation.LibreOffice --accept-source-agreements --accept-package-agreements
 
 :create_folder

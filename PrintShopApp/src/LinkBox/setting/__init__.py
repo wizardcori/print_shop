@@ -8,4 +8,7 @@ from . import zone_settings
 from . import sound_settings
 from . import color_settings
 from . import print_fare_settings
+from . import linkbox_settings
+
+
 

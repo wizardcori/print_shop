@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QWidget, QLineEdit, QPushButton, QLabel, QFileDial
 from PySide6.QtUiTools import QUiLoader
 from PySide6.QtCore import QFile
 
-from Common.settings_dialog import register_settings_tab
+from Common.settings_registry import register_settings_tab
 from Common.paths import CONFIG_FILE, PRINT_MONITOR_SOUND_DIR
 from Common.globals import CONFIG_ENCODING, resource_path, load_ui_safely
 from Common.config import FileConfigManager, FileConfigManager  

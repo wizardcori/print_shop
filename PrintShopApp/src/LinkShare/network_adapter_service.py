@@ -115,9 +115,19 @@ def get_adapter_hardware_info():
     return physical_set, desc_map, gw_map
 
 
+def is_adapter_physical(nic_name: str) -> bool:
+    """
+    [장치 속성 기반 판별 추가]
+    이름 문자열(Local Area Connection* 등) 대신 Windows 레지스트리의 NCF_PHYSICAL 특성을 조회하여
+    해당 어댑터가 순수 물리 장치인지 여부를 속성으로 판별합니다.
+    """
+    clean = nic_name.rsplit(' (', 1)[0] if ' (' in nic_name else nic_name
+    physical_set, _, _ = get_adapter_hardware_info()
+    return clean in physical_set
+
+
 def check_internet_via_ip(ip_address, nic_name=None, gw_map=None, global_internet=None):
     """Check if the given IP address/adapter currently routes out to the Internet."""
-    # Never consider APIPA (169.254.x.x) or loopback as having internet
     if not ip_address or ip_address.startswith('169.254.') or ip_address.startswith('127.'):
         return False
 
@@ -276,16 +286,8 @@ def get_network_interfaces():
         is_hotspot_gw = (ip == '192.168.137.1')
         is_physical = nic_name in physical_set
 
-        # Physical score: physical first (0) over virtual (1)
         phys_score = 0 if is_physical else 1
 
-        # Status score prioritization:
-        # 0: Up and assigned 192.168.137.1 (active hotspot gateway)
-        # 1: Connected to Internet and UP
-        # 2: UP with regular IP
-        # 3: UP but APIPA
-        # 4: DOWN with regular IP
-        # 5: DOWN with APIPA
         if is_hotspot_gw and is_up:
             status_score = 0
         elif connected and is_up:
@@ -309,19 +311,10 @@ def get_network_interfaces():
 
 def choose_optimal_adapters(interfaces, saved_internet_display='', saved_internet_ip='',
                             saved_hotspot_display='', saved_hotspot_ip=''):
-    """Determine optimal (Internet NIC, Hotspot NIC) based on hardware rules:
-
-    1. 인터넷이 되는 nic는 인터넷 nic로
-    2. 두개가 다되면 유선우선
-    3. 두개중 하나만 되면 되는것은 인터넷, 안되는것은 핫스팟
-    4. 두개가 다 안되면 인터넷 nic fail (None 또는 빈 어댑터)
-    5. 물리적인 장치만 판단 (가상 어댑터 배제)
-    6. nic가 여러개면 인터넷은 유선, 무선, 속도 빠른 순으로 결정
-    """
+    """Determine optimal (Internet NIC, Hotspot NIC) based on hardware rules."""
     physical_set, desc_map, gw_map = get_adapter_hardware_info()
     global_internet = check_global_internet()
 
-    # Index candidates by clean nic name
     iface_by_name = {}
     for item in interfaces:
         display, ip, conn, wireless = item
@@ -329,28 +322,20 @@ def choose_optimal_adapters(interfaces, saved_internet_display='', saved_interne
         if clean not in iface_by_name:
             iface_by_name[clean] = item
 
-    # Rule 5: Only evaluate physical adapters
     physical_candidates = [nic for nic in physical_set if nic in iface_by_name]
     if not physical_candidates:
         physical_candidates = [nic for nic in physical_set if nic in psutil.net_if_addrs()]
     if not physical_candidates:
-        # Fallback if no physical adapter metadata available
         physical_candidates = list(iface_by_name.keys())
 
-    # Internet candidate sorting key:
-    # Rule 2: wired preferred over wireless
-    # Rule 6: wired (1) > wireless (0), higher speed, is_up
     def internet_sort_key(nic):
         stats = psutil.net_if_stats().get(nic)
         is_up = 1 if (stats and stats.isup) else 0
         speed = (stats.speed if stats and stats.speed else 0)
-        desc = desc_map.get(nic, '')
         is_wireless = 1 if is_wireless_interface(nic) else 0
         is_wired = 1 if not is_wireless else 0
         return (is_wired, is_wireless, speed, is_up)
 
-    # Hotspot candidate sorting key:
-    # Hotspot preferentially selects a wireless adapter (Rule: Wi-Fi broadcast), higher speed, is_up
     def hotspot_sort_key(nic):
         stats = psutil.net_if_stats().get(nic)
         is_up = 1 if (stats and stats.isup) else 0
@@ -358,12 +343,10 @@ def choose_optimal_adapters(interfaces, saved_internet_display='', saved_interne
         is_wireless = 1 if is_wireless_interface(nic) else 0
         return (is_wireless, speed, is_up)
 
-    # Separate candidates into internet capable vs non-internet
     internet_capable = []
     non_internet = []
     for nic in physical_candidates:
         stats = psutil.net_if_stats().get(nic)
-        # If adapter is in interfaces list with is_connected=True or stats report isup with default gateway
         is_up = bool(stats.isup) if stats else bool(iface_by_name.get(nic))
         has_gw = bool(gw_map.get(nic))
         iface_conn = bool(iface_by_name.get(nic, (None, None, False))[2])
@@ -376,15 +359,11 @@ def choose_optimal_adapters(interfaces, saved_internet_display='', saved_interne
     internet_capable.sort(key=internet_sort_key, reverse=True)
     non_internet.sort(key=hotspot_sort_key, reverse=True)
 
-    # Determine Internet NIC:
-    # Rule 4: If no adapters have internet, internet nic fails
     if not internet_capable:
         selected_internet = None
     else:
         selected_internet = internet_capable[0]
 
-    # Hotspot priority: If an adapter is currently active and assigned the hotspot gateway (192.168.137.1),
-    # it is definitely the active hotspot broadcasting adapter.
     selected_hotspot = None
     for nic, addrs in psutil.net_if_addrs().items():
         for a in addrs:
@@ -395,16 +374,12 @@ def choose_optimal_adapters(interfaces, saved_internet_display='', saved_interne
         if selected_hotspot:
             break
 
-    # If no active 192.168.137.1 adapter found, apply standard decision rules
     if not selected_hotspot:
-        # Rule 4: If no adapters have internet, internet nic fails
         if not internet_capable:
             selected_hotspot = non_internet[0] if non_internet else (physical_candidates[0] if physical_candidates else None)
-        # Rule 3: Exactly one has internet -> that one is Internet, the other is Hotspot
         elif len(physical_candidates) >= 2 and len(internet_capable) == 1:
             selected_hotspot = non_internet[0] if non_internet else None
         else:
-            # Rule 1, 2, 6: Multiple have internet or 1 candidate total
             remaining = [nic for nic in physical_candidates if nic != selected_internet]
             remaining.sort(key=hotspot_sort_key, reverse=True)
             selected_hotspot = remaining[0] if remaining else None
@@ -414,7 +389,6 @@ def choose_optimal_adapters(interfaces, saved_internet_display='', saved_interne
             return ('', '', False, False)
         if nic_name in iface_by_name:
             return iface_by_name[nic_name]
-        # Build entry directly from psutil
         addrs = psutil.net_if_addrs().get(nic_name, [])
         ipv4 = next((a.address for a in addrs if a.family == socket.AF_INET and not a.address.startswith('127.')), '')
         mac = get_nic_mac_address(nic_name)
@@ -433,7 +407,6 @@ def choose_preferred_interface(interfaces, saved_display='', saved_ip='', wirele
     """Choose a saved NIC when valid and not disconnected/APIPA, otherwise the best matching NIC."""
     candidates = [item for item in interfaces if not wireless_only or item[3]] or interfaces
 
-    # Check if saved NIC is still active and valid (not APIPA 169.254.x.x unless nothing else exists)
     for item in candidates:
         display_name, ip, _, _ = item
         if (display_name == saved_display or ip == saved_ip):
@@ -441,16 +414,13 @@ def choose_preferred_interface(interfaces, saved_display='', saved_ip='', wirele
             stats = psutil.net_if_stats().get(nic_name)
             is_up = stats.isup if stats else False
             is_apipa = ip.startswith('169.254.')
-            # If saved adapter is UP and has a valid IP, keep it
             if is_up and not is_apipa:
                 return item
 
-    # If wireless_only is True (Hotspot NIC recommendation), prefer an active adapter with 192.168.137.1
     if wireless_only:
         for item in candidates:
             if item[1] == '192.168.137.1':
                 return item
 
-    # Otherwise return the top ranked candidate
     fallback = ("Default (192.168.137.1)", "192.168.137.1", False, True)
     return candidates[0] if candidates else fallback
