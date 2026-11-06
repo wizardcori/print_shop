@@ -1,6 +1,8 @@
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QTableWidget, QHeaderView
 
-class UsageRequestsTab(QWidget):
+from Common.geometry_manager import AutoGeometryWidget
+
+class UsageRequestsTab(AutoGeometryWidget):
     def __init__(self, window=None, parent=None):
         super().__init__(parent)
         self.window = window

@@ -2,6 +2,7 @@
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QHBoxLayout, QLineEdit, QPushButton
 from Common.config import FileConfigManager, ConfigType
 from Common.settings_registry import register_settings_tab
+from Common.geometry_manager import AutoGeometryWidget
 
 DEFAULT_FILE_TRANSFER_MINUTES = 10
 
@@ -12,7 +13,7 @@ class LinkBoxConfig(FileConfigManager):
         'file_transfer_minutes': {"default": DEFAULT_FILE_TRANSFER_MINUTES, "type": ConfigType.INTEGER},
     }
 
-class FileransferMinutesTab(QWidget):
+class FileransferMinutesTab(AutoGeometryWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.config = LinkBoxConfig()

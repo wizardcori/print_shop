@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from Common.config import DbConfigManager
 from Common.paths import CONFIG_DIR
+from Common.geometry_manager import AutoGeometryWidget
 from Common.settings_registry import register_settings_tab
 from Common import globals as app_globals  # 상단에 추가
 
@@ -169,7 +170,7 @@ class OperatorConfig(DbConfigManager):
             conn.commit()
 
 
-class OperatorTab(QWidget):
+class OperatorTab(AutoGeometryWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.config = OperatorConfig()

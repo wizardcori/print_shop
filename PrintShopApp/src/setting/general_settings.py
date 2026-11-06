@@ -20,6 +20,7 @@ if grandparent_path_str not in sys.path:
 
 from Common import globals as app_globals  # 전역 변수 모듈 임포트
 from Common.config import FileConfigManager, ConfigType
+from Common.geometry_manager import AutoGeometryWidget
 from Common.settings_registry import register_settings_tab
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox, QSpinBox, QLineEdit, QPushButton, QFileDialog
 
@@ -64,7 +65,7 @@ class GeneralSettingsConfig(FileConfigManager):
             pass
 
 
-class GeneralAppSettingsTab(QWidget):
+class GeneralAppSettingsTab(AutoGeometryWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.config = GeneralSettingsConfig()

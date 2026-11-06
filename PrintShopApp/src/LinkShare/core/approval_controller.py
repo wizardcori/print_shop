@@ -39,7 +39,7 @@ class ApprovalController:
         self.get_sound_enabled = get_sound_enabled
         self.set_sound_enabled = set_sound_enabled
 
-    def handle_customer_request(self, client_ip, minutes, dur_str):
+    def handle_customer_request_approval(self, client_ip, minutes, dur_str):
         self.bring_to_front()
         self.update_connection_summary()
         session = self.sessions.get(client_ip)

@@ -1,5 +1,7 @@
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QTableWidget, QHeaderView
 
+from Common.geometry_manager import AutoGeometryWidget
+
 class ConnectionStatusTab(QWidget):
     def __init__(self, window=None, parent=None):
         super().__init__(parent)

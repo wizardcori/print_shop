@@ -11,36 +11,195 @@
     <link rel="manifest" href="/manifest.webmanifest">
     <title>인터넷 사용 신청</title>
     <style>
-        body { margin: 0; padding: 20px; background: #f3f6f8; color: #263238; font-family: Arial, sans-serif; }
-        main { max-width: 520px; margin: auto; background: white; padding: 24px; border-radius: 14px; box-shadow: 0 3px 14px #0002; }
-        h1 { margin-top: 0; color: #1565c0; font-size: 1.45rem; }
-        .notice { padding: 12px; background: #e3f2fd; border-radius: 8px; margin-bottom: 18px; }
-        .options { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
-        button { border: 0; border-radius: 8px; padding: 13px 10px; font-size: 1rem; cursor: pointer; }
-        .time { background: #e8f5e9; color: #1b5e20; }
-        .time.selected { background: #2e7d32; color: white; }
-        .primary { width: 100%; margin-top: 18px; background: #1565c0; color: white; }
-        .secondary { width: 100%; margin-top: 10px; background: #eceff1; color: #263238; }
-        #message, #status { margin-top: 18px; padding: 14px; border-radius: 8px; white-space: pre-line; }
-        #message { background: #fff8e1; }
-        #status { background: #f5f5f5; line-height: 1.7; }
+        /* 윈도우 고대비(콘트라스트) 테마의 강제 색상 적용 방지 */
+        * {
+            forced-color-adjust: none !important;
+        }
+
+        :root {
+            color-scheme: light;
+        }
+        body { 
+            margin: 0; 
+            padding: 20px; 
+            background: #f3f6f8 !important; 
+            color: #263238 !important; 
+            font-family: Arial, sans-serif; 
+        }
+        main { 
+            max-width: 520px; 
+            margin: auto; 
+            background: white !important; 
+            padding: 24px; 
+            border-radius: 14px; 
+            box-shadow: 0 3px 14px #0002; 
+        }
+        .header-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 0;
+            margin-bottom: 18px;
+        }
+        h1 { 
+            margin: 0; 
+            color: #1565c0 !important; 
+            font-size: 1.45rem; 
+        }
+        .theme-toggle-group {
+            display: flex;
+            gap: 5px;
+        }
+        .theme-btn {
+            background: #eceff1;
+            color: #263238;
+            border: 0;
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 0.85rem;
+            cursor: pointer;
+        }
+        .theme-btn.active {
+            background: #1565c0;
+            color: white;
+        }
+        .notice { 
+            padding: 12px; 
+            background: #e3f2fd !important; 
+            color: #0d47a1 !important;
+            border-radius: 8px; 
+            margin-bottom: 18px; 
+        }
+        .options { 
+            display: grid; 
+            grid-template-columns: repeat(2, 1fr); 
+            gap: 10px; 
+        }
+        button { 
+            border: 0; 
+            border-radius: 8px; 
+            padding: 13px 10px; 
+            font-size: 1rem; 
+            cursor: pointer; 
+            -webkit-appearance: none;
+        }
+        .time { 
+            background: #e8f5e9 !important; 
+            color: #1b5e20 !important; 
+        }
+        .time.selected { 
+            background: #2e7d32 !important; 
+            color: white !important; 
+        }
+        .primary { 
+            width: 100%; 
+            margin-top: 18px; 
+            background: #1565c0 !important; 
+            color: white !important; 
+        }
+        .secondary { 
+            width: 100%; 
+            margin-top: 10px; 
+            background: #eceff1 !important; 
+            color: #263238 !important; 
+        }
+        #message, #status { 
+            margin-top: 18px; 
+            padding: 14px; 
+            border-radius: 8px; 
+            white-space: pre-line; 
+        }
+        #message { background: #fff8e1 !important; color: #7f6000 !important; }
+        #status { background: #f5f5f5 !important; color: #263238 !important; line-height: 1.7; }
         .hidden { display: none; }
-        .label { font-weight: bold; color: #455a64; }
-        .approved { color: #2e7d32; }
-        .rejected { color: #c62828; }
-        .pending { color: #ef6c00; }
-        #internetState { margin-top: 10px; padding: 10px; border-radius: 8px; background: #eef5f9; }
-        #installArea { margin-top: 14px; padding: 12px; background: #e3f2fd; border-radius: 8px; }
-        #installButton { width: 100%; margin-top: 8px; background: #0d47a1; color: white; }
+        .label { font-weight: bold; color: #455a64 !important; }
+        .approved { color: #2e7d32 !important; }
+        .rejected { color: #c62828 !important; }
+        .pending { color: #ef6c00 !important; }
+        #internetState { margin-top: 10px; padding: 10px; border-radius: 8px; background: #eef5f9 !important; color: #1565c0 !important; }
+        #installArea { margin-top: 14px; padding: 12px; background: #e3f2fd !important; color: #0d47a1 !important; border-radius: 8px; }
+        #installButton { width: 100%; margin-top: 8px; background: #0d47a1 !important; color: white !important; }
         #iosInstallHint { line-height: 1.6; }
+
+        /* 다크모드 활성화 시 적용 스타일 */
+        body.dark-mode { 
+            color-scheme: dark;
+        }
+        body.dark-mode { 
+            background: #121212 !important; 
+            color: #e0e0e0 !important; 
+        }
+        body.dark-mode main { 
+            background: #1e1e1e !important; 
+            box-shadow: 0 3px 14px rgba(0, 0, 0, 0.6); 
+        }
+        body.dark-mode h1 { 
+            color: #90caf9 !important; 
+        }
+        body.dark-mode .theme-btn {
+            background: #2c3e50;
+            color: #ecf0f1;
+        }
+        body.dark-mode .theme-btn.active {
+            background: #90caf9;
+            color: #121212;
+        }
+        body.dark-mode .notice { 
+            background: #0d3c61 !important; 
+            color: #e3f2fd !important; 
+        }
+        body.dark-mode .time { 
+            background: #1b382b !important; 
+            color: #a3e4d7 !important; 
+        }
+        body.dark-mode .time.selected { 
+            background: #2e7d32 !important; 
+            color: #ffffff !important; 
+        }
+        body.dark-mode .primary { 
+            background: #1565c0 !important; 
+            color: #ffffff !important; 
+        }
+        body.dark-mode .secondary { 
+            background: #2c3e50 !important; 
+            color: #ecf0f1 !important; 
+        }
+        body.dark-mode #message { 
+            background: #4a3b10 !important; 
+            color: #ffe082 !important; 
+        }
+        body.dark-mode #status { 
+            background: #262626 !important; 
+            color: #e0e0e0 !important; 
+        }
+        body.dark-mode #internetState { 
+            background: #1b2a32 !important; 
+            color: #90caf9 !important; 
+        }
+        body.dark-mode #installArea { 
+            background: #0d3c61 !important; 
+            color: #e3f2fd !important; 
+        }
+        body.dark-mode .label { 
+            color: #b0bec5 !important; 
+        }
     </style>
 </head>
 <body>
 <main>
-    <h1>인터넷 사용 신청</h1>
+    <div class="header-container">
+        <h1>인터넷 사용 신청</h1>
+        <div class="theme-toggle-group">
+            <button type="button" class="theme-btn active" id="lightModeBtn" onclick="setTheme('light')">일반모드</button>
+            <button type="button" class="theme-btn" id="darkModeBtn" onclick="setTheme('dark')">다크모드</button>
+        </div>
+    </div>
     <div class="notice">인터넷 사용 시간을 선택한 후 사용요청을 눌러주세요.</div>
     <div class="options" id="timeOptions">
-        {% for fare in internet_fares %}<button class="time configured-fare" data-min="{{ fare.minutes }}" data-price="{{ fare.price }}">{{ fare.minutes }}분 · {{ '%g'|format(fare.price) }} PHP</button>{% endfor %}
+        {% for fare in internet_fares %}
+        <button class="time configured-fare" data-min="{{ fare.minutes }}" data-price="{{ fare.price }}">{{ fare.minutes }}분 · {{ '%g'|format(fare.price) }} PHP</button>
+        {% endfor %}
+        
         <button class="time" data-min="30">30분</button>
         <button class="time" data-min="60">1시간</button>
         <button class="time" data-min="90">1시간 30분</button>
@@ -62,6 +221,31 @@
     </div>
 </main>
 <script>
+    function setTheme(mode) {
+        const lightBtn = document.getElementById('lightModeBtn');
+        const darkBtn = document.getElementById('darkModeBtn');
+        if (mode === 'dark') {
+            document.body.classList.add('dark-mode');
+            darkBtn.classList.add('active');
+            lightBtn.classList.remove('active');
+            localStorage.setItem('theme', 'dark');
+        } else {
+            document.body.classList.remove('dark-mode');
+            lightBtn.classList.add('active');
+            darkBtn.classList.remove('active');
+            localStorage.setItem('theme', 'light');
+        }
+    }
+
+    (function() {
+        const savedTheme = localStorage.getItem('theme');
+        if (savedTheme === 'dark') {
+            setTheme('dark');
+        } else {
+            setTheme('light');
+        }
+    })();
+
     let selectedMinutes = 30;
     const messageBox = document.getElementById('message');
     const statusBox = document.getElementById('status');
@@ -83,7 +267,6 @@
             'X-Client-Timezone': timezone.slice(0, 80)
         };
     }
-    // 캡티브 포털의 구형 브라우저에서 fetch가 없는 경우를 지원한다.
     function requestJson(url, options) {
         options = options || {};
         return new Promise(function (resolve, reject) {
@@ -147,7 +330,9 @@
             selectedMinutes = Number(button.dataset.min);
         });
     });
-    document.querySelector('.time').classList.add('selected');
+    if (document.querySelector('.time')) {
+        document.querySelector('.time').classList.add('selected');
+    }
 
     function showMessage(text) {
         messageBox.textContent = text;
@@ -220,9 +405,7 @@
             ].join('&');
             await requestJson('/internet-status?' + params);
             lastReportedInternetStatus = value;
-        } catch (error) {
-            // The next status poll will retry the connection check.
-        }
+        } catch (error) {}
     }
 
     function testInternetConnection() {
@@ -280,13 +463,9 @@
                     internetStateBox.innerHTML = '<span class="label approved">인터넷 사용 가능</span><br>' +
                         '인터넷 연결이 확인되었습니다.';
                     return;
-                } catch (error) {
-                    // The next attempt gives the hotspot/DNS route time to settle.
-                }
+                } catch (error) {}
                 await new Promise(resolve => setTimeout(resolve, 1000));
             }
-            // 외부 확인 주소가 차단되어도 브라우저가 온라인으로 판단하면
-            // 핫스팟 인터넷은 사용 가능한 상태로 표시한다.
             if (runId === internetCheckRun && navigator.onLine) {
                 await reportInternetStatus('사용 가능', {
                     probe_url: 'navigator.onLine',
@@ -309,12 +488,6 @@
         }
     }
 
-    // 상태 확인 정책:
-    // 1) 페이지 최초 접속: 즉시 /status 요청
-    // 2) 상태확인 버튼: 즉시 /status 요청
-    // 3) 스마트폰 화면이 보일 때: /status?wait=1 대기 연결 유지
-    // 4) 승인/비승인 또는 인터넷 상태 변경 패킷 수신 즉시 화면 갱신
-    // 5) 화면이 숨겨지면 대기 연결 중지, 다시 보이면 자동 재연결
     async function checkStatus(waitForChange = false, forceInternetCheck = false) {
         const data = await requestJson(waitForChange ? '/status?wait=1' : '/status');
         renderStatus(data);
@@ -329,7 +502,6 @@
 
     let statusStreamRunning = false;
     async function startStatusStream() {
-        // 모바일 화면이 실제로 보이는 경우에만 자동 대기 연결을 실행한다.
         if (statusStreamRunning || !isMobileScreen || document.visibilityState !== 'visible') return;
         statusStreamRunning = true;
         while (isMobileScreen && document.visibilityState === 'visible') {

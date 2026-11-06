@@ -7,6 +7,7 @@ from PySide6.QtGui  import QPixmap
 
 from Common.config import FileConfigManager, ConfigType
 from Common.paths import DATA_DIR
+from Common.geometry_manager import AutoGeometryWidget
 from Common.settings_registry import register_settings_tab
 
 class StorageDisplayConfig(FileConfigManager):
@@ -17,7 +18,7 @@ class StorageDisplayConfig(FileConfigManager):
         # 'fare_image_dir': {"default": os.path.join(DATA_DIR, 'fare'), "type": ConfigType.FULLPATH},
     }
 
-class StorageDisplayTab(QWidget):
+class StorageDisplayTab(AutoGeometryWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.config = StorageDisplayConfig()

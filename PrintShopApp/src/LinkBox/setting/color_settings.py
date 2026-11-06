@@ -2,6 +2,7 @@
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QListWidget, QHBoxLayout, QLineEdit, QPushButton
 from Common.config import FileConfigManager, ConfigType
 from Common.settings_registry import register_settings_tab
+from Common.geometry_manager import AutoGeometryWidget
 
 DEFAULT_COLOR_OPTIONS = ['Color', 'B&W']
 
@@ -12,7 +13,7 @@ class ColorOutputConfig(FileConfigManager):
         'color_options': {"default": DEFAULT_COLOR_OPTIONS, "type": ConfigType.LIST},
     }
 
-class ColorOutputTab(QWidget):
+class ColorOutputTab(AutoGeometryWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.config = ColorOutputConfig()

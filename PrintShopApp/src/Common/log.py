@@ -141,6 +141,9 @@ class LogManagerRegistry:
     @classmethod
     def close_all_logs(cls):
         """등록된 모든 로거와 전역 리스너를 일괄적으로 닫고 파일 잠금을 해제합니다."""
+
+        logd("등록된 모든 로거와 전역 리스너를 일괄적으로 닫고 파일 잠금을 해제합니다.")
+
         for manager in cls._instances:
             try:
                 manager.close_logs()
@@ -519,6 +522,12 @@ def setup_global_logd(log_file=DEFAULT_LOG_FILE_PATH, module_name="GlobalModule"
     builtins.logd = logd
     builtins.loge = loge    
     builtins.LogTag = LogTag
+
+def reset_global_logd():
+    global _shared_logger
+    if _shared_logger is not None:
+        _shared_logger.stop()
+        _shared_logger = None    
 
 def logd(message: str, tag=None, level="debug"):
     global _shared_logger

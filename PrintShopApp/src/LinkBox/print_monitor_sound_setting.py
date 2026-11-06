@@ -19,7 +19,7 @@ class PrintMonitorSoundConfig(FileConfigManager):
             'tree_sound': {"default": os.path.join(PRINT_MONITOR_SOUND_DIR, 'insert.wav'), "type": ConfigType.FULLPATH},            
         }
 
-class PrintMonitorSoundSettings(QWidget):
+class PrintMonitorSoundSettings(AutoGeometryWidget):
     SOUND_SETTINGS_SECTION = 'PrintMonitorSounds'
 
     def __init__(self, parent=None):

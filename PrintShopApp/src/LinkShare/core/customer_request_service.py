@@ -1,8 +1,17 @@
 """LinkShare customer internet-request workflow."""
 import datetime
 import threading
-def customer_request(request, runtime_settings, shared_sessions, get_client_identity, get_client_session, append_usage_log, signals, apply_client_metadata, default_internet_fares):
-    fare_map = {int(item['minutes']): item for item in runtime_settings.get('internet_fares', default_internet_fares)}
+from LinkShare.setting.hotspot_settings import HotspotNetworkConfig
+from LinkShare.setting.internet_rates_settings import InternetRatesConfig
+
+
+def handle_customer_request(request, shared_sessions, get_client_identity, get_client_session, append_usage_log, signals, apply_client_metadata):
+    # 1. InternetRatesConfig를 직접 이용하여 활성화된 실시간 요금표 동적 조회[cite: 2]
+    rates_config = InternetRatesConfig()
+    current_fares = rates_config.get_internet_fares()
+
+    fare_map = {int(item['minutes']): item for item in current_fares}
+
     allowed_minutes = set(fare_map)
     try:
         minutes = int(request.args.get('min', 60))
@@ -14,6 +23,7 @@ def customer_request(request, runtime_settings, shared_sessions, get_client_iden
     token, token_id, client_ip, device_name = get_client_identity()
     fare = fare_map[minutes]['price']
     dur_str = f"{minutes} Min Pass ({fare:g} PHP)" if minutes < 60 else f"{minutes//60} Hour Pass ({fare:g} PHP)"
+    
     existing_session = shared_sessions.get(client_ip)
     if existing_session:
         existing_status = get_client_session(client_ip).get('status')
@@ -61,18 +71,27 @@ def customer_request(request, runtime_settings, shared_sessions, get_client_iden
                 'session': get_client_session(client_ip),
             }
 
+    # 2. 활성 상태('Pending', 'Approved')인 연결의 총합 계산
     active_statuses = {'Pending', 'Approved'}
-    active_count = sum(
+    active_connection_count = sum(
         1 for session in shared_sessions.values()
         if session.get('status') in active_statuses
     )
+    
+    # 3. HotspotNetworkConfig를 직접 이용하여 max_connections와 windows_hotspot_limit 조회 후 작은 값 적용[cite: 3]
+    hotspot_config = HotspotNetworkConfig()
+    max_conn = hotspot_config.get('max_connections')
+    win_limit = hotspot_config.get('windows_hotspot_limit')
+    effective_max = min(max_conn, win_limit)
+
+    # 4. 실효 제한 값을 초과하면 429 에러 처리
     existing_session = shared_sessions.get(client_ip)
-    if existing_session is None and active_count >= runtime_settings['max_connections']:
+    if existing_session is None and active_connection_count >= effective_max:
         return {
-            'msg': 'Maximum connection limit reached. Please try again later.',
+            'msg': 'Maximum connection limit reached (restricted by hotspot configuration/Windows limit). Please try again later.',
             'status': 'Full',
-            'current': active_count,
-            'maximum': runtime_settings['max_connections'],
+            'current': active_connection_count,
+            'maximum': effective_max,
         }, 429
 
     session_record = {
@@ -108,4 +127,3 @@ def customer_request(request, runtime_settings, shared_sessions, get_client_iden
         'msg': f"[{dur_str}] Approval request sent. Please pay at the counter.",
         'session': get_client_session(client_ip),
     }
-

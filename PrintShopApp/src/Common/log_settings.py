@@ -10,7 +10,7 @@ from PySide6.QtCore import Qt
 from Common.log_config import LogConfig
 from Common.settings_registry import register_settings_tab
 
-class LogSettingsTab(QWidget):
+class LogSettingsTab(AutoGeometryWidget):
     """PySide6 설정 탭 UI"""
     def __init__(self, parent=None):
         super().__init__(parent)

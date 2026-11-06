@@ -4,6 +4,7 @@ import datetime
 import hashlib
 import ipaddress
 import json
+import os
 import re
 import secrets
 import sqlite3
@@ -11,19 +12,27 @@ import subprocess
 import threading
 from waitress import serve
 
-from flask import Response, make_response, redirect, render_template, request
+from flask import Flask, Response, make_response, redirect, render_template_string, request
 from Common.globals import CONFIG_ENCODING
+from Common.log import logd, loge
 
-from LinkShare.client_identity_service import get_client_identity as resolve_client_identity
-from LinkShare.customer_request_service import customer_request as handle_customer_request
-from LinkShare.internet_share_session_db import InternetShareSessionDatabase
-from LinkShare.internet_share_usage_db import InternetShareUsageDatabase
-from .setting.internet_rates_settings import InternetRatesConfig
-from .setting.linkshare_settings import LinkshareConfig
+# 👉 외부 파일에 있는 HtmlLoader 임포트 (경로는 실제 파일 위치에 맞게 수정해주세요)
+from Common.html_loader import HtmlLoader
+
+from LinkShare.linkshare_signals import LinkShareServerSignals
+from LinkShare.core.client_identity_service import get_client_identity as resolve_client_identity
+from LinkShare.core.customer_request_service import handle_customer_request
+from LinkShare.db.internet_share_session_db import InternetShareSessionDatabase
+from LinkShare.db.internet_share_usage_db import InternetShareUsageDatabase
+from LinkShare.setting.internet_rates_settings import InternetRatesConfig
+from LinkShare.setting.linkshare_settings import LinkshareConfig
 
 # 설정값 상수 정의
 INTERNET_PORTAL_SERVICE_IP = '0.0.0.0'
 INTERNET_PORTAL_SERVICE_PORT = 8081
+
+# 외부에서 임포트한 HtmlLoader를 사용하여 모듈 로드 시점에 portal.html 로드
+internet_portal_html_content = HtmlLoader(__file__, 'templates/internet_portal.html')
 
 
 class LinkShareWebService:
@@ -46,7 +55,7 @@ class LinkShareWebService:
         self.signals = signals
         self.internet_share_status_poll_interval = LinkshareConfig().get('internet_share_status_poll_interval')
 
-        # 데이터베이스 리포지토리 직접 초기화[cite: 2]
+        # 데이터베이스 리포지토리 직접 초기화
         self.session_db = InternetShareSessionDatabase()
         self.usage_db = InternetShareUsageDatabase()
 
@@ -76,7 +85,7 @@ class LinkShareWebService:
         return response
 
     def apply_client_metadata(self, session, token_id):
-        """Copy browser-supplied automatic metadata into a session record."""[cite: 2]
+        """Copy browser-supplied automatic metadata into a session record."""
         metadata = self.client_metadata_map.get(token_id, {})
         for key, value in metadata.items():
             if value:
@@ -85,7 +94,7 @@ class LinkShareWebService:
         session['last_seen'] = metadata.get('last_seen', session.get('last_seen', ''))
 
     def append_usage_log(self, log_type, session, **overrides):
-        """Append an immutable request/approval event directly to usage and session DBs."""[cite: 2]
+        """Append an immutable request/approval event directly to usage and session DBs."""
         record = dict(session)
         record.update(overrides)
         record['log_type'] = log_type
@@ -103,7 +112,7 @@ class LinkShareWebService:
             pass
 
     def is_client_internet_approved(self, client_ip):
-        """Return whether a client currently has an active approved session from DB."""[cite: 2]
+        """Return whether a client currently has an active approved session from DB."""
         sessions = self.session_db.load_sessions()
         session = sessions.get(client_ip)
         if not session or session.get('status') != 'Approved':
@@ -148,7 +157,7 @@ class LinkShareWebService:
             return fallback_servers
 
     def get_client_session(self, client_ip):
-        """Return a browser-safe, current snapshot of one client session from DB."""[cite: 2]
+        """Return a browser-safe, current snapshot of one client session from DB."""
         sessions = self.session_db.load_sessions()
         session = sessions.get(client_ip)
         if not session:
@@ -189,10 +198,10 @@ class LinkShareWebService:
         @web_app.route('/scan')
         def customer_scan():
             token, _token_id, _client_ip, _device_name = service.get_client_identity()
-            current_fares = InternetRatesConfig().get_internet_fares
+            current_fares = InternetRatesConfig().get_internet_fares()
 
-            response = make_response(render_template(
-                'portal.html',
+            response = make_response(render_template_string(
+                internet_portal_html_content,
                 status_poll_interval=service.internet_share_status_poll_interval,
                 internet_fares=current_fares
             ))
@@ -245,8 +254,7 @@ class LinkShareWebService:
                 service.get_client_session,
                 service.append_usage_log,
                 service.signals,
-                service.apply_client_metadata,
-                InternetRatesConfig().get_internet_fares(),
+                service.apply_client_metadata
             )
 
         @web_app.route('/status')
@@ -333,12 +341,26 @@ class LinkShareWebService:
 
 
 class WebServerManager:
-    def __init__(self, service_instance, host=INTERNET_PORTAL_SERVICE_IP, port=INTERNET_PORTAL_SERVICE_PORT):
-        self.service_instance = service_instance
+    def __init__(self, service_instance=None, host=INTERNET_PORTAL_SERVICE_IP, port=INTERNET_PORTAL_SERVICE_PORT, **kwargs):
         self.host = host
         self.port = port
         self.server_thread = None
         self._is_running = False
+
+        if service_instance is None:
+            self.service_instance = LinkShareWebService(
+                client_identity_map=kwargs.get('client_identity_map', {}),
+                client_metadata_map=kwargs.get('client_metadata_map', {}),
+                session_identity_lock=kwargs.get('session_identity_lock', threading.Lock()),
+                status_condition=kwargs.get('status_condition', threading.Condition()),
+                signals=kwargs.get('signals', LinkShareServerSignals())
+            )
+        else:
+            self.service_instance = service_instance
+
+        self.web_app = Flask(__name__)
+        self.service_instance.register_routes(self.web_app)
+        self.service_instance.web_app = self.web_app
 
     def start(self):
         if self._is_running:
@@ -362,33 +384,48 @@ class WebServerManager:
         self._is_running = False
 
     def status(self):
-        status_info = {
+        return {
             "is_running": self._is_running,
             "host": self.host,
             "port": self.port,
             "url": f"http://{self.host if self.host != '0.0.0.0' else '127.0.0.1'}:{self.port}"
         }
-        return status_info
 
 
 _server_manager_instance = None
 
-def link_share_init_server(service_instance, host=INTERNET_PORTAL_SERVICE_IP, port=INTERNET_PORTAL_SERVICE_PORT):
+def link_share_init_server(service_instance=None, host=INTERNET_PORTAL_SERVICE_IP, port=INTERNET_PORTAL_SERVICE_PORT, **kwargs):
     global _server_manager_instance
-    _server_manager_instance = WebServerManager(service_instance, host, port)
+    logd(f"[Server] [Debug] link_share_init_server 호출됨 (host={host}, port={port})")
+    _server_manager_instance = WebServerManager(service_instance, host, port, **kwargs)
+    logd(f"[Server] WebServerManager 인스턴스가 새로 생성 및 초기화되었습니다.")
 
-def link_share_start():
+def link_share_start(service_instance=None, host=INTERNET_PORTAL_SERVICE_IP, port=INTERNET_PORTAL_SERVICE_PORT, **kwargs):
     global _server_manager_instance
+    
+    if _server_manager_instance is None:
+        logd("[Server] [Debug] _server_manager_instance가 None입니다. 자동으로 초기화(link_share_init_server)를 진행합니다.")
+        link_share_init_server(service_instance, host, port, **kwargs)
+    else:
+        logd("[Server] [Debug] 기존에 생성된 _server_manager_instance를 재사용합니다.")
+    
     if _server_manager_instance:
+        logd("[Server] 웹 서버 시작 명령을 전달합니다.")
         _server_manager_instance.start()
 
 def link_share_stop():
     global _server_manager_instance
     if _server_manager_instance:
+        logd("[Server] 웹 서버 중지 요청이 접수되었습니다.")
         _server_manager_instance.stop()
+    else:
+        logd("[Server] [Debug] 서버 관리자 인스턴스가 존재하지 않습니다 (None). 중지할 서버가 없습니다.")
 
 def link_share_status():
     global _server_manager_instance
     if _server_manager_instance:
+        logd("[Server] [Debug] 서버 관리자 인스턴스가 존재합니다. 상태를 조회합니다.")
         return _server_manager_instance.status()
+    
+    logd("[Server] [Debug] 서버 관리자 인스턴스가 존재하지 않습니다 (None). 기본 상태(is_running: False)를 반환합니다.")
     return {"is_running": False}

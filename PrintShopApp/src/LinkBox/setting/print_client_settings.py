@@ -18,7 +18,7 @@ class PrintClientConfig(FileConfigManager):
     }
 
 
-class PrintClientSettingTab(QWidget):
+class PrintClientSettingTab(AutoGeometryWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 

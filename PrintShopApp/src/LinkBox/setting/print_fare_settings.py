@@ -13,6 +13,7 @@ from PySide6.QtPrintSupport import QPrinter, QPrintDialog
 from Common.config import DbConfigManager
 from Common.settings_registry import register_settings_tab
 from Common import globals as app_globals  # 상단에 추가
+from Common.geometry_manager import AutoGeometryWidget
 
 class PrintFareConfig(DbConfigManager):
     section = "PrintingPrices"
@@ -143,7 +144,7 @@ class PrintFareConfig(DbConfigManager):
             )
             conn.commit()        
 
-class PrintFareTab(QWidget):
+class PrintFareTab(AutoGeometryWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.config = PrintFareConfig()

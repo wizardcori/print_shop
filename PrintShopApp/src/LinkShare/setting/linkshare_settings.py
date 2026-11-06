@@ -7,6 +7,7 @@ from PySide6.QtGui  import QPixmap
 
 from Common.config import FileConfigManager, ConfigType
 from Common.paths import DATA_DIR
+from Common.geometry_manager import AutoGeometryWidget
 from Common.settings_registry import register_settings_tab
 
 INTERNET_SHARE_COOKIE = 'internet_share_client_token'
@@ -27,7 +28,7 @@ class LinkshareConfig(FileConfigManager):
         
     }
 
-class LinkshareTab(QWidget):
+class LinkshareTab(AutoGeometryWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.config = LinkshareConfig()

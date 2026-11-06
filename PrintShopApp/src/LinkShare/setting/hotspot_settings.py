@@ -17,19 +17,20 @@ from PySide6.QtUiTools import QUiLoader
 
 from Common.paths import NETWORK_QR_OUTPUT_DIR, CAPTIVE_QR_OUTPUT_DIR
 from Common.config import FileConfigManager, ConfigType
+from Common.geometry_manager import AutoGeometryWidget
 from Common.settings_registry import register_settings_tab
 from Common.network_utils import normalize_hotspot_network, escape_wifi_qr_field
-from ..qr_log import QrcodeLog
+from LinkShare.qrcode.qr_log import QrcodeLog
 from Common.folder_explorer_dialog_component import FolderExplorerDialog
 
-from LinkShare.hotspot_service import (
+from LinkShare.core.hotspot_service import (
     apply_windows_hotspot_registry_limit,
     run_hotspot_diagnostics,
     set_hotspot_enabled,
     check_hotspot_checkpoints
 )
-from LinkShare.firewall_service import apply_hotspot_firewall_rules
-from LinkShare.network_adapter_service import (
+from LinkShare.core.firewall_service import apply_hotspot_firewall_rules
+from LinkShare.core.network_adapter_service import (
     ping_ip_address, 
     get_nic_mac_address, 
     get_network_interfaces, 
@@ -69,7 +70,7 @@ class HotspotNetworkConfig(FileConfigManager):
     }
 
 
-class HotspotNetworkTab(QWidget):
+class HotspotNetworkTab(AutoGeometryWidget):
     qr_export_completed = Signal(str, bool, str)
 
     def __init__(self, parent=None, interfaces=None):

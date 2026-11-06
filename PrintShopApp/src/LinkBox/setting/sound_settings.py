@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QCheckBox, QPushButt
 from Common.config import FileConfigManager, ConfigType
 from Common.settings_registry import register_settings_tab
 from Common.paths import APPROVAL_SOUND_DIR
+from Common.geometry_manager import AutoGeometryWidget
 from LinkBox.print_log_writer import play_notification_sound
 
 DEFAULT_APPROVAL_SOUND_ENABLED = True
@@ -24,7 +25,7 @@ class ApprovalSoundConfig(FileConfigManager):
         'approval_sounds': {"default": DEFAULT_APPROVAL_SOUNDS, "type": ConfigType.LIST},
     }
 
-class ApprovalSoundTab(QWidget):
+class ApprovalSoundTab(AutoGeometryWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.config = ApprovalSoundConfig()

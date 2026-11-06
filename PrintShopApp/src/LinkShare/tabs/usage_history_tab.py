@@ -1,6 +1,8 @@
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QTableWidget, QHeaderView
 
-class UsageHistoryTab(QWidget):
+from Common.geometry_manager import AutoGeometryWidget
+
+class UsageHistoryTab(AutoGeometryWidget):
     def __init__(self, window=None, existing_table=None, parent=None):
         super().__init__(parent)
         self.window = window

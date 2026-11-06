@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 
 from Common.paths import DATA_DIR
 from Common.config import FileConfigManager, ConfigType
+from Common.geometry_manager import AutoGeometryWidget
 from Common.settings_registry import register_settings_tab
 from Common.current_user_session import CurrentUserSession
 
@@ -137,7 +138,7 @@ class EnvSettingsConfig(FileConfigManager):
         return True
 
 
-class EnvSettingsTab(QWidget):
+class EnvSettingsTab(AutoGeometryWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.config = EnvSettingsConfig()

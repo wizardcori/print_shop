@@ -1,6 +1,7 @@
 """Zone and Table management settings and UI component."""
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QLineEdit, QPushButton, QListWidget, QHBoxLayout, QMessageBox
 from Common.config import FileConfigManager, ConfigType
+from Common.geometry_manager import AutoGeometryWidget
 from Common.settings_registry import register_settings_tab
 
 DEFAULT_ZONES = ["Counter", "Table01", "Table02", "VIP_Room"]
@@ -14,7 +15,7 @@ class ZoneManagementConfig(FileConfigManager):
         'save_tabs': {"default": DEFAULT_SAVE_TABS, "type": ConfigType.LIST},
     }
 
-class ZoneManagementTab(QWidget):
+class ZoneManagementTab(AutoGeometryWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.config = ZoneManagementConfig()

@@ -3,6 +3,8 @@
 import os
 import json
 import datetime
+import threading
+
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QTableWidget, 
     QGroupBox, QSplitter, QTabWidget, QPushButton, 
@@ -12,21 +14,23 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFontMetrics, QPixmap
 from PySide6.QtUiTools import QUiLoader
 
-from .internet_share_approval_dialog import InternetShareApprovalDialog
+from LinkShare.ui.internet_share_approval_dialog import InternetShareApprovalDialog
 
-from .tabs.connection_status_tab import ConnectionStatusTab
-from .tabs.usage_requests_tab import UsageRequestsTab
-from .tabs.usage_approvals_tab import UsageApprovalsTab
-from .tabs.usage_history_tab import UsageHistoryTab
-from .usage_history_controller import update_usage_history_tables
-from .internet_share_session_db import InternetShareSessionDatabase
+from LinkShare.tabs.connection_status_tab import ConnectionStatusTab
+from LinkShare.tabs.usage_requests_tab import UsageRequestsTab
+from LinkShare.tabs.usage_approvals_tab import UsageApprovalsTab
+from LinkShare.tabs.usage_history_tab import UsageHistoryTab
+from LinkShare.core.usage_history_controller import update_usage_history_tables
+from LinkShare.db.internet_share_session_db import InternetShareSessionDatabase
 
-from .internet_portal import link_share_init_server, link_share_start
+from LinkShare.web.internet_portal import link_share_start
 
 # HotspotNetworkConfig 연동을 위한 임포트
 from Common.config import FileConfigManager
-from .setting.linkshare_settings import LinkshareConfig
-from .setting.hotspot_settings import HotspotNetworkConfig
+from LinkShare.setting.linkshare_settings import LinkshareConfig
+from LinkShare.setting.hotspot_settings import HotspotNetworkConfig
+
+from LinkShare.linkshare_signals import LinkShareServerSignals
 
 class CollapsibleStatusLabel(QLabel):
     def __init__(self, text='', parent=None):
@@ -87,51 +91,16 @@ class LinkShareManager:
         self.client_identity_map = {}
         self.client_metadata_map = {}
         
-        # HotspotNetworkConfig 인스턴스 생성하여 설정 통합 관리[cite: 2]
+        # --- Qt 시그널 인스턴스 생성 및 슬롯 연결 ---
+        self.share_signals = LinkShareServerSignals()
+        self.share_signals.approval_requested.connect(self.handle_approval_requested_slot)
+        self.session_identity_lock = threading.Lock()        
+        
+        # HotspotNetworkConfig 인스턴스 생성하여 설정 통합 관리
         self.linkshare_config = LinkshareConfig()
         self.hotspot_config = HotspotNetworkConfig()
 
-        self.create_tab()
-        
-        # self.config_file_path = os.path.abspath(
-        #     os.path.join(os.path.dirname(__file__), "..", "..", "data", "linkshare_config.json")
-        # )
-
-    # def load_tab_config(self):
-    #     if os.path.exists(self.config_file_path):
-    #         try:
-    #             with open(self.config_file_path, 'r', encoding='utf-8') as f:
-    #                 data = json.load(f)
-    #                 return data.get("active_tab_index", 0)
-    #         except Exception:
-    #             pass
-    #     return 0
-
-    # def save_tab_config(self, index):
-    #     try:
-    #         os.makedirs(os.path.dirname(self.config_file_path), exist_ok=True)
-    #         data = {}
-    #         if os.path.exists(self.config_file_path):
-    #             with open(self.config_file_path, 'r', encoding='utf-8') as f:
-    #                 try:
-    #                     data = json.load(f)
-    #                 except Exception:
-    #                     pass
-    #         data["active_tab_index"] = index
-    #         with open(self.config_file_path, 'w', encoding='utf-8') as f:
-    #             json.dump(data, f, ensure_ascii=False, indent=4)
-    #     except Exception as e:
-    #         logd(f"[Config Save Error] {e}")
-
-    def update_captive_portal_status(self, text):
-        label = getattr(self.window, 'captive_portal_status_label', None)
-        if label is not None:
-            label.setText(text)
-
-    def create_tab(self):
-        window = self.window
-        
-        # --- [수정] HotspotNetworkConfig로부터 최신 설정값 불러오기 ---
+        # --- HotspotNetworkConfig로부터 최신 설정값 불러오기 ---
         current_ssid = self.hotspot_config.get('ssid') or "PrintShop_Hotspot"
         max_connections = self.hotspot_config.get('max_connections') or 8
         hotspot_network = self.hotspot_config.get('hotspot_network') or "192.168.137.0/24"
@@ -149,6 +118,7 @@ class LinkShareManager:
         if not os.path.exists(hotspot_image):
             hotspot_image = ""
 
+        # --- UI 파일 로드 및 커스텀 위젯 등록 ---
         loader = QUiLoader()
         loader.registerCustomWidget(CollapsibleStatusLabel)
         loader.registerCustomWidget(AutoFitTextLabel)
@@ -524,7 +494,6 @@ class LinkShareManager:
 
         def custom_tab_changed(index):
             self.linkshare_config.set('active_tab_index', index)    
-#            self.save_tab_config(index)
 
             tab_name = window.usage_history_tabs.tabText(index)
             state = window.tab_filter_states.get(tab_name, {"combo_index": 0, "start": "", "end": ""})
@@ -581,7 +550,22 @@ class LinkShareManager:
         window.main_tabs.addTab(tab2_widget, "Wi-Fi Pass Manager (LinkShare)")
         window.main_titles = getattr(window, 'main_titles', [])
         window.main_tabs.setCurrentIndex(1 if current_main_tab == "wifi_pass" else 0)
-        return tab2_widget
 
-    def register_tab(self, tab_widget, content_widget):
-        return tab_widget.addTab(content_widget, self.TAB_TITLE)
+        # --- 하위 파일(웹 서비스)에 매개변수로 전달 ---
+        link_share_start(
+            signals=self.share_signals,
+            session_identity_lock=self.session_identity_lock,
+            client_identity_map=self.client_identity_map,
+            client_metadata_map=self.client_metadata_map
+        )
+
+    def handle_approval_requested_slot(self, client_ip, minutes, dur_str):
+        """웹 서버 스레드에서 보낸 승인 요청 시그널을 UI 스레드에서 받아 처리하는 슬롯"""
+        window = self.window
+        if hasattr(window, 'approval_dialog') and window.approval_dialog:
+            window.approval_dialog.show_request(client_ip, minutes, dur_str)
+
+    def update_captive_portal_status(self, text):
+        label = getattr(self.window, 'captive_portal_status_label', None)
+        if label is not None:
+            label.setText(text)

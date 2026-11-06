@@ -19,6 +19,7 @@ if project_root not in sys.path:
 
 from Common.globals import CONFIG_ENCODING
 from Common.config import FileConfigManager
+from Common.log import LogManagerRegistry
 
 # 설정 Config 클래스들 임포트
 from setting.general_settings import *
@@ -36,6 +37,7 @@ from create_admin_shortcut import set_startup_registration
 from Common.paths import get_ui_file_path
 #from Common.db import BaseDb
 from Common.settings_dialog import SettingsDialog
+from Common.geometry_manager import GeometryManager
 
 # [추가] LinkShare 내부의 설정들도 레지스트리에 등록될 수 있도록 임포트
 # [추가] 각 설정 모듈들을 직접 임포트
@@ -90,6 +92,11 @@ os.chdir(project_dir if not getattr(sys, 'frozen', False) else application_dir)
 #order_service = OrderService(app_database)
 
 
+class PrintShopAppGeometryConfig(GeometryManager):
+    schema: Dict[str, Dict[str, Any]] = {
+        "window_geometry": {"type": ConfigType.LIST, "default": [200, 200, 800, 600]}
+    }
+
 class PrintShopApp(QMainWindow):
     file_signal = Signal(list, str, str)
     delete_signal = Signal(str, list)
@@ -108,6 +115,7 @@ class PrintShopApp(QMainWindow):
 
     def __init__(self):
         super().__init__()
+
         self.show_mode_in_title = env_config.get('show_mode_in_title')
         self.show_feature_in_title = env_config.get('show_feature_in_title')
         privilege_label = "Administrator privileges" if env_config.get('is_admin') else "Standard privileges"
@@ -183,7 +191,12 @@ class PrintShopApp(QMainWindow):
         # 4. 초기 탭 세팅이 모두 끝난 후에 시그널을 연결 (시작할 때 불필요한 0번->1번 변경 이벤트 방지 및 안정적인 연결)
         self.main_tabs.currentChanged.connect(self.on_main_tab_changed)                
 
-        self.resize(1150, 750)
+        # 1. 해당 윈도우 전용 Config 매니저 인스턴스 생성 (싱글톤으로 동작)
+        self.config_mgr = PrintShopAppGeometryConfig()
+        # 3. 저장된 윈도우 크기 및 다중 스플릿바 위치 로드
+        self.config_mgr.load_window_geometry(self)
+        self.config_mgr.load_splitters_by_name(self)
+#        self.resize(1150, 750)
 
     # ----------------------------------------------------------------------
     # Event Handlers & Helper Methods
@@ -241,12 +254,19 @@ class PrintShopApp(QMainWindow):
 
     def closeEvent(self, event):
         logd("Application closing...")
+
+        # 5. 윈도우 종료 시점 자동 저장
+        self.config_mgr.save_window_geometry(self)
+        self.config_mgr.save_splitters_by_name(self)
+
         # [추가] 앱이 종료될 때 메모리에 남아있는 세팅 다이얼로그가 있다면 완전히 닫고 해제
         if hasattr(SettingsDialog, '_instance') and SettingsDialog._instance is not None:
             SettingsDialog._instance.setAttribute(Qt.WA_DeleteOnClose, True)
             SettingsDialog._instance.close()
             SettingsDialog._instance = None
-        event.accept()        
+
+        LogManagerRegistry.close_all_logs()
+        event.accept()
 
 
 def initialize_all_configurations():
