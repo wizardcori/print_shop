@@ -145,3 +145,9 @@ PrintShopTests/results/
 PrintShopApp/data/
 
 PrintShop.si4project/
+
+printshop_versions/
+sw/
+PrintShopTests/
+test/
+dist/
