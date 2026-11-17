@@ -141,14 +141,13 @@ Desktop.ini
 
 # user data folder
 LinkBox_Files/
-PrintShopTests/results/
+TestsPrintShop/results/
 PrintShopApp/data/
 
 PrintShop.si4project/
 
-printshop_versions/
+versions_printshop/
 sw/
-PrintShopTests/
 test/
 dist/
 init_data/
