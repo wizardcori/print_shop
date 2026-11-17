@@ -14,7 +14,7 @@ from PySide6.QtUiTools import QUiLoader
 from PySide6.QtCore import QFile
 
 from Common.settings_registry import register_settings_tab
-from Common.paths import CONFIG_FILE, PRINT_MONITOR_SOUND_DIR
+import Common.paths as paths 
 from Common.globals import CONFIG_ENCODING, resource_path, load_ui_safely
 from Common.config import FileConfigManager, FileConfigManager  
 
@@ -24,7 +24,7 @@ from .print_log_writer import write_system_log
 MONITORED_PRINTERS_SECTION = 'MonitoredPrinters'
 # Values edited from the integrated Settings screen belong to the shared
 # application settings file, not the LinkBox implementation config.
-DEFAULT_CONFIG_PATH = CONFIG_FILE
+DEFAULT_CONFIG_PATH = paths.CONFIG_FILE
 
 
 def list_system_printers():
@@ -326,13 +326,13 @@ class PrinterMonitorSettingsWidget:
 
 register_settings_tab(
     'linkbox.printer-monitor', 'Printer Monitor',
-    lambda parent: PrinterMonitorSettingsWidget.create(parent), order=20,
+    lambda parent: PrinterMonitorSettingsWidget.create(parent), order=45,
 )
 
 
 register_settings_tab(
     'linkbox.print-log', 'Print Log',
-    create_print_log_settings, order=21,
+    create_print_log_settings, order=50,
 )
 
 

@@ -10,7 +10,7 @@ class LoginDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("로그인")
-        self.config = GeneralSettingsConfig()
+        self.general_config = GeneralSettingsConfig()
         self.operator_config = OperatorConfig() # DB 연동을 위한 설정 객체
         
         self.init_ui()
@@ -40,9 +40,9 @@ class LoginDialog(QDialog):
 
     def load_saved_config(self):
         # 설정에 저장된 값 불러오기
-        self.username_input.setText(self.config.get('login_user_name'))
-        self.password_input.setText(self.config.get('login_user_password'))
-        self.auto_login_chk.setChecked(self.config.get('auto_login'))
+        self.username_input.setText(self.general_config.get('login_user_name'))
+        self.password_input.setText(self.general_config.get('login_user_password'))
+        self.auto_login_chk.setChecked(self.general_config.get('auto_login'))
 
     def verify_credentials(self, username, password):
         """DB(operators 테이블)에서 사용자 정보 검색 및 일치 여부 확인"""
@@ -67,10 +67,10 @@ class LoginDialog(QDialog):
         matched_user_info = self.verify_credentials(username, password)
         if matched_user_info:
             # 로그인 성공 시 설정 값 저장
-            self.config.set('login_user_name', username)
-            self.config.set('login_user_password', password if auto_login else "")
-            self.config.set('auto_login', auto_login)
-            self.config.save()
+            self.general_config.set('login_user_name', username)
+            self.general_config.set('login_user_password', password if auto_login else "")
+            self.general_config.set('auto_login', auto_login)
+            self.general_config.save()
 
             # --- [핵심] 전역 세션 클래스에 사용자, 권한, 특권 업데이트 ---
             session = CurrentUserSession()

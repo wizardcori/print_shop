@@ -72,13 +72,13 @@
      <height>33</height>
     </rect>
    </property>
-   <widget class="QMenu" name="menusetting">
-    <property name="title">
-     <string>setting</string>
-    </property>
-   </widget>
-   <addaction name="menusetting"/>
+   <addaction name="actionSetting"/>
   </widget>
+  <action name="actionSetting">
+   <property name="text">
+    <string>setting</string>
+   </property>
+  </action>
   <widget class="QStatusBar" name="statusbar"/>
  </widget>
  <resources/>

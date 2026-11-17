@@ -1,8 +1,9 @@
 import os
 
 from PySide6.QtWidgets import QWidget, QLineEdit, QPushButton, QLabel, QFileDialog
+from PySide6.QtUiTools import QUiLoader
 
-from Common.paths import PRINT_MONITOR_SOUND_DIR
+import Common.paths as paths
 from Common.globals import load_ui_safely
 from Common.config import FileConfigManager, ConfigType
 from Common.settings_registry import register_settings_tab
@@ -15,8 +16,8 @@ class PrintMonitorSoundConfig(FileConfigManager):
         section_order = 10
         #auto_save = False  # 수동 저장 모드
         schema = {
-            'detection_sound': {"default": os.path.join(PRINT_MONITOR_SOUND_DIR, 'detect.wav'), "type": ConfigType.FULLPATH},
-            'tree_sound': {"default": os.path.join(PRINT_MONITOR_SOUND_DIR, 'insert.wav'), "type": ConfigType.FULLPATH},            
+            'detection_sound': {"default": os.path.join(paths.PRINT_MONITOR_SOUND_DIR, 'detect.wav'), "type": ConfigType.FULLPATH},
+            'tree_sound': {"default": os.path.join(paths.PRINT_MONITOR_SOUND_DIR, 'insert.wav'), "type": ConfigType.FULLPATH},            
         }
 
 class PrintMonitorSoundSettings(AutoGeometryWidget):
@@ -31,17 +32,23 @@ class PrintMonitorSoundSettings(AutoGeometryWidget):
         self.config = PrintMonitorSoundConfig()
 
         # .ui 파일 로드
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        ui_path = os.path.join(current_dir, "ui", "print_monitor_sound_settings.ui")
-        write_system_log('WARNING', f"UI 파일 경로: {ui_path}")
-        logd(f"UI 파일 경로: {ui_path}")  # 디버그용 출력
 
-        try:
-            # 안전한 로딩 함수 호출
-            self.ui = load_ui_safely(ui_path, self)
-        except Exception as e:
-            logd(e)
-            write_system_log('ERROR', f"UI 파일 경로 로드 실패 ({ui_path}): {e}")
+        loader = QUiLoader()
+
+        ui_file_path = paths.get_ui_file_path(__file__, "ui", "print_monitor_sound_settings.ui")
+        self.ui = paths.load_ui_smart(loader, ui_file_path, "print_monitor_sound_settings.ui",caller_file=__file__)
+
+        # current_dir = os.path.dirname(os.path.abspath(__file__))
+        # ui_path = os.path.join(current_dir, "ui", "print_monitor_sound_settings.ui")
+        # write_system_log('WARNING', f"UI 파일 경로: {ui_path}")
+        # logd(f"UI 파일 경로: {ui_path}")  # 디버그용 출력
+
+        # try:
+        #     # 안전한 로딩 함수 호출
+        #     self.ui = load_ui_safely(ui_path, self)
+        # except Exception as e:
+        #     logd(e)
+        #     write_system_log('ERROR', f"UI 파일 경로 로드 실패 ({ui_path}): {e}")
 
         # 위젯 참조
         self.detection_edit   = self.ui.findChild(QLineEdit, "detectionEdit")
@@ -103,5 +110,5 @@ class PrintMonitorSoundSettings(AutoGeometryWidget):
 
 register_settings_tab(
     'linkbox.printer-monitor-sounds', 'Printer Monitor Sounds',
-    PrintMonitorSoundSettings, order=20.5,
+    PrintMonitorSoundSettings, order=65,
 )

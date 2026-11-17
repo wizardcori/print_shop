@@ -8,6 +8,8 @@ import shutil
 import logging
 from dotenv import load_dotenv
 
+from Common.log import logd,loge
+from Common.log import set_file_tag ;set_file_tag("MAIN")
 
 from setting import env_settings, general_settings, operator_settings
 # 사용하지 않는 경고를 숨기기 위한 더미 참조
@@ -34,8 +36,6 @@ if project_dir not in sys.path:
     sys.path.insert(0, project_dir)
 
 from create_admin_shortcut import set_startup_registration
-from Common.paths import get_ui_file_path
-#from Common.db import BaseDb
 from Common.settings_dialog import SettingsDialog
 from Common.geometry_manager import GeometryManager
 
@@ -68,6 +68,8 @@ from PySide6.QtCore import Qt, Signal, Slot, QTimer, QFile
 from PySide6.QtGui import QAction
 from PySide6.QtUiTools import QUiLoader
 
+from ui.ui_print_shop_app import Ui_PrintShopApp
+
 # 각 탭 모듈 임포트
 #from LinkBox.linkbox import create_tab as create_linkbox_tab
 #from LinkShare.linkshare import create_tab as create_linkshare_tab
@@ -83,14 +85,6 @@ data_dir = os.path.join(project_root, 'data') if not getattr(sys, 'frozen', Fals
 )
 os.makedirs(data_dir, exist_ok=True)
 os.chdir(project_dir if not getattr(sys, 'frozen', False) else application_dir)
-
-# 데이터베이스 설정
-# database_dir = os.path.join(data_dir, "db")
-# wifi_approval_db_path = os.path.join(database_dir, "wifi_approval.db")
-# os.makedirs(database_dir, exist_ok=True)
-# app_database = BaseDb(wifi_approval_db_path)
-#order_service = OrderService(app_database)
-
 
 class PrintShopAppGeometryConfig(GeometryManager):
     schema: Dict[str, Dict[str, Any]] = {
@@ -121,31 +115,15 @@ class PrintShopApp(QMainWindow):
         privilege_label = "Administrator privileges" if env_config.get('is_admin') else "Standard privileges"
         self.update_window_title(privilege_label)
 
-        # 설정 액션 추가
-        self.settings_action = QAction('Open Settings', self)
-        self.settings_action.triggered.connect(self.open_settings_dialog)
-        self.menuBar().addAction(self.settings_action)
-
-        # print_shop_app.ui 파일 로드 (ui 폴더 또는 현재 디렉토리 탐색)
-        loader = QUiLoader()
-
-        ui_path = get_ui_file_path(__file__, "ui", "print_shop_app.ui")
-
-        loaded_widget = None
-        file = QFile(ui_path)        
-        if file.open(QFile.ReadOnly):
-            loaded_widget = loader.load(file, self)
-            file.close()
-
-        # UI 파일 로드가 성공했는지 확인하고 중앙 위젯 설정
-        if loaded_widget:
-            if isinstance(loaded_widget, QMainWindow):
-                # 만약 UI 최상위가 QMainWindow라면 내부 중앙 위젯 등을 가져와야 할 수 있음
-                self.setCentralWidget(loaded_widget.centralWidget())
-            else:
-                self.setCentralWidget(loaded_widget)
-        else:
-            # UI 파일 로드 실패 시 폴백(Fallback) 기본 레이아웃 강제 생성
+        # [수정] 1. 변환된 파이썬 UI 모듈(Ui_PrintShopApp)을 메인 윈도우(self)에 먼저 적용
+        ui_instance = None
+        try:
+            ui_instance = Ui_PrintShopApp()
+            ui_instance.setupUi(self)
+            logd("UI_LOAD (Python Module 성공) : Ui_PrintShopApp setupUi 완료")
+        except Exception as e:
+            loge(f"[오류] UI setupUi 실행 중 예외 발생: {e}")
+            # 폴백: UI 로드 실패 시 기본 탭 위젯 생성
             central_widget = QWidget(self)
             self.setCentralWidget(central_widget)
             layout = QVBoxLayout(central_widget)
@@ -153,34 +131,46 @@ class PrintShopApp(QMainWindow):
             self.main_tabs = QTabWidget(central_widget)
             layout.addWidget(self.main_tabs)
 
-        # UI 파일 내에 정의된 main_tabs 찾기
+        # UI 파일에 정의된 actionSetting 버튼 클릭 시 설정 다이얼로그 연결
+        if hasattr(self, 'actionSetting'):
+            self.actionSetting.triggered.connect(self.open_settings_dialog)
+        elif hasattr(ui_instance, 'actionSetting'):
+            ui_instance.actionSetting.triggered.connect(self.open_settings_dialog)
+
+
+        # # [수정] UI 파일이 만든 드롭다운 메뉴(menusetting)를 제거하고, 바로 클릭되는 단독 버튼 추가
+        # menubar = self.menuBar()
+        # if menubar is not None:
+        #     # 1. UI에 의해 자동 생성된 기존 드롭다운 메뉴가 있다면 메뉴바에서 완전 제거
+        #     if hasattr(self, 'menusetting') and self.menusetting is not None:
+        #         menubar.removeAction(self.menusetting.menuAction())
+        #         self.menusetting.deleteLater()
+        #         self.menusetting = None
+
+        #     # 2. 메뉴바에 화살표 없는 직접 실행 버튼(QAction) 생성 및 추가
+        #     self.settings_action = QAction('setting', self)
+        #     self.settings_action.triggered.connect(self.open_settings_dialog)
+        #     menubar.addAction(self.settings_action)
+
+        # 3. UI 파일 내에 정의된 main_tabs 찾기 (setupUi가 성공했으면 이미 존재함)
         if not hasattr(self, 'main_tabs') or self.main_tabs is None:
             self.main_tabs = self.findChild(QTabWidget, "main_tabs")
             if self.main_tabs is None:
-                central_widget = QWidget()
+                central_widget = QWidget(self)
                 self.setCentralWidget(central_widget)
                 layout = QVBoxLayout(central_widget)
                 layout.setContentsMargins(10, 10, 10, 10)
-                self.main_tabs = QTabWidget()
+                self.main_tabs = QTabWidget(central_widget)
                 layout.addWidget(self.main_tabs)
 
-        # # 업로드 폴더 경로 설정
-        # current_upload_folder = os.path.join(data_dir, "LinkBox_Files")
-        # os.makedirs(current_upload_folder, exist_ok=True)
-
         # LinkBox 및 LinkShare 탭 등록
-
         self.linkbox_manager = LinkBoxManager(self)
+        self.main_tabs.addTab(self.linkbox_manager, self.linkbox_manager.title)        
 
         self.linkshare_manager = LinkShareManager(self)        
+        self.main_tabs.addTab(self.linkshare_manager, self.linkshare_manager.title)        
         
-#        create_linkshare_tab(self)
-
-        # # [추가] 탭이 정상적으로 표시되도록 초기 인덱스를 0으로 강제 설정 및 갱신
-        # if hasattr(self, 'main_tabs') and self.main_tabs.count() > 0:
-        #     self.main_tabs.setCurrentIndex(0)        
-
-        # [수정] 저장된 active_main_tab 값을 불러와 초기 탭으로 설정
+        # 저장된 active_main_tab 값을 불러와 초기 탭으로 설정
         if hasattr(self, 'main_tabs') and self.main_tabs.count() > 0:
             saved_tab_index = general_config.get('active_main_tab')
             if 0 <= saved_tab_index < self.main_tabs.count():
@@ -188,15 +178,12 @@ class PrintShopApp(QMainWindow):
             else:
                 self.main_tabs.setCurrentIndex(0)            
 
-        # 4. 초기 탭 세팅이 모두 끝난 후에 시그널을 연결 (시작할 때 불필요한 0번->1번 변경 이벤트 방지 및 안정적인 연결)
+        # 초기 탭 세팅이 모두 끝난 후에 시그널을 연결
         self.main_tabs.currentChanged.connect(self.on_main_tab_changed)                
 
-        # 1. 해당 윈도우 전용 Config 매니저 인스턴스 생성 (싱글톤으로 동작)
-        self.config_mgr = PrintShopAppGeometryConfig()
-        # 3. 저장된 윈도우 크기 및 다중 스플릿바 위치 로드
-        self.config_mgr.load_window_geometry(self)
-        self.config_mgr.load_splitters_by_name(self)
-#        self.resize(1150, 750)
+        # 윈도우 크기 및 설정 로드
+        self.geo_config = PrintShopAppGeometryConfig()
+        self.geo_config.load_window_geometry(self)
 
     # ----------------------------------------------------------------------
     # Event Handlers & Helper Methods
@@ -256,14 +243,27 @@ class PrintShopApp(QMainWindow):
         logd("Application closing...")
 
         # 5. 윈도우 종료 시점 자동 저장
-        self.config_mgr.save_window_geometry(self)
-        self.config_mgr.save_splitters_by_name(self)
+        self.geo_config.save_window_geometry(self)
+        #self.geo_config.save_splitters_by_name(self)
 
         # [추가] 앱이 종료될 때 메모리에 남아있는 세팅 다이얼로그가 있다면 완전히 닫고 해제
         if hasattr(SettingsDialog, '_instance') and SettingsDialog._instance is not None:
             SettingsDialog._instance.setAttribute(Qt.WA_DeleteOnClose, True)
             SettingsDialog._instance.close()
             SettingsDialog._instance = None
+
+        """메인 매니저 창이 닫힐 때 싱글톤 승인 다이얼로그도 함께 닫기"""
+        try:
+            from LinkShare.ui.internet_share_approval_dialog import InternetShareApprovalDialog
+            # 싱글톤 인스턴스가 존재하면 닫기 및 삭제 수행
+            if InternetShareApprovalDialog in InternetShareApprovalDialog._instances:
+                dialog = InternetShareApprovalDialog._instances[InternetShareApprovalDialog]
+                if dialog:
+                    dialog.close()
+                    dialog.deleteLater()
+                InternetShareApprovalDialog._instances[InternetShareApprovalDialog] = None
+        except Exception as e:
+            loge(f"[LinkShare] 승인 다이얼로그 종료 중 오류 발생: {e}")
 
         LogManagerRegistry.close_all_logs()
         event.accept()

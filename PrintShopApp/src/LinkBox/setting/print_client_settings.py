@@ -2,7 +2,7 @@ import os
 from PySide6.QtWidgets import QWidget, QLineEdit, QPushButton, QLabel, QFileDialog, QVBoxLayout, QFormLayout
 
 from Common.globals import load_ui_safely
-from Common.paths import PRINT_REQUEST_QRCODE_FULLPATH, PRINT_REQUEST_ADDED_SOUND
+import Common.paths as paths
 from Common.config import FileConfigManager, ConfigType
 from Common.settings_registry import register_settings_tab
 
@@ -13,8 +13,8 @@ class PrintClientConfig(FileConfigManager):
 
     schema = {
         'service_ip': {"default": '127.0.0.1', "type": ConfigType.STRING},
-        'qr_save_folder': {"default": os.path.join(PRINT_REQUEST_QRCODE_FULLPATH, 'insert.wav'), "type": ConfigType.FULLPATH},
-        'completion_sound': {"default": os.path.join(PRINT_REQUEST_ADDED_SOUND, 'complete.wav'), "type": ConfigType.FULLPATH}
+        'qr_save_folder': {"default": os.path.join(paths.PRINT_REQUEST_QRCODE_FULLPATH, 'insert.wav'), "type": ConfigType.FULLPATH},
+        'completion_sound': {"default": os.path.join(paths.PRINT_REQUEST_ADDED_SOUND, 'complete.wav'), "type": ConfigType.FULLPATH}
     }
 
 

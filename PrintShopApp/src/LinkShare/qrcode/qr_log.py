@@ -1,5 +1,5 @@
 import os
-from Common.paths import QRCODE_LOG_FULLPATH
+import Common.paths as paths 
 from Common.log import SubLoggerManager
 
 
@@ -13,7 +13,7 @@ class QrcodeLog(SubLoggerManager):
         """공용 로거 인스턴스를 반환하는 싱글톤 내부 메서드"""
         if cls._instance is None:
             cls._instance = cls(
-                log_file=os.path.join(QRCODE_LOG_FULLPATH),
+                log_file=os.path.join(paths.QRCODE_LOG_FULLPATH),
                 flush_interval=5.0,
                 module_name="QrcodeModule",
                 default_tag="QRCODE"
@@ -22,7 +22,7 @@ class QrcodeLog(SubLoggerManager):
 
     def __init__(
         self, 
-        log_file=os.path.join(QRCODE_LOG_FULLPATH), 
+        log_file=os.path.join(paths.QRCODE_LOG_FULLPATH), 
         flush_interval=5.0, 
         module_name="QrcodeModule", 
         default_tag="QRCODE", 
@@ -40,12 +40,12 @@ class QrcodeLog(SubLoggerManager):
 
     @classmethod
     def log_qrcode_generated(cls, data: str, tag=None):
-        """QR 코드 생성 성공 시 호출하는 클래스 로그 메서드[cite: 1]"""
+        """QR 코드 생성 성공 시 호출하는 클래스 로그 메서드"""
         cls._get_logger().info(f"QR Code Generated Successfully | Data: {data}", tag=tag)
 
     @classmethod
     def log_qrcode_scanned(cls, result: str, success: bool = True, tag=None):
-        """QR 코드 스캔(인식) 결과 클래스 로그 메서드[cite: 1]"""
+        """QR 코드 스캔(인식) 결과 클래스 로그 메서드"""
         logger = cls._get_logger()
         if success:
             logger.info(f"QR Code Scanned Successfully | Result: {result}", tag=tag)
@@ -54,12 +54,12 @@ class QrcodeLog(SubLoggerManager):
 
     @classmethod
     def log_qrcode_error(cls, error_message: str, tag=None):
-        """QR 코드 처리 중 발생한 에러 클래스 로그 메서드[cite: 1]"""
+        """QR 코드 처리 중 발생한 에러 클래스 로그 메서드"""
         cls._get_logger().error(f"QR Code Processing Error | Details: {error_message}", tag=tag)
 
     @classmethod
     def log_qrcode_validation(cls, data: str, is_valid: bool, tag=None):
-        """QR 코드 데이터 유효성 검증 결과 클래스 로그 메서드[cite: 1]"""
+        """QR 코드 데이터 유효성 검증 결과 클래스 로그 메서드"""
         logger = cls._get_logger()
         if is_valid:
             logger.info(f"QR Code Validation Passed | Data: {data}", tag=tag)

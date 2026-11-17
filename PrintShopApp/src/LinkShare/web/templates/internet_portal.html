@@ -11,14 +11,8 @@
     <link rel="manifest" href="/manifest.webmanifest">
     <title>인터넷 사용 신청</title>
     <style>
-        /* 윈도우 고대비(콘트라스트) 테마의 강제 색상 적용 방지 */
-        * {
-            forced-color-adjust: none !important;
-        }
-
-        :root {
-            color-scheme: light;
-        }
+        * { forced-color-adjust: none !important; }
+        :root { color-scheme: light; }
         body { 
             margin: 0; 
             padding: 20px; 
@@ -34,155 +28,86 @@
             border-radius: 14px; 
             box-shadow: 0 3px 14px #0002; 
         }
-        .header-container {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-top: 0;
-            margin-bottom: 18px;
-        }
-        h1 { 
-            margin: 0; 
-            color: #1565c0 !important; 
-            font-size: 1.45rem; 
-        }
-        .theme-toggle-group {
-            display: flex;
-            gap: 5px;
-        }
-        .theme-btn {
-            background: #eceff1;
-            color: #263238;
-            border: 0;
-            border-radius: 6px;
-            padding: 6px 10px;
-            font-size: 0.85rem;
-            cursor: pointer;
-        }
-        .theme-btn.active {
-            background: #1565c0;
-            color: white;
-        }
-        .notice { 
-            padding: 12px; 
-            background: #e3f2fd !important; 
-            color: #0d47a1 !important;
-            border-radius: 8px; 
-            margin-bottom: 18px; 
-        }
-        .options { 
-            display: grid; 
-            grid-template-columns: repeat(2, 1fr); 
-            gap: 10px; 
-        }
-        button { 
-            border: 0; 
-            border-radius: 8px; 
-            padding: 13px 10px; 
-            font-size: 1rem; 
-            cursor: pointer; 
-            -webkit-appearance: none;
-        }
-        .time { 
-            background: #e8f5e9 !important; 
-            color: #1b5e20 !important; 
-        }
-        .time.selected { 
-            background: #2e7d32 !important; 
-            color: white !important; 
-        }
-        .primary { 
+        .header-container { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
+        h1 { margin: 0; color: #1565c0 !important; font-size: 1.45rem; }
+        .theme-toggle-group { display: flex; gap: 5px; }
+        .theme-btn { background: #eceff1; color: #263238; border: 0; border-radius: 6px; padding: 6px 10px; font-size: 0.85rem; cursor: pointer; }
+        .theme-btn.active { background: #1565c0; color: white; }
+        .notice { padding: 12px; background: #e3f2fd !important; color: #0d47a1 !important; border-radius: 8px; margin-bottom: 18px; }
+        .options { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+        button { border: 0; border-radius: 8px; padding: 13px 10px; font-size: 1rem; cursor: pointer; -webkit-appearance: none; }
+        .time { background: #e8f5e9 !important; color: #1b5e20 !important; }
+        .time.selected { background: #2e7d32 !important; color: white !important; }
+
+        /* 한 줄 1:1 동일 크기 버튼 그리드 레이아웃 */
+        .action-btn-group { display: flex; gap: 10px; margin-top: 18px; width: 100%; }
+        .action-btn-group form { flex: 1; margin: 0; }
+        .action-btn-group button { 
             width: 100%; 
-            margin-top: 18px; 
-            background: #1565c0 !important; 
-            color: white !important; 
+            height: 48px; 
+            margin: 0 !important;
+            box-sizing: border-box;
         }
-        .secondary { 
-            width: 100%; 
-            margin-top: 10px; 
-            background: #eceff1 !important; 
-            color: #263238 !important; 
-        }
-        #message, #status { 
-            margin-top: 18px; 
-            padding: 14px; 
-            border-radius: 8px; 
-            white-space: pre-line; 
-        }
+        .primary { background: #1565c0 !important; color: white !important; }
+        .secondary { background: #eceff1 !important; color: #263238 !important; flex: 1; }
+
+        #message, #status { margin-top: 18px; padding: 14px; border-radius: 8px; white-space: pre-line; }
         #message { background: #fff8e1 !important; color: #7f6000 !important; }
         #status { background: #f5f5f5 !important; color: #263238 !important; line-height: 1.7; }
         .hidden { display: none; }
-        .label { font-weight: bold; color: #455a64 !important; }
-        .approved { color: #2e7d32 !important; }
-        .rejected { color: #c62828 !important; }
-        .pending { color: #ef6c00 !important; }
-        #internetState { margin-top: 10px; padding: 10px; border-radius: 8px; background: #eef5f9 !important; color: #1565c0 !important; }
-        #installArea { margin-top: 14px; padding: 12px; background: #e3f2fd !important; color: #0d47a1 !important; border-radius: 8px; }
-        #installButton { width: 100%; margin-top: 8px; background: #0d47a1 !important; color: white !important; }
-        #iosInstallHint { line-height: 1.6; }
+        .approved { color: #2e7d32 !important; font-weight: bold; }
+        .rejected { color: #c62828 !important; font-weight: bold; }
+        .pending { color: #ef6c00 !important; font-weight: bold; }
+        .cancelled { color: #78909c !important; }
 
-        /* 다크모드 활성화 시 적용 스타일 */
-        body.dark-mode { 
-            color-scheme: dark;
+        /* 각 항목 한 줄 깔끔 정렬 인터넷 시간 상태 정보 카드 */
+        #internetState { 
+            margin-top: 14px; 
+            padding: 14px 16px; 
+            border-radius: 10px; 
+            background: #eef5f9 !important; 
+            color: #1565c0 !important; 
+            border: 1px solid #bbdefb;
         }
-        body.dark-mode { 
-            background: #121212 !important; 
-            color: #e0e0e0 !important; 
+        .state-row { 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+            font-size: 0.95rem; 
+            padding: 4px 0;
+            white-space: nowrap;
         }
-        body.dark-mode main { 
-            background: #1e1e1e !important; 
-            box-shadow: 0 3px 14px rgba(0, 0, 0, 0.6); 
-        }
-        body.dark-mode h1 { 
-            color: #90caf9 !important; 
-        }
-        body.dark-mode .theme-btn {
-            background: #2c3e50;
-            color: #ecf0f1;
-        }
-        body.dark-mode .theme-btn.active {
-            background: #90caf9;
-            color: #121212;
-        }
-        body.dark-mode .notice { 
-            background: #0d3c61 !important; 
-            color: #e3f2fd !important; 
-        }
-        body.dark-mode .time { 
-            background: #1b382b !important; 
-            color: #a3e4d7 !important; 
-        }
-        body.dark-mode .time.selected { 
-            background: #2e7d32 !important; 
-            color: #ffffff !important; 
-        }
-        body.dark-mode .primary { 
-            background: #1565c0 !important; 
-            color: #ffffff !important; 
-        }
-        body.dark-mode .secondary { 
-            background: #2c3e50 !important; 
-            color: #ecf0f1 !important; 
-        }
-        body.dark-mode #message { 
-            background: #4a3b10 !important; 
-            color: #ffe082 !important; 
-        }
-        body.dark-mode #status { 
-            background: #262626 !important; 
-            color: #e0e0e0 !important; 
-        }
-        body.dark-mode #internetState { 
-            background: #1b2a32 !important; 
-            color: #90caf9 !important; 
-        }
-        body.dark-mode #installArea { 
-            background: #0d3c61 !important; 
-            color: #e3f2fd !important; 
-        }
-        body.dark-mode .label { 
-            color: #b0bec5 !important; 
-        }
+        .state-label { font-weight: bold; color: #37474f; }
+        .state-value { font-weight: bold; }
+        .remaining-highlight { color: #d32f2f !important; font-size: 1.1rem; }
+
+        /* 신청 이력 테이블 스타일 */
+        .history-section { margin-top: 22px; border-top: 1px solid #e0e0e0; padding-top: 16px; }
+        .history-title { font-size: 1.05rem; font-weight: bold; color: #37474f; margin-bottom: 10px; }
+        .history-list { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+        .history-list th, .history-list td { padding: 10px 8px; text-align: left; border-bottom: 1px solid #eceff1; }
+        .history-list th { background: #f5f5f5; color: #546e7a; font-weight: 600; }
+        .cancel-btn { background: #e53935 !important; color: white !important; padding: 5px 10px; font-size: 0.8rem; border-radius: 4px; border: 0; cursor: pointer; }
+        .cancel-btn:disabled { background: #b0bec5 !important; cursor: not-allowed; }
+
+        /* 다크모드 스타일 */
+        body.dark-mode { background: #121212 !important; color: #e0e0e0 !important; color-scheme: dark; }
+        body.dark-mode main { background: #1e1e1e !important; box-shadow: 0 3px 14px rgba(0, 0, 0, 0.6); }
+        body.dark-mode h1 { color: #90caf9 !important; }
+        body.dark-mode .theme-btn { background: #2c3e50; color: #ecf0f1; }
+        body.dark-mode .theme-btn.active { background: #90caf9; color: #121212; }
+        body.dark-mode .notice { background: #0d3c61 !important; color: #e3f2fd !important; }
+        body.dark-mode .time { background: #1b382b !important; color: #a3e4d7 !important; }
+        body.dark-mode .time.selected { background: #2e7d32 !important; color: #ffffff !important; }
+        body.dark-mode .primary { background: #1565c0 !important; color: #ffffff !important; }
+        body.dark-mode .secondary { background: #2c3e50 !important; color: #ecf0f1 !important; }
+        body.dark-mode #message { background: #4a3b10 !important; color: #ffe082 !important; }
+        body.dark-mode #status { background: #262626 !important; color: #e0e0e0 !important; }
+        body.dark-mode #internetState { background: #1b2a32 !important; color: #90caf9 !important; border-color: #264b5d; }
+        body.dark-mode .state-label { color: #cfd8dc; }
+        body.dark-mode .history-title { color: #cfd8dc; }
+        body.dark-mode .history-list th { background: #263238; color: #b0bec5; }
+        body.dark-mode .history-list td { border-bottom: 1px solid #37474f; }
     </style>
 </head>
 <body>
@@ -199,27 +124,56 @@
         {% for fare in internet_fares %}
         <button class="time configured-fare" data-min="{{ fare.minutes }}" data-price="{{ fare.price }}">{{ fare.minutes }}분 · {{ '%g'|format(fare.price) }} PHP</button>
         {% endfor %}
-        
-        <button class="time" data-min="30">30분</button>
-        <button class="time" data-min="60">1시간</button>
-        <button class="time" data-min="90">1시간 30분</button>
-        <button class="time" data-min="120">2시간</button>
-        <button class="time" data-min="180">3시간</button>
-        <button class="time" data-min="240">4시간</button>
     </div>
-    <form id="requestForm" action="/request?min=30" method="get">
-        <button class="primary" id="requestButton" type="submit" onclick="if (!window.portalScriptReady) return true;">사용요청</button>
-    </form>
-    <button class="secondary" id="statusButton" type="button" onclick="if (!window.portalScriptReady) window.location.href='/status';">상태확인</button>
+
+    <!-- 동일 크기 한 줄 버튼 그룹 -->
+    <div class="action-btn-group">
+        <form id="requestForm" action="/request?min=30" method="get">
+            <button class="primary" id="requestButton" type="submit">사용요청</button>
+        </form>
+        <button class="secondary" id="statusButton" type="button">상태확인</button>
+    </div>
+
     <div id="message" class="hidden"></div>
     <div id="status" class="hidden"></div>
-    <div id="internetState" class="hidden"></div>
-    <div id="installArea" class="hidden">
-        <strong>홈 화면에 앱 설치</strong>
-        <button id="installButton" class="hidden">홈 화면에 추가</button>
-        <div id="iosInstallHint" class="hidden">Safari 하단의 <b>공유</b> 버튼을 누른 후<br><b>홈 화면에 추가</b>를 선택하세요.</div>
+
+    <!-- 각각 한 줄씩 표시되는 인터넷 사용 시간 카드 -->
+    <div id="internetState" class="hidden">
+        <div class="state-row">
+            <span class="state-label">시작시간</span>
+            <span class="state-value" id="startTimeVal">-</span>
+        </div>
+        <div class="state-row">
+            <span class="state-label">종료시간</span>
+            <span class="state-value" id="endTimeVal">-</span>
+        </div>
+        <div class="state-row" style="margin-top: 4px;">
+            <span class="state-label">남은시간</span>
+            <span class="state-value remaining-highlight" id="remainingTimeVal">00:00:00</span>
+        </div>
+    </div>
+
+    <!-- 신청 및 사용 이력 -->
+    <div class="history-section">
+        <div class="history-title">신청 및 사용 이력</div>
+        <table class="history-list">
+            <thead>
+                <tr>
+                    <th>신청시간</th>
+                    <th>이용상품</th>
+                    <th>상태</th>
+                    <th>작업</th>
+                </tr>
+            </thead>
+            <tbody id="historyTableBody">
+                <tr>
+                    <td colspan="4" style="text-align:center; color:#90a4ae;">이력을 불러오는 중...</td>
+                </tr>
+            </tbody>
+        </table>
     </div>
 </main>
+
 <script>
     function setTheme(mode) {
         const lightBtn = document.getElementById('lightModeBtn');
@@ -236,93 +190,28 @@
             localStorage.setItem('theme', 'light');
         }
     }
-
     (function() {
-        const savedTheme = localStorage.getItem('theme');
-        if (savedTheme === 'dark') {
-            setTheme('dark');
-        } else {
-            setTheme('light');
-        }
+        if (localStorage.getItem('theme') === 'dark') setTheme('dark');
+        else setTheme('light');
     })();
 
     let selectedMinutes = 30;
+    let expiresTimestamp = null;
+    let timer1sInterval = null;
+    let timer1mInterval = null;
+
     const messageBox = document.getElementById('message');
-    const statusBox = document.getElementById('status');
+    const historyTableBody = document.getElementById('historyTableBody');
     const internetStateBox = document.getElementById('internetState');
-    const statusPollIntervalMs = {{ (status_poll_interval * 1000)|int }};
-    const isMobileScreen = /android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent);
-    let internetCheckRun = 0;
-    let lastStatus = null;
-    let lastReportedInternetStatus = null;
-    let deferredInstallPrompt = null;
-    function clientHeaders() {
-        const platform = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || '';
-        const mobile = /android|iphone|ipad|ipod/i.test(navigator.userAgent) ? '모바일' : 'PC';
-        let timezone = '';
-        try { timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (_) {}
-        return {
-            'X-Client-Device': `${mobile} · ${platform}`.slice(0, 120),
-            'X-Client-Screen': `${screen.width}x${screen.height}`,
-            'X-Client-Timezone': timezone.slice(0, 80)
-        };
-    }
+    const startTimeVal = document.getElementById('startTimeVal');
+    const endTimeVal = document.getElementById('endTimeVal');
+    const remainingTimeVal = document.getElementById('remainingTimeVal');
+
     function requestJson(url, options) {
         options = options || {};
-        return new Promise(function (resolve, reject) {
-            var xhr = new XMLHttpRequest();
-            xhr.open(options.method || 'GET', url, true);
-            var headers = options.headers || {};
-            Object.keys(headers).forEach(function (key) {
-                xhr.setRequestHeader(key, headers[key]);
-            });
-            xhr.onreadystatechange = function () {
-                if (xhr.readyState !== 4) return;
-                if (xhr.status >= 200 && xhr.status < 300) {
-                    try { resolve(JSON.parse(xhr.responseText)); }
-                    catch (error) { reject(error); }
-                } else reject(new Error('HTTP ' + xhr.status));
-            };
-            xhr.onerror = function () { reject(new Error('network error')); };
-            xhr.send(options.body || null);
-        });
-    }
-    const installArea = document.getElementById('installArea');
-    const installButton = document.getElementById('installButton');
-    const iosInstallHint = document.getElementById('iosInstallHint');
-
-    function setupInstallGuide() {
-        const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream;
-        const isStandalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
-        if (isStandalone) return;
-        if (isIos) {
-            installArea.classList.remove('hidden');
-            iosInstallHint.classList.remove('hidden');
-            return;
-        }
-        window.addEventListener('beforeinstallprompt', event => {
-            event.preventDefault();
-            deferredInstallPrompt = event;
-            installArea.classList.remove('hidden');
-            installButton.classList.remove('hidden');
-        }, { once: true });
-        window.addEventListener('appinstalled', () => {
-            deferredInstallPrompt = null;
-            installArea.classList.add('hidden');
-        });
+        return fetch(url, options).then(res => res.json());
     }
 
-    installButton.addEventListener('click', async () => {
-        if (!deferredInstallPrompt) return;
-        deferredInstallPrompt.prompt();
-        await deferredInstallPrompt.userChoice;
-        deferredInstallPrompt = null;
-        installArea.classList.add('hidden');
-    });
-
-    if (document.querySelectorAll('.configured-fare').length) {
-        document.querySelectorAll('.time:not(.configured-fare)').forEach(button => button.remove());
-    }
     document.querySelectorAll('.time').forEach(button => {
         button.addEventListener('click', () => {
             document.querySelectorAll('.time').forEach(item => item.classList.remove('selected'));
@@ -339,208 +228,144 @@
         messageBox.classList.remove('hidden');
     }
 
-    function formatRemaining(seconds) {
-        seconds = Math.max(0, Number(seconds || 0));
-        const hours = Math.floor(seconds / 3600);
-        const minutes = Math.floor((seconds % 3600) / 60);
-        const secs = seconds % 60;
-        return `${hours ? hours + '시간 ' : ''}${minutes}분 ${secs}초`;
+    // 초를 HH:MM:SS 포맷으로 변환
+    function formatTime(totalSeconds) {
+        if (totalSeconds <= 0) return "00:00:00";
+        const h = Math.floor(totalSeconds / 3600);
+        const m = Math.floor((totalSeconds % 3600) / 60);
+        const s = totalSeconds % 60;
+        return [h, m, s].map(v => v < 10 ? "0" + v : v).join(":");
     }
 
-    function formatUsed(seconds) {
-        seconds = Math.max(0, Number(seconds || 0));
-        const hours = Math.floor(seconds / 3600);
-        const minutes = Math.floor((seconds % 3600) / 60);
-        return `${hours ? hours + '시간 ' : ''}${minutes}분`;
+    // 1초마다 남은 시간 갱신
+    function update1sTimer() {
+        if (!expiresTimestamp) return;
+        const now = Math.floor(Date.now() / 1000);
+        const diff = expiresTimestamp - now;
+        
+        if (diff <= 0) {
+            remainingTimeVal.textContent = "00:00:00 (만료됨)";
+            expiresTimestamp = null;
+            checkStatus();
+            return;
+        }
+        remainingTimeVal.textContent = formatTime(diff);
     }
 
-    function renderStatus(data) {
-        if (!data || data.status === 'None') {
-            statusBox.textContent = '현재 신청 또는 사용 기록이 없습니다.';
+    // 활성 인터넷 사용 정보 카드 업데이트
+    function updateActiveSessionDisplay(activeSession) {
+        if (!activeSession) {
             internetStateBox.classList.add('hidden');
-        } else if (data.status === 'Approved') {
-            statusBox.innerHTML = `<span class="label approved">승인됨 · 사용중</span><br>` +
-                `시작시간: ${data.start_time}<br>` +
-                `종료시간: ${data.end_time}<br>` +
-                `남은시간: ${formatRemaining(data.remaining_seconds)}<br>` +
-                `누적 승인시간: ${formatUsed(data.total_used_seconds)}`;
-            if (lastStatus !== 'Approved' || internetStateBox.classList.contains('hidden')) {
-                internetStateBox.innerHTML = '<span class="label pending">인터넷 연결 상태</span><br>연결 확인 중입니다.';
-                internetStateBox.classList.remove('hidden');
-            }
-            if (data.internet_status === '사용 가능') {
-                internetStateBox.innerHTML = '<span class="label approved">인터넷 연결 성공</span><br>인터넷 사용이 가능합니다.';
-                internetStateBox.classList.remove('hidden');
-            } else if (data.internet_status === '확인 실패') {
-                internetStateBox.innerHTML = '<span class="label rejected">인터넷 연결 실패</span><br>인터넷 연결을 확인하지 못했습니다.';
-                internetStateBox.classList.remove('hidden');
-            }
-        } else if (data.status === 'Pending') {
-            statusBox.innerHTML = `<span class="label pending">승인 대기</span><br>` +
-                '사용요청이 접수되어 관리자 승인을 기다리는 중입니다.';
-            internetStateBox.classList.add('hidden');
-        } else if (data.status === 'Rejected') {
-            statusBox.innerHTML = `<span class="label rejected">미승인</span><br>` +
-                '인터넷 사용요청이 미승인되었습니다.';
-            internetStateBox.classList.add('hidden');
-        } else if (data.status === 'Expired') {
-            statusBox.innerHTML = `<span class="label">사용시간 종료</span><br>` +
-                `누적 승인시간: ${formatUsed(data.total_used_seconds)}`;
-            internetStateBox.classList.add('hidden');
+            expiresTimestamp = null;
+            return;
+        }
+
+        const startStr = activeSession.start_time || activeSession.request_time || '-';
+        const expireStr = activeSession.expires_at || '-';
+        
+        startTimeVal.textContent = startStr;
+        endTimeVal.textContent = expireStr;
+        
+        if (expireStr !== '-') {
+            expiresTimestamp = Math.floor(new Date(expireStr.replace(/-/g, '/')).getTime() / 1000);
         } else {
-            statusBox.textContent = `현재 상태: ${data.status}`;
+            expiresTimestamp = null;
         }
-        statusBox.classList.remove('hidden');
+
+        internetStateBox.classList.remove('hidden');
+        update1sTimer();
     }
 
-    async function reportInternetStatus(value, details) {
-        if (lastReportedInternetStatus === value) return;
-        try {
-            const params = [
-                'internet_status=' + encodeURIComponent(value),
-                'internet_check=' + encodeURIComponent(JSON.stringify(details || {})),
-                'test_result=' + encodeURIComponent((details && details.result) || (value === '확인 실패' ? 'FAIL' : 'TESTING')),
-                'browser_online=' + encodeURIComponent(navigator.onLine ? 'true' : 'false'),
-                'checked_at=' + encodeURIComponent(new Date().toISOString())
-            ].join('&');
-            await requestJson('/internet-status?' + params);
-            lastReportedInternetStatus = value;
-        } catch (error) {}
+    // 상태 뱃지 HTML 생성
+    function getStatusBadge(status) {
+        if (status === 'Approved' || status === 'ACTIVE') return '<span class="approved">승인됨</span>';
+        if (status === 'Pending' || status === 'PENDING') return '<span class="pending">대기 중</span>';
+        if (status === 'Rejected' || status === 'REJECTED') return '<span class="rejected">거절됨</span>';
+        if (status === 'Cancelled' || status === 'CANCELLED') return '<span class="cancelled">취소됨</span>';
+        if (status === 'Expired' || status === 'EXPIRED') return '<span class="cancelled">만료됨</span>';
+        return `<span>${status}</span>`;
     }
 
-    function testInternetConnection() {
-        return new Promise(function (resolve, reject) {
-            var probes = [
-                'https://www.google.com/images/branding/googlelogo/1x/googlelogo_color_272x92dp.png',
-                'https://www.gstatic.com/favicon.ico',
-                'https://www.google.com/favicon.ico'
-            ];
-            var testNext = function (index) {
-                if (index >= probes.length) {
-                    reject(new Error('all internet probes failed'));
-                    return;
-                }
-                var url = probes[index];
-                var image = new Image();
-                var finished = false;
-                var startedAt = Date.now();
-                var timer = setTimeout(function () {
-                    if (finished) return;
-                    finished = true;
-                    testNext(index + 1);
-                }, 5000);
-                image.onload = function () {
-                    if (finished) return;
-                    finished = true;
-                    clearTimeout(timer);
-                    resolve({probe_url: url, method: 'image-load-' + (index + 1), result: 'PASS', elapsed_ms: Date.now() - startedAt});
-                };
-                image.onerror = function () {
-                    if (finished) return;
-                    finished = true;
-                    clearTimeout(timer);
-                    testNext(index + 1);
-                };
-                image.src = url + '?check=' + startedAt;
-            };
-            testNext(0);
+    // 이력 렌더링
+    function renderHistoryList(history) {
+        if (!history || history.length === 0) {
+            historyTableBody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:#90a4ae;">신청 내역이 없습니다.</td></tr>';
+            return;
+        }
+
+        let html = '';
+        history.forEach(item => {
+            const reqTime = (item.request_time || '').slice(11, 16);
+            const isPending = item.status === 'Pending' || item.status === 'PENDING' || item.overall_status === 'PENDING';
+            const actionBtn = isPending 
+                ? `<button class="cancel-btn" onclick="cancelUserRequest('${item.request_id || item.id}')">취소</button>` 
+                : '-';
+
+            html += `<tr>
+                <td>${reqTime || '-'}</td>
+                <td>${item.minutes}분 (${item.price} PHP)</td>
+                <td>${getStatusBadge(item.status || item.overall_status)}</td>
+                <td>${actionBtn}</td>
+            </tr>`;
         });
+        historyTableBody.innerHTML = html;
     }
 
-    async function checkInternetAfterApproval(runId) {
-        const attempts = 10;
-        const deadline = Date.now() + 15000;
+    // 취소 요청
+    async function cancelUserRequest(requestId) {
+        if (!confirm('신청한 요청을 취소하시겠습니까?')) return;
         try {
-            for (let attempt = 1; attempt <= attempts && runId === internetCheckRun && Date.now() < deadline; attempt++) {
-                await reportInternetStatus('확인 중');
-                internetStateBox.innerHTML = '<span class="label pending">인터넷 연결 상태</span><br>' +
-                    `승인된 인터넷 연결을 확인하고 있습니다. (${attempt}/${attempts})`;
-                internetStateBox.classList.remove('hidden');
-                try {
-                    var internetCheck = await testInternetConnection();
-                    if (runId !== internetCheckRun) return;
-                    await reportInternetStatus('사용 가능', internetCheck);
-                    internetStateBox.innerHTML = '<span class="label approved">인터넷 사용 가능</span><br>' +
-                        '인터넷 연결이 확인되었습니다.';
-                    return;
-                } catch (error) {}
-                await new Promise(resolve => setTimeout(resolve, 1000));
-            }
-            if (runId === internetCheckRun && navigator.onLine) {
-                await reportInternetStatus('사용 가능', {
-                    probe_url: 'navigator.onLine',
-                    elapsed_ms: 0,
-                    fallback: true
-                });
-                internetStateBox.innerHTML = '<span class="label approved">인터넷 사용 가능</span><br>브라우저 온라인 상태가 확인되었습니다.';
-                return;
-            }
-        } finally {
-            if (runId === internetCheckRun && lastReportedInternetStatus !== '사용 가능') {
-                await reportInternetStatus('확인 실패', {
-                    probe_url: 'all probes failed',
-                    browser_online: navigator.onLine,
-                    result: 'FAIL'
-                });
-                internetStateBox.innerHTML = '<span class="label rejected">인터넷 연결 확인 실패</span><br>' +
-                    '승인은 완료되었지만 인터넷 연결을 확인하지 못했습니다. 잠시 후 다시 확인해주세요.';
-            }
+            const res = await requestJson(`/cancel-request?id=${requestId}`, { method: 'POST' });
+            showMessage(res.msg || '요청이 취소되었습니다.');
+            checkStatus();
+        } catch (e) {
+            showMessage('취소 처리 중 오류가 발생했습니다.');
         }
     }
 
-    async function checkStatus(waitForChange = false, forceInternetCheck = false) {
-        const data = await requestJson(waitForChange ? '/status?wait=1' : '/status');
-        renderStatus(data);
-        if (data.status === 'Approved' && (lastStatus !== 'Approved' || forceInternetCheck)) {
-            internetCheckRun++;
-            lastReportedInternetStatus = null;
-            checkInternetAfterApproval(internetCheckRun);
-        }
-        if (data.status !== 'Approved') internetCheckRun++;
-        lastStatus = data.status;
-    }
-
-    let statusStreamRunning = false;
-    async function startStatusStream() {
-        if (statusStreamRunning || !isMobileScreen || document.visibilityState !== 'visible') return;
-        statusStreamRunning = true;
-        while (isMobileScreen && document.visibilityState === 'visible') {
-            try {
-                await checkStatus(true);
-            } catch (error) {
-                await new Promise(resolve => setTimeout(resolve, 1000));
+    // 상태 동기화 (1분 간격)
+    async function checkStatus() {
+        try {
+            const data = await requestJson('/status');
+            if (data.history) {
+                renderHistoryList(data.history);
+                const active = data.history.find(r => (r.overall_status || r.status) === 'ACTIVE' || (r.overall_status || r.status) === 'Approved');
+                updateActiveSessionDisplay(active);
+            } else {
+                updateActiveSessionDisplay(null);
             }
-        }
-        statusStreamRunning = false;
+        } catch (e) {}
     }
 
+    // 사용요청 Form 전송
     const requestButton = document.getElementById('requestButton');
     let requestCooldown = false;
-    requestButton.addEventListener('click', async (event) => {
+    document.getElementById('requestForm').addEventListener('submit', async (event) => {
         event.preventDefault();
         if (requestCooldown) return;
         requestCooldown = true;
         requestButton.disabled = true;
         requestButton.textContent = '요청 처리 중...';
-        const data = await requestJson(`/request?min=${selectedMinutes}`, {
-            method: 'GET',
-            credentials: 'same-origin',
-            cache: 'no-store'
-        });
-        showMessage(data.msg || '요청이 처리되었습니다.');
-        if (data.session) renderStatus(data.session);
-        setTimeout(() => {
-            requestCooldown = false;
-            requestButton.disabled = false;
-            requestButton.textContent = '사용요청';
-        }, 200);
+
+        try {
+            const data = await requestJson(`/request?min=${selectedMinutes}`, { method: 'GET' });
+            showMessage(data.msg || '요청이 처리되었습니다.');
+            checkStatus();
+        } finally {
+            setTimeout(() => {
+                requestCooldown = false;
+                requestButton.disabled = false;
+                requestButton.textContent = '사용요청';
+            }, 300);
+        }
     });
-    document.getElementById('statusButton').addEventListener('click', () => checkStatus(false, true));
-    window.portalScriptReady = true;
+
+    document.getElementById('statusButton').addEventListener('click', checkStatus);
+
+    // 초기 상태 불러오기 및 타이머 구동
     checkStatus();
-    document.addEventListener('visibilitychange', startStatusStream);
-    startStatusStream();
-    setupInstallGuide();
+    timer1sInterval = setInterval(update1sTimer, 1000);  // 1초마다 남은 시간 갱신
+    timer1mInterval = setInterval(checkStatus, 60000);   // 1분마다 서버 데이터 동기화
 </script>
 </body>
 </html>

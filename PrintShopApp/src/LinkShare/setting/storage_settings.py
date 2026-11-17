@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui  import QPixmap
 
 from Common.config import FileConfigManager, ConfigType
-from Common.paths import DATA_DIR
+import Common.paths as paths 
 from Common.geometry_manager import AutoGeometryWidget
 from Common.settings_registry import register_settings_tab
 
@@ -15,7 +15,7 @@ class StorageDisplayConfig(FileConfigManager):
     section_order = 20
     schema = {
         'hotspot_image': {"default": "", "type": ConfigType.STRING},
-        # 'fare_image_dir': {"default": os.path.join(DATA_DIR, 'fare'), "type": ConfigType.FULLPATH},
+        # 'fare_image_dir': {"default": os.path.join(paths.DATA_DIR, 'fare'), "type": ConfigType.FULLPATH},
     }
 
 class StorageDisplayTab(AutoGeometryWidget):

@@ -1,5 +1,5 @@
 ﻿"""Common settings persistence for the integrated shell."""
-from LinkShare.network_adapter_service import get_nic_mac_address
+from LinkShare.core.network_adapter_service import get_nic_mac_address
 
 
 def persist_settings(window, save_app_settings, runtime_settings, default_upload_folder, default_zones, default_save_tabs, default_internet_fares):
@@ -51,7 +51,7 @@ def persist_settings(window, save_app_settings, runtime_settings, default_upload
         'qr_output_dirs': window.qr_output_dirs,
         'windows_hotspot_limit': window.windows_hotspot_limit,
         'startup_enabled': window.startup_enabled,
-.        'provide_internet_for_file_transfer': window.provide_internet_for_file_transfer,
+        'provide_internet_for_file_transfer': window.provide_internet_for_file_transfer,
         'color_options': window.color_options,
         'linkshare_splitter_sizes': window.linkshare_splitter_sizes,
         'file_receiver_splitter_sizes': window.file_receiver_splitter_sizes,

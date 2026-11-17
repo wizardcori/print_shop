@@ -1,81 +1,55 @@
-"""
-Enhanced Sortable QTableWidget with Natural Sorting Support.
-Fixes alphabetical sorting issues (e.g., '10 MINS' < '120 MINS' < '30 MINS')
-and supports precise numeric/float/text sort keys.
-"""
-
 import re
-from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QCheckBox, QWidget, QHBoxLayout
+from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QCheckBox, QWidget, QHBoxLayout, QHeaderView, QMenu
 from PySide6.QtCore import Qt
 
 
 def get_natural_sort_key(text: str):
-    """
-    문자열 내의 숫자와 텍스트 부분을 분리하여 수치 기준으로 정렬할 수 있는 Key(튜플)를 생성합니다.
-    예:
-    '10 MINS'  -> [10.0, ' MINS']
-    '120 MINS' -> [120.0, ' MINS']
-    '30 MINS'  -> [30.0, ' MINS']
-    '5.5'      -> [5.5, '']
-    """
     if text is None:
         return []
-    
     text = str(text).strip()
-    
-    # 1. 완전한 정수/실수인 경우 바로 float 반환
     try:
         return [float(text), ""]
     except ValueError:
         pass
 
-    # 2. 문자열 내 숫자와 비숫자 부분을 분리 (정수 및 소수점 지원)
-    # 예: '120 MINS' -> ['120', ' MINS']
     tokens = re.split(r'(\d+(?:\.\d+)?)', text)
-    
     key = []
     for token in tokens:
         if not token:
             continue
         try:
-            # 숫자 부분은 float으로 변환하여 수치 비교
             key.append(float(token))
         except ValueError:
-            # 문자 부분은 대소문자 구분을 없앤 소문자 텍스트로 비교
             key.append(token.lower())
-            
     return key
 
 
 class NaturalSortTableItem(QTableWidgetItem):
-    """
-    개선된 NaturalSortTableItem:
-    QTableWidget 자체 정렬(self.sortItems 등) 사용 시에도 정확한 수치/문자 결합 정렬을 지원합니다.
-    """
     def __lt__(self, other):
         if not isinstance(other, QTableWidgetItem):
             return super().__lt__(other)
-
-        key_self = get_natural_sort_key(self.text())
-        key_other = get_natural_sort_key(other.text())
-
-        return key_self < key_other
+        return get_natural_sort_key(self.text()) < get_natural_sort_key(other.text())
 
 
 class SortableTableWidget(QTableWidget):
-    """
-    QTableWidget 상속 위젯.
-    헤더 클릭 정렬 시 CellWidget(체크박스 등)의 상태를 보존하며
-    개선된 Natural Sort 키를 이용하여 오름차순/내림차순 정렬을 수행합니다.
-    """
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.current_sort_column = -1
         self.sort_order = Qt.SortOrder.AscendingOrder
         self.horizontalHeader().sectionClicked.connect(self.on_header_clicked)
+        self._apply_default_styles_and_settings()
+
+    def _apply_default_styles_and_settings(self):
+        header = self.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Interactive)
+        header.setStretchLastSection(False)
+        self.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.setStyleSheet(
+            "QTableWidget { background-color: #ffffff; color: #263238; gridline-color: #b0bec5; }"
+            " QHeaderView::section { background-color: #1565c0; color: white; font-weight: bold; padding: 4px; }"
+        )
 
     def on_header_clicked(self, logical_index: int):
-        """헤더 클릭 시 정렬 순서 토글 및 실행"""
         if self.current_sort_column == logical_index:
             self.sort_order = (
                 Qt.SortOrder.DescendingOrder
@@ -85,14 +59,11 @@ class SortableTableWidget(QTableWidget):
         else:
             self.current_sort_column = logical_index
             self.sort_order = Qt.SortOrder.AscendingOrder
-
         self.sort_by_column(logical_index, self.sort_order)
 
     def sort_by_column(self, col: int, order: Qt.SortOrder):
-        """행 데이터 및 CheckBox 셀 위젯 상태를 안전하게 보존하며 정렬"""
         row_count = self.rowCount()
         col_count = self.columnCount()
-
         if row_count <= 1:
             return
 
@@ -100,42 +71,34 @@ class SortableTableWidget(QTableWidget):
         for r in range(row_count):
             row_items = []
             active_checked = True
-
             for c in range(col_count):
                 item = self.item(r, c)
                 if not item:
                     item = NaturalSortTableItem("")
                 row_items.append(item.clone())
 
-                # CheckBox 위젯 체크 상태 보존
                 widget = self.cellWidget(r, c)
                 if widget:
                     chk = widget.findChild(QCheckBox)
                     if chk:
                         active_checked = chk.isChecked()
 
-            # 정렬 대상 컬럼 값의 Natural Key 생성
             sort_text = row_items[col].text() if col < len(row_items) else ""
             sort_key = get_natural_sort_key(sort_text)
-
             rows_data.append({
                 "sort_key": sort_key,
                 "items": row_items,
                 "active_checked": active_checked,
             })
 
-        # 보강된 natural sort key 기준 정렬
         is_reverse = (order == Qt.SortOrder.DescendingOrder)
         rows_data.sort(key=lambda x: x["sort_key"], reverse=is_reverse)
 
-        # 테이블에 정렬 결과 재배치
         self.setRowCount(0)
         for r_idx, r_data in enumerate(rows_data):
             self.insertRow(r_idx)
             for c_idx, item in enumerate(r_data["items"]):
                 self.setItem(r_idx, c_idx, item)
-
-                # Active(index 1) CheckBox Widget 복원
                 if c_idx == 1:
                     cell_widget = QWidget()
                     cell_layout = QHBoxLayout(cell_widget)
@@ -147,3 +110,99 @@ class SortableTableWidget(QTableWidget):
                     self.setCellWidget(r_idx, c_idx, cell_widget)
 
         self.horizontalHeader().setSortIndicator(col, order)
+
+
+class ColumnManageableTableWidget(SortableTableWidget):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.visible_columns = []
+        self.header_info_def = None
+        
+        header = self.horizontalHeader()
+        header.setSectionsMovable(True)
+        header.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        header.customContextMenuRequested.connect(self.show_header_context_menu)
+        header.sectionMoved.connect(lambda: self.update_visible_columns())
+        
+        self.update_visible_columns()
+
+    def set_header_info_definition(self, header_info_def: dict):
+        self.header_info_def = header_info_def
+
+    def update_visible_columns(self):
+        header = self.horizontalHeader()
+        visible_cols = []
+        for visual_idx in range(self.columnCount()):
+            logical_idx = header.logicalIndex(visual_idx)
+            if not self.isColumnHidden(logical_idx):
+                visible_cols.append(logical_idx)
+        self.visible_columns = visible_cols
+
+    def show_header_context_menu(self, pos):
+        header = self.horizontalHeader()
+        logical_index = header.logicalIndexAt(pos)
+        
+        menu = QMenu(self)
+        if logical_index >= 0:
+            header_item = self.horizontalHeaderItem(logical_index)
+            col_name = header_item.text() if header_item else f"컬럼 {logical_index}"
+            hide_action = menu.addAction(f"'{col_name}' 컬럼 숨기기")
+            hide_action.triggered.connect(lambda: self.hide_column_and_update(logical_index))
+            menu.addSeparator()
+
+        show_menu = menu.addMenu("컬럼 표시 설정")
+        for c in range(self.columnCount()):
+            header_item = self.horizontalHeaderItem(c)
+            col_name = header_item.text() if header_item else f"컬럼 {c}"
+            action = show_menu.addAction(col_name)
+            action.setCheckable(True)
+            action.setChecked(not self.isColumnHidden(c))
+            action.triggered.connect(lambda checked, col=c: self.toggle_column_visibility(col, checked))
+            
+        if self.header_info_def:
+            menu.addSeparator()
+            reset_action = menu.addAction("기본값으로 복원")
+            reset_action.triggered.connect(self.reset_to_default_columns)
+            
+        menu.exec(header.mapToGlobal(pos))
+
+    def reset_to_default_columns(self):
+        if not self.header_info_def:
+            return
+        keys = list(self.header_info_def.keys())
+        header = self.horizontalHeader()
+        
+        for visual_idx, logical_idx in enumerate(range(len(keys))):
+            current_visual = header.visualIndex(logical_idx)
+            if current_visual != visual_idx:
+                header.moveSection(current_visual, visual_idx)
+
+        for idx, key in enumerate(keys):
+            info = self.header_info_def[key]
+            should_be_visible = info.get("default", True)
+            width = info.get("width", 100)
+            self.setColumnHidden(idx, not should_be_visible)
+            if width > 0:
+                self.setColumnWidth(idx, width)
+                
+        self.update_visible_columns()
+        
+        parent_widget = self.parent()
+        while parent_widget:
+            if hasattr(parent_widget, 'save_table_columns_by_name'):
+                parent_widget.save_table_columns_by_name(parent_widget)
+                break
+            parent_widget = parent_widget.parent()
+
+    def hide_column_and_update(self, col: int):
+        self.setColumnHidden(col, True)
+        self.update_visible_columns()
+
+    def toggle_column_visibility(self, col: int, visible: bool):
+        self.setColumnHidden(col, not visible)
+        self.update_visible_columns()
+
+    def setModel(self, model):
+        super().setModel(model)
+        self.update_visible_columns()
+

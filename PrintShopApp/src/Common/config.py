@@ -10,7 +10,7 @@ from datetime import date, datetime, time
 from typing import Dict, Any, List, Type, Optional
 
 from Common.globals import CONFIG_ENCODING
-from Common.paths import CONFIG_DIR, CONFIG_FILE
+import Common.paths as paths
 
 
 # ==========================================
@@ -28,14 +28,15 @@ class ConfigType:
     TIME = time
     DATETIME = datetime
     LIST = list
+    DICT = dict
 
 
 # ==========================================
 # 2. 설정 모델의 메타데이터 정의 셰이프
 # ==========================================
 class ConfigModelShape:
-    file_dir: str = CONFIG_DIR
-    file_name: str = CONFIG_FILE
+    file_dir: str = paths.CONFIG_DIR
+    file_name: str = paths.CONFIG_FILE
     config_encoding: str = CONFIG_ENCODING
     section: str = "General"
     section_order: int = 1
@@ -117,10 +118,10 @@ class ConfigManager(ConfigModelShape):
                 default_val = meta.get("default", "")
                 if isinstance(default_val, (date, datetime, time)):
                     default_val = default_val.isoformat()
-                elif isinstance(default_val, list):
-                    default_val = json.dumps(default_val, ensure_ascii=False)
+                elif isinstance(default_val, (list, tuple)): # 💡 튜플도 리스트로 변환하여 저장
+                    default_val = json.dumps(list(default_val), ensure_ascii=False)
                 self.config.set(self.section, key, str(default_val))
-        
+
         self.save()
 
     def set(self, key: str, value: Any):
@@ -194,11 +195,20 @@ class ConfigManager(ConfigModelShape):
     def get(self, key: str) -> Any:
         """설정값 조회"""
         if key not in self.schema:
-            raise KeyError(f"Non-existent configuration key: '{key}'")
+            raise KeyError(f"Non-existent configuration key: {key}")
         
         meta = self.schema[key]
         expected_type = meta.get("type", ConfigType.STRING)
-        raw_val = self.config.get(self.section, key)
+        
+        try:
+            raw_val = self.config.get(self.section, key)
+        except (configparser.NoSectionError, configparser.NoOptionError):
+            default_val = meta.get("default", [])
+            if isinstance(default_val, (tuple, list)):
+                return list(default_val)
+            return default_val
+
+        # 아래의 중복 코드는 제거되었습니다.
 
         if expected_type == ConfigType.BOOLEAN:
             return raw_val.lower() in ["true", "1", "yes", "on"]
@@ -207,18 +217,31 @@ class ConfigManager(ConfigModelShape):
         elif expected_type == ConfigType.FLOAT:
             return float(raw_val)
         elif expected_type == ConfigType.LIST:
+            import ast
             try:
-                parsed = json.loads(raw_val)
-                return parsed if isinstance(parsed, list) else [parsed]
-            except (json.JSONDecodeError, TypeError):
-                return [raw_val] if raw_val else []
+                # ast.literal_eval은 리스트와 튜플 모두 파싱 가능
+                parsed = ast.literal_eval(raw_val)
+                if isinstance(parsed, (list, tuple)):
+                    return list(parsed)
+                return [parsed]
+            except Exception:
+                try:
+                    parsed = json.loads(raw_val)
+                    if isinstance(parsed, (list, tuple)):
+                        return list(parsed)
+                    return [parsed]
+                except (json.JSONDecodeError, TypeError):
+                    default_val = meta.get("default", [])
+                    if isinstance(default_val, (tuple, list)):
+                        return list(default_val)
+                    return [raw_val] if raw_val else []
         elif expected_type == ConfigType.DATE:
             return date.fromisoformat(raw_val)
         elif expected_type == ConfigType.TIME:
             return time.fromisoformat(raw_val)
         elif expected_type == ConfigType.DATETIME:
             return datetime.fromisoformat(raw_val)
-        return raw_val
+        return raw_val        
 
     def save(self, key: str = None, value: Any = None):
         """파일 저장"""
@@ -255,10 +278,10 @@ import sqlite3
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
-from Common.paths import CONFIG_DIR
+import Common.paths as paths
 
 class DbConfigManager:
-    db_path: str = os.path.join(CONFIG_DIR, "app_config.db")
+    db_path: str = os.path.join(paths.DB_DIR, "app_config.db")
     table_name: str = "printing_prices"
     create_table_sql: Optional[str] = None
     initial_records: List[Dict[str, Any]] = []
@@ -274,7 +297,7 @@ class DbConfigManager:
         
         cls = self.__class__
         
-        self.db_path = db_path or getattr(cls, "db_path", os.path.join(CONFIG_DIR, "app_config.db"))
+        self.db_path = db_path or getattr(cls, "db_path", os.path.join(paths.DB_DIR, "app_config.db"))
         self.table_name = table_name or getattr(cls, "table_name", "printing_prices")
         self.create_table_sql = create_table_sql or getattr(cls, "create_table_sql", None)
         self.key_column = key_column or getattr(cls, "key_column", "item_name")
@@ -300,8 +323,8 @@ class DbConfigManager:
 
     def _ensure_table_exists(self):
         """테이블 생성 및 자동 스키마 마이그레이션 수행 후 초기 데이터(Seed) 적재"""
-        if CONFIG_DIR and not os.path.exists(CONFIG_DIR):
-            os.makedirs(CONFIG_DIR, exist_ok=True)
+        if paths.CONFIG_DIR and not os.path.exists(paths.CONFIG_DIR):
+            os.makedirs(paths.CONFIG_DIR, exist_ok=True)
 
         with self._get_connection() as conn:
             cursor = conn.cursor()

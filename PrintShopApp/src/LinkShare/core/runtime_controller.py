@@ -495,9 +495,9 @@ class LinkShareRuntimeController:
 
     def update_selected_usage_history(self):
         window = self.window
-        if not hasattr(window, 'usage_history_tabs'):
+        if not hasattr(window, 'internet_share_tabs'):
             return
-        if window.usage_history_tabs.currentIndex() == window.usage_history_tabs.count() - 1:
+        if window.internet_share_tabs.currentIndex() == window.internet_share_tabs.count() - 1:
             self.update_usage_history_tables()
 
     def on_usage_history_tab_changed(self, _index):

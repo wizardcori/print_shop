@@ -25,7 +25,7 @@ except ImportError:  # Support legacy direct execution/import by LinkBox.
 import datetime
 import ctypes
 from pathlib import Path
-from Common.paths import LOG_DIR, CONFIG_FILE
+import Common.paths as paths 
 from Common.globals import CONFIG_ENCODING
 
 
@@ -38,7 +38,7 @@ except ImportError:
 
 PRINT_SERVICE_CHANNEL = 'Microsoft-Windows-PrintService/Operational'
 DEFAULT_EVENT_IDS = {805, 307, 310}  # 805: render/start, 307: printed, 310: cancelled
-DEFAULT_CONFIG_PATH = CONFIG_FILE
+DEFAULT_CONFIG_PATH = paths.CONFIG_FILE
 
 logger = logging.getLogger('printshop.print_monitor')
 

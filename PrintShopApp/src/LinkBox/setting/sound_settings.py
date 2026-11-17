@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QLineEdit
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QCheckBox, QPushButton, QHBoxLayout, QRadioButton, QButtonGroup, QFileDialog, QMessageBox
 from Common.config import FileConfigManager, ConfigType
 from Common.settings_registry import register_settings_tab
-from Common.paths import APPROVAL_SOUND_DIR
+import Common.paths as paths 
 from Common.geometry_manager import AutoGeometryWidget
 from LinkBox.print_log_writer import play_notification_sound
 
@@ -29,7 +29,7 @@ class ApprovalSoundTab(AutoGeometryWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.config = ApprovalSoundConfig()
-        self.approval_sound_dir = APPROVAL_SOUND_DIR
+        self.approval_sound_dir = paths.APPROVAL_SOUND_DIR
         self.approval_sounds = list(self.config.get('approval_sounds')[:5])
         self.selected_sound_index = -1
         self.init_ui()
@@ -142,4 +142,4 @@ class ApprovalSoundTab(AutoGeometryWidget):
             sounds.insert(0, selected)
         self.config.set('approval_sounds', sounds)
 
-register_settings_tab('linkbox.approval-sound-settings', 'Approval Alerts', ApprovalSoundTab, order=25)
+register_settings_tab('linkbox.approval-sound-settings', 'Approval Alerts', ApprovalSoundTab, order=27)

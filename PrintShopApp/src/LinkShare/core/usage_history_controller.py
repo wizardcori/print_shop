@@ -24,16 +24,16 @@ def update_usage_history_tables(window, usage_history, shared_sessions, get_reco
 
     # 1. 현재 화면(UI)의 필터 위젯에서 직접 최신 값 읽기
     filter_name = "All"
-    if hasattr(window, 'usage_history_filter'):
-        filter_name = window.usage_history_filter.currentText()
+    if hasattr(window, 'internet_share_filter'):
+        filter_name = window.internet_share_filter.currentText()
         
     start_text = ""
-    if hasattr(window, 'usage_history_start'):
-        start_text = window.usage_history_start.text().strip()
+    if hasattr(window, 'internet_share_start'):
+        start_text = window.internet_share_start.text().strip()
         
     end_text = ""
-    if hasattr(window, 'usage_history_end'):
-        end_text = window.usage_history_end.text().strip()
+    if hasattr(window, 'internet_share_end'):
+        end_text = window.internet_share_end.text().strip()
 
     # 2. 날짜(YYYY-MM-DD)만 추출하여 안전하게 비교하는 필터 함수
     def matches_date_filter(record, date_field_keys):
@@ -91,8 +91,8 @@ def update_usage_history_tables(window, usage_history, shared_sessions, get_reco
     # 누적 시간 및 금액 계산
     total_minutes = sum(int(r.get('requested_minutes', 0)) for r in approved_history)
     total_amount = sum(get_record_price(r) for r in approved_history)
-    if hasattr(window, 'usage_history_total_label'):
-        window.usage_history_total_label.setText(
+    if hasattr(window, 'internet_share_total_label'):
+        window.internet_share_total_label.setText(
             f'사용시간 누적: {total_minutes}분                         금액 누적: {total_amount:g} PHP'
         )
 

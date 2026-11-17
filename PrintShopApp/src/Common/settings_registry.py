@@ -78,7 +78,7 @@ class SettingsRegistry:
             # tab_id 중복 검사 및 경고 로그 출력
             str_tab_id = str(tab_id)
             if str_tab_id in self._tabs:
-                warn_msg = f"[Warning] 이미 등록된 tab_id입니다. 새로운 값으로 덮어씁니다: tab_id='{str_tab_id}'"
+                warn_msg = f"[Warning] 이미 등록된 tab_id입니다. 새로운 값으로 덮어씁니다: tab_id='{str_tab_id}', title='{title}', order={order_int}"
                 loge(f"{YELLOW}{warn_msg}{RESET}") # 필요에 따라 경고 로그 함수(logw 등)로 변경 가능
 
             # 탭 저장소에 등록 (덮어쓰기)

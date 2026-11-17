@@ -6,8 +6,9 @@ import threading  # 백그라운드 스레드 실행용
 from fastapi import BackgroundTasks, UploadFile, File
 from nicegui import ui, app
 
-QR_SAVE_FOLDER = os.path.abspath("qr_codes")
-os.makedirs(QR_SAVE_FOLDER, exist_ok=True)
+import Common.paths as paths
+
+os.makedirs(paths.QRCODE_DIR, exist_ok=True)
 
 # 외부 모바일 접속을 원활하게 하려면 '0.0.0.0'으로 설정하는 것이 좋습니다.
 PRINT_PORTAL_SERVICE_IP = '0.0.0.0'
@@ -38,7 +39,7 @@ qr.add_data(url)
 qr.make(fit=True)
 qr_img = qr.make_image(fill_color="black", back_color="white")
 
-qr_path = os.path.join(QR_SAVE_FOLDER, "service_qr.png")
+qr_path = os.path.join(paths.QRCODE_DIR, "service_qr.png")
 qr_img.save(qr_path)
 
 buf = io.BytesIO()
@@ -51,7 +52,7 @@ def play_completion_sound():
 @app.post("/api/upload")
 async def api_upload(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     file_id = f"file_{os.urandom(4).hex()}"
-    saved_path = os.path.join(QR_SAVE_FOLDER, file.filename)
+    saved_path = os.path.join(paths.QRCODE_DIR, file.filename)
     contents = await file.read()
     with open(saved_path, "wb") as f:
         f.write(contents)
@@ -170,7 +171,7 @@ def print_main_page():
 
         with ui.expansion('모바일 접속 QR 코드 보기', icon='qr_code').classes('w-full bg-gray-900 border border-gray-800 rounded-lg'):
             with ui.column().classes('items-center w-full p-4 gap-2'):
-                ui.label(f'저장 경로: {QR_SAVE_FOLDER}/service_qr.png').classes('text-xs text-gray-400')
+                ui.label(f'저장 경로: {paths.QRCODE_DIR}/service_qr.png').classes('text-xs text-gray-400')
                 ui.image(f'data:image/png;base64,{qr_base64}').classes('w-36 h-36')
 
 # 데스크톱 앱(PySide6) 등에서 호출하여 백그라운드 스레드로 서버를 띄울 수 있는 함수

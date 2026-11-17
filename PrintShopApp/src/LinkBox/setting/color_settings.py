@@ -77,4 +77,4 @@ class ColorOutputTab(AutoGeometryWidget):
         options = self.color_options or DEFAULT_COLOR_OPTIONS
         self.config.set('color_options', options)
 
-register_settings_tab('linkbox.color-output-settings', 'Color Output', ColorOutputTab, order=35)
+register_settings_tab('linkbox.color-output-settings', 'Color Output', ColorOutputTab, order=38)

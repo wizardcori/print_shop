@@ -6,7 +6,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui  import QPixmap
 
 from Common.config import FileConfigManager, ConfigType
-from Common.paths import DATA_DIR
 from Common.geometry_manager import AutoGeometryWidget
 from Common.settings_registry import register_settings_tab
 
@@ -24,8 +23,8 @@ class LinkshareConfig(FileConfigManager):
         'active_tab_index': {"default": 0, "type": ConfigType.INTEGER},        
         'fare_image_dir': {"default": "", "type": ConfigType.STRING},                
         'hotspot_image': {"default": "", "type": ConfigType.STRING},                
-
-        
+        # 💡 [추가] 탭별 필터 상태(콤보박스 인덱스 및 날짜)를 저장하기 위한 스키마 키 등록
+        'tab_filter_states': {'type': 'dict', 'default': {}}        
     }
 
 class LinkshareTab(AutoGeometryWidget):
@@ -90,4 +89,4 @@ class LinkshareTab(AutoGeometryWidget):
         self.config.set('fare_image_dir', self.path_input.text().strip())
         self.config.set('hotspot_image', self.image_path_input.text().strip())
 
-register_settings_tab('linkshare-settings', 'LinkShare Setting', LinkshareTab, order=15)
+register_settings_tab('linkshare-settings', 'LinkShare Setting', LinkshareTab, order=16)

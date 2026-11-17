@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from Common.config import DbConfigManager
-from Common.paths import CONFIG_DIR
+import Common.paths as paths 
 from Common.geometry_manager import AutoGeometryWidget
 from Common.settings_registry import register_settings_tab
 from Common import globals as app_globals  # 상단에 추가
@@ -48,8 +48,8 @@ class OperatorConfig(DbConfigManager):
 
     def _drop_old_table_if_needed(self):
         try:
-            if CONFIG_DIR and os.path.exists(CONFIG_DIR):
-                db_path = os.path.join(CONFIG_DIR, "app_config.db")
+            if paths.DB_DIR and os.path.exists(paths.DB_DIR):
+                db_path = os.path.join(paths.DB_DIR, "app_config.db")
                 if os.path.exists(db_path):
                     with sqlite3.connect(db_path) as conn:
                         cursor = conn.cursor()
@@ -517,4 +517,4 @@ class OperatorTab(AutoGeometryWidget):
         except ValueError:
             QMessageBox.warning(self, "Invalid Input", "Please enter valid numeric values for authorities.")
 
-register_settings_tab('operator-settings', 'Operators', OperatorTab, order=35)
+register_settings_tab('operator-settings', 'Operators', OperatorTab, order=39)

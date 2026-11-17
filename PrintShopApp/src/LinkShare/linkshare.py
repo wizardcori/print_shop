@@ -10,41 +10,42 @@ from PySide6.QtWidgets import (
     QGroupBox, QSplitter, QTabWidget, QPushButton, 
     QComboBox, QLineEdit, QSizePolicy
 )
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QFile
 from PySide6.QtGui import QFontMetrics, QPixmap
 from PySide6.QtUiTools import QUiLoader
 
-from LinkShare.ui.internet_share_approval_dialog import InternetShareApprovalDialog
-
-from LinkShare.tabs.connection_status_tab import ConnectionStatusTab
-from LinkShare.tabs.usage_requests_tab import UsageRequestsTab
-from LinkShare.tabs.usage_approvals_tab import UsageApprovalsTab
-from LinkShare.tabs.usage_history_tab import UsageHistoryTab
+from Common.log import logd, loge
+from LinkShare.core.customer_request_approval_controller import ApprovalController
+from .tabs.internet_share_connected_tab import InternetConnectionTab
+from .tabs.internet_share_request_tab import InternetRequestTab
+from .tabs.internet_share_approval_tab import InternetApprovalTab
+from .tabs.internet_share_history_tab import InternetHistoryTab
 from LinkShare.core.usage_history_controller import update_usage_history_tables
-from LinkShare.db.internet_share_session_db import InternetShareSessionDatabase
+from Session import SessionManager
 
 from LinkShare.web.internet_portal import link_share_start
-
-# HotspotNetworkConfig 연동을 위한 임포트
 from Common.config import FileConfigManager
 from LinkShare.setting.linkshare_settings import LinkshareConfig
 from LinkShare.setting.hotspot_settings import HotspotNetworkConfig
-
 from LinkShare.linkshare_signals import LinkShareServerSignals
+from .internet_share_filter import InternetShareFilter
+
+from LinkShare.ui.internet_share_approval_dialog import get_approval_dialog
+from Common.geometry_manager import AutoSplitterWidget
+from .tabs.internet_share_tab_signal_manager import ist_signal_manager
+
 
 class CollapsibleStatusLabel(QLabel):
     def __init__(self, text='', parent=None):
         if isinstance(text, QWidget):
             parent = text
             text = ''
-        if parent is not None:
-            super().__init__(parent)
-        else:
-            super().__init__()
+        super().__init__(text or '', parent)
         self._full_text = str(text or '')
         self._expanded = False
         self.setCursor(Qt.PointingHandCursor)
         self.setWordWrap(True)
+
         if text:
             self.setText(text)
 
@@ -61,9 +62,13 @@ class CollapsibleStatusLabel(QLabel):
             self._refresh_display()
         super().mousePressEvent(event)
 
+
 class AutoFitTextLabel(QLabel):
     def __init__(self, text='', point_size=11, parent=None):
-        super().__init__(text, parent)
+        if isinstance(text, QWidget):
+            parent = text
+            text = ''
+        super().__init__(text or '', parent)
         self._base_point_size = point_size
         self.setWordWrap(False)
 
@@ -81,491 +86,410 @@ class AutoFitTextLabel(QLabel):
         self.setFont(font)
 
 
-class LinkShareManager:
-    """LinkShare Wi-Fi Pass Manager 기능을 캡슐화한 클래스"""
-    
-    TAB_TITLE = "🌐 Wi-Fi Pass Manager (LinkShare)"
+from .ui.ui_linkshare_layout import Ui_LinkShareLayout
 
-    def __init__(self, window):
-        self.window = window
+class LinkShareManager(AutoSplitterWidget):
+    """LinkShare Wi-Fi Pass Manager QWidget 클래스"""
+    
+    title = "🌐 Wi-Fi Pass Manager (LinkShare)"
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        
         self.client_identity_map = {}
         self.client_metadata_map = {}
         
+        # 원본 QR 픽스맵 저장용 변수 초기화
+        self._raw_net_pixmap = QPixmap()
+        self._raw_cap_pixmap = QPixmap()
+        
         # --- Qt 시그널 인스턴스 생성 및 슬롯 연결 ---
         self.share_signals = LinkShareServerSignals()
-        self.share_signals.approval_requested.connect(self.handle_approval_requested_slot)
+        self.approval_controller = ApprovalController(self)
         self.session_identity_lock = threading.Lock()        
+
+        self.tab_objects = []
+        self.tab_signals = []        
         
-        # HotspotNetworkConfig 인스턴스 생성하여 설정 통합 관리
+        # Configuration 인스턴스 생성
         self.linkshare_config = LinkshareConfig()
         self.hotspot_config = HotspotNetworkConfig()
 
-        # --- HotspotNetworkConfig로부터 최신 설정값 불러오기 ---
-        current_ssid = self.hotspot_config.get('ssid') or "PrintShop_Hotspot"
-        max_connections = self.hotspot_config.get('max_connections') or 8
-        hotspot_network = self.hotspot_config.get('hotspot_network') or "192.168.137.0/24"
-        hotspot_gateway = self.hotspot_config.get('hotspot_gateway') or "192.168.137.1"
-        
-        hotspot_nic_display = self.hotspot_config.get('hotspot_nic') or 'Wi-Fi Adapter'
-        hotspot_nic = {'display': hotspot_nic_display, 'ip': hotspot_gateway}
-        
-        current_main_tab = 'file_receiver'
+        # --- 1. InternetShareFilter 인스턴스 생성 (config 연동으로 영구 저장/복원) ---
+        self.share_filter = InternetShareFilter(manager=self, config=self.linkshare_config)        
 
-        window.approval_dialog = InternetShareApprovalDialog(window)
+        # --- UI 파일 로드 및 초기화 ---
+        self._init_ui()
+        self._bind_widgets()
+        self._init_events_and_data()
+        self.update_qr_codes()
 
-        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-        hotspot_image = os.path.join(base_dir, "data", "hotspot_logo.png")
-        if not os.path.exists(hotspot_image):
-            hotspot_image = ""
+        link_share_start()
 
-        # --- UI 파일 로드 및 커스텀 위젯 등록 ---
+    def _init_ui(self):
+        """UI 파일 로드 및 메인 레이아웃 구성"""
         loader = QUiLoader()
         loader.registerCustomWidget(CollapsibleStatusLabel)
         loader.registerCustomWidget(AutoFitTextLabel)
 
-        ui_file_path = os.path.join(os.path.dirname(__file__), "ui", "linkshare_layout.ui")
-        if os.path.exists(ui_file_path):
-            tab2_widget = loader.load(ui_file_path, window)
-        else:
-            tab2_widget = QWidget()
-            QVBoxLayout(tab2_widget)
+        # ==========================================
+        # 1. 변환된 파이썬 UI 모듈을 self에 직접 적용
+        # ==========================================
+        try:
+            ui_instance = Ui_LinkShareLayout()
+            ui_instance.setupUi(self)
+            logd("UI_LOAD (Python Module 성공) : Ui_LinkShareLayout setupUi 완료")
+        except Exception as e:
+            loge(f"[오류] UI setupUi 실행 중 예외 발생: {e}")
+            # 폴백: UI 로드 실패 시 기본 레이아웃 생성
+            main_layout = QVBoxLayout(self)
+            main_layout.setContentsMargins(0, 0, 0, 0)
+            self.main_tabs = QTabWidget(self)
+            main_layout.addWidget(self.main_tabs)
 
-        window.hotspot_horizontal_splitter = tab2_widget.findChild(QSplitter, "hotspot_horizontal_splitter")
-        window.linkshare_splitter = tab2_widget.findChild(QSplitter, "linkshare_splitter")
+        # self가 곧 UI가 생성된 윈도우/위젯이므로 self.ui를 자기 자신으로 지정
+        self.ui = self
+
+    def _bind_widgets(self):
+        """UI 컴포넌트 변수 바인딩"""
+        self.linkshare_splitter = self.ui.findChild(QSplitter, "linkshare_splitter")
+
+        # QR 코드 관련 위젯 및 그룹박스 바인딩
+        self.qr_group_box = self.ui.findChild(QGroupBox, "qr_group_box")
         
-        hotspot_control_group = tab2_widget.findChild(QGroupBox, "hotspot_control_group")
-        hotspot_control_layout = hotspot_control_group.layout()
+        if self.qr_group_box:
+            self.qr_group_box.setTitle("Wi-Fi Portal QR Codes")
+            self.qr_group_box.setCheckable(True)
+            self.qr_group_box.setChecked(True)
+            self.qr_group_box.toggled.connect(self._on_wifi_group_toggled)
 
-        hotspot_controls = QHBoxLayout()
-        hotspot_controls.setSpacing(6)
-        
-        window.hotspot_status_btn = QLabel("Checking status")
-        window.hotspot_status_btn.setAlignment(Qt.AlignCenter)
-        window.hotspot_status_btn.setMinimumHeight(32)
-        window.hotspot_status_btn.setStyleSheet(
-            "QLabel { background-color: #607d8b; color: white; font-weight: bold; "
-            "border: 1px solid #455a64; border-radius: 4px; padding: 5px 10px; }"
-        )
-        hotspot_controls.addWidget(window.hotspot_status_btn)
+        # QR 코드 관련 위젯
+        self.hotspot_network_qr_label = self.ui.findChild(QLabel, "hotspot_network_qr_label")
+        self.hotspot_network_info_label = self.ui.findChild(QLabel, "hotspot_network_info_label")
+        self.network_print_btn = self.ui.findChild(QPushButton, "network_print_btn")
 
-        window.hotspot_on_btn = QPushButton("Turn Hotspot On")
-        window.hotspot_on_btn.clicked.connect(lambda: window.set_hotspot_state(True))
-        window.hotspot_on_btn.setMinimumHeight(32)
-        window.hotspot_on_btn.setStyleSheet(
-            "QPushButton { background-color: #2e7d32; color: white; font-weight: bold; "
-            "border: 1px solid #1b5e20; border-radius: 4px; padding: 5px 10px; }"
-            "QPushButton:hover { background-color: #388e3c; }"
-        )
-        hotspot_controls.addWidget(window.hotspot_on_btn)
+        self.hotspot_qr_label = self.ui.findChild(QLabel, "hotspot_qr_label")
+        self.hotspot_qr_caption = self.ui.findChild(QLabel, "hotspot_qr_caption")
+        self.hotspot_url_label = self.ui.findChild(QLabel, "hotspot_url_label")
+        self.captive_print_btn = self.ui.findChild(QPushButton, "captive_print_btn")
 
-        window.hotspot_off_btn = QPushButton("Turn Hotspot Off")
-        window.hotspot_off_btn.clicked.connect(lambda: window.set_hotspot_state(False))
-        window.hotspot_off_btn.setMinimumHeight(32)
-        window.hotspot_off_btn.setStyleSheet(
-            "QPushButton { background-color: #c62828; color: white; font-weight: bold; "
-            "border: 1px solid #8e0000; border-radius: 4px; padding: 5px 10px; }"
-            "QPushButton:hover { background-color: #d32f2f; }"
-        )
-        hotspot_controls.addWidget(window.hotspot_off_btn)
+        # 상태 레이아웃 비율 설정
+        status_layout = self.ui.findChild(QHBoxLayout, "status_layout")
+        if status_layout:
+            status_layout.setStretch(0, 1)
+            status_layout.setStretch(1, 0)
+            status_layout.setStretch(2, 2)
 
-        window.hotspot_diagnose_btn = QPushButton("Run Diagnostics")
-        window.hotspot_diagnose_btn.clicked.connect(window.diagnose_hotspot)
-        window.hotspot_diagnose_btn.setMinimumHeight(32)
-        window.hotspot_diagnose_btn.setStyleSheet(
-            "QPushButton { background-color: #1565c0; color: white; font-weight: bold; "
-            "border: 1px solid #0d47a1; border-radius: 4px; padding: 5px 10px; }"
-            "QPushButton:hover { background-color: #1976d2; }"
-        )
-        hotspot_controls.addWidget(window.hotspot_diagnose_btn)
+        # 상태 및 필터 관련 위젯
+        self.status_group = self.ui.findChild(QGroupBox, "status_group")
+        self.status_title_label = self.ui.findChild(AutoFitTextLabel, "status_title_label")
+        self.status_label = self.ui.findChild(AutoFitTextLabel, "status_label")
+        self.windows_hotspot_clients_label = self.ui.findChild(AutoFitTextLabel, "windows_hotspot_clients_label")
 
-        for control in (window.hotspot_status_btn, window.hotspot_on_btn, window.hotspot_off_btn, window.hotspot_diagnose_btn):
-            control.setMinimumWidth(0)
-            control.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        for index in range(4):
-            hotspot_controls.setStretch(index, 1)
+        self.internet_share_tabs = self.ui.findChild(QTabWidget, "internet_share_tabs")
+        self.internet_share_filter = self.ui.findChild(QComboBox, "internet_share_filter")
+        self.internet_share_start = self.ui.findChild(QLineEdit, "internet_share_start")
+        self.internet_share_end = self.ui.findChild(QLineEdit, "internet_share_end")
+        self.internet_share_total_label = self.ui.findChild(QLabel, "internet_share_total_label")
+        self.show_approval_btn = self.ui.findChild(QPushButton, "show_approval_btn")
+
+    def _init_events_and_data(self):
+        """데이터 로드, 시그널/슬롯 연결 및 initial view 설정"""
+        window = self.window()
+
+        # 스플릿바 조절 시 실시간 QR 이미지 업데이트 시그널 연결
+        if self.linkshare_splitter:
+            self._user_custom_splitter_sizes = None  
+            self.linkshare_splitter.splitterMoved.connect(self._on_splitter_manually_moved)          
+
+        # 스플릿바 스타일 및 두께 설정 적용
+        self._setup_splitter_style()            
+
+        if self.network_print_btn and hasattr(window, 'show_network_qr_print_dialog'):
+            self.network_print_btn.clicked.connect(window.show_network_qr_print_dialog)
+        if self.captive_print_btn and hasattr(window, 'show_captive_qr_print_dialog'):
+            self.captive_print_btn.clicked.connect(window.show_captive_qr_print_dialog)
+
+        # 1. 탭 생성 및 구조화 (share_filter 주입)
+        if self.internet_share_tabs:
+            while self.internet_share_tabs.count() > 0:
+                self.internet_share_tabs.removeTab(0)
+
+            conn_tab = InternetConnectionTab(window=window, share_filter=self.share_filter)
+            requ_tab = InternetRequestTab(window=window, share_filter=self.share_filter)
+            appr_tab = InternetApprovalTab(window=window, share_filter=self.share_filter)
+            hist_tab = InternetHistoryTab(window=window, share_filter=self.share_filter)
+
+            self.internet_share_tabs.addTab(conn_tab, conn_tab.getTitle())
+            self.internet_share_tabs.addTab(requ_tab, requ_tab.getTitle())
+            self.internet_share_tabs.addTab(appr_tab, appr_tab.getTitle())
+            self.internet_share_tabs.addTab(hist_tab, hist_tab.getTitle())
+
+            self.tab_objects = [conn_tab, requ_tab, appr_tab, hist_tab]
+
+            self.tab_signals = [
+                ist_signal_manager.connected_load_filtered_signal, 
+                ist_signal_manager.request_load_filtered_signal, 
+                ist_signal_manager.approval_load_filtered_signal, 
+                ist_signal_manager.history_load_filtered_signal, 
+            ]                
+
+            self.tab_index_to_title = {idx: tab.getTitle() for idx, tab in enumerate(self.tab_objects)}
+            self.tab_title_to_index = {tab.getTitle(): idx for idx, tab in enumerate(self.tab_objects)}
+            self.tab_title_to_object = {tab.getTitle(): tab for tab in self.tab_objects}
+
+            # 2. 탭 상태 초기화 및 등록
+            self.share_filter.init_tab_states(list(self.tab_title_to_index.keys()))
+
+            if self.internet_share_filter:
+                self.internet_share_filter.clear()
+                self.internet_share_filter.addItems(self.share_filter.FILTER_ITEMS)
+
+        # 3. 시그널 바인딩
+        if self.internet_share_filter:
+            self.internet_share_filter.currentIndexChanged.connect(self.on_filter_combo_changed)
+        if self.internet_share_start:
+            self.internet_share_start.textChanged.connect(self.on_date_field_changed)
+        if self.internet_share_end:
+            self.internet_share_end.textChanged.connect(self.on_date_field_changed)
+        if self.internet_share_tabs:
+            self.internet_share_tabs.currentChanged.connect(self.internet_share_tab_changed)
+
+        for signal, tab in zip(self.tab_signals, self.tab_objects):
+            if signal and hasattr(tab, 'load_filtered'):
+                signal.connect(tab.load_filtered)            
+
+        if self.show_approval_btn:
+            self.show_approval_btn.clicked.connect(self.open_internet_share_approval_dialog)    
+
+        # 4. 저장된 마지막 활성 탭 및 필터 설정 반영 후 로드
+        if self.internet_share_tabs:
+            saved_tab_index = self.linkshare_config.get('active_tab_index')
+            target_idx = saved_tab_index if (saved_tab_index is not None and 0 <= saved_tab_index < self.internet_share_tabs.count()) else 0
+
+            self.internet_share_tab_changed(target_idx)
+
+            self.internet_share_tabs.setCurrentIndex(target_idx)
+
+
+        # 프로그램 시작 시 미승인 요청 확인 후 자동 팝업
+        QTimer.singleShot(200, self.check_pending_requests_on_startup)            
+
+    def trigger_table_update(self, current_tab_index=None):
+        """현재 선택된 탭의 테이블 데이터를 필터 조건에 맞게 갱신"""
+        if current_tab_index is None:
+            current_tab_index = self.internet_share_tabs.currentIndex()
             
-        hotspot_control_layout.insertLayout(0, hotspot_controls)
+        current_tab_name = self.tab_index_to_title.get(current_tab_index, "")
+        target_tab_obj = self.tab_title_to_object.get(current_tab_name)
+        
+        if not target_tab_obj:
+            return
+            
+        state = self.share_filter.get_state(current_tab_name)
+        filter_name = self.share_filter.get_filter_name(current_tab_name)
 
-        window.hotspot_name_label = tab2_widget.findChild(QLabel, "hotspot_name_label")
-        window.hotspot_name_label.setText(f"Active Hotspot Name: <b>{current_ssid}</b> (Auto-started)")
+        # match current_tab_name:
+        #     case "start":
+        #         print("프로그램을 시작합니다.")
+        #     case "stop" | "exit":  # OR(|) 연산자를 사용해 여러 문자열을 한 번에 처리 가능
+        #         print("프로그램을 종료합니다.")
+        #     case _:  # default (기본) 처리
+        #         print("알 수 없는 명령어입니다.")
 
-        window.hotspot_nic_label = tab2_widget.findChild(QLabel, "hotspot_nic_label")
-        window.hotspot_nic_label.setText(f"Hotspot NIC: <b>{hotspot_nic.get('display', 'Not selected')}</b>")
 
-        window.hotspot_network_label = tab2_widget.findChild(QLabel, "hotspot_network_label")
-        window.hotspot_network_label.setText(f"Hotspot IP range: <b>{hotspot_network}</b> / gateway: <b>{hotspot_gateway}</b>")
+        #self.share_signals.filter_changed.emit(state.get("start", ""), state.get("end", ""), filter_name)
 
-        window.captive_portal_status_label = tab2_widget.findChild(CollapsibleStatusLabel, "captive_portal_status_label")
-        if window.captive_portal_status_label is None:
-            window.captive_portal_status_label = CollapsibleStatusLabel("Captive Portal: starting...", tab2_widget)
+        #target_tab_obj.load_filtered(state.get("start", ""), state.get("end", ""), filter_name)
 
-        window.hotspot_status_label = tab2_widget.findChild(CollapsibleStatusLabel, "hotspot_status_label")
-        if window.hotspot_status_label is None:
-            window.hotspot_status_label = CollapsibleStatusLabel("Hotspot status: checking...", tab2_widget)
+    def on_filter_combo_changed(self, combo_index):
+        """필터 콤보박스 변경 슬롯"""
 
-        window.hotspot_image_label = tab2_widget.findChild(QLabel, "hotspot_image_label")
-        window.hotspot_image_label.setMaximumHeight(140)
+        current_tab_idx = self.internet_share_tabs.currentIndex()
+        current_tab_name = self.internet_share_tabs.tabText(current_tab_idx)
+        combo_text = self.internet_share_filter.currentText()
+        logd(f"on_filter_combo_changed tab:{current_tab_idx},{current_tab_name},{combo_text}")        
+        
+        def set_date_ui(start_str, end_str):
+            if self.internet_share_start:
+                self.internet_share_start.setText(start_str)
+            if self.internet_share_end:
+                self.internet_share_end.setText(end_str)
 
-        if hotspot_image and os.path.exists(hotspot_image):
-            pixmap = QPixmap(hotspot_image)
-            if not pixmap.isNull():
-                window.hotspot_image_label.setPixmap(pixmap.scaled(320, 140, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        self.share_filter.handle_filter_combo_changed(
+            current_tab_name=current_tab_name,
+            current_tab_index=current_tab_idx,
+            combo_index=combo_index,
+            combo_text=combo_text,
+            set_date_callback=set_date_ui
+        )
+
+    def on_date_field_changed(self):
+        """날짜 입력 텍스트 변경 슬롯"""
+        current_tab_idx = self.internet_share_tabs.currentIndex()
+        current_tab_name = self.internet_share_tabs.tabText(current_tab_idx)
+        
+        start_val = self.internet_share_start.text() if self.internet_share_start else ""
+        end_val = self.internet_share_end.text() if self.internet_share_end else ""
+        
+        def set_custom_combo_ui(custom_idx):
+            if self.internet_share_filter:
+                self.internet_share_filter.setCurrentIndex(custom_idx)
+
+        self.share_filter.handle_date_field_changed(
+            current_tab_name=current_tab_name,
+            current_tab_index=current_tab_idx,
+            start_val=start_val,
+            end_val=end_val,
+            set_custom_combo_callback=set_custom_combo_ui
+        )
+
+    def internet_share_tab_changed(self, current_tab_idx):
+        """탭 전환 슬롯"""
+        self.linkshare_config.set('active_tab_index', current_tab_idx)    
+        current_tab_name = self.internet_share_tabs.tabText(current_tab_idx)
+
+        logd(f"internet_share_tab_changed tab:{current_tab_idx}:{current_tab_name}")        
+
+        def sync_ui_widgets(*args):
+            # 만약 튜플 형태로 하나의 인자가 통째로 넘어온 경우 언패킹
+            if len(args) == 1 and isinstance(args[0], (tuple, list)):
+                combo_index, start_str, end_str = args[0]
+            elif len(args) == 3:
+                combo_index, start_str, end_str = args
+            else:
+                return
+
+            if self.internet_share_filter:
+                self.internet_share_filter.setCurrentIndex(int(combo_index))
+            if self.internet_share_start:
+                self.internet_share_start.setText(str(start_str))
+            if self.internet_share_end:
+                self.internet_share_end.setText(str(end_str))
+
+        self.share_filter.handle_tab_changed(
+            new_tab_name=current_tab_name,
+            new_tab_idx=current_tab_idx,
+            sync_ui_callback=sync_ui_widgets
+        )
+
+    def update_qr_codes(self):
+        """폴더에 저장된 QR 코드 이미지 로드"""
+        net_dir = self.hotspot_config.get('network_qr_output_dir') or "network_qr_codes"
+        net_file_path = os.path.join(net_dir, 'network_connection_qr_1x.jpg')
+
+        if os.path.exists(net_file_path):
+            self._raw_net_pixmap = QPixmap(net_file_path)
+            self._update_scaled_qr_images()
+
+        cap_dir = self.hotspot_config.get('captive_qr_output_dir') or "captive_qr_codes"
+        cap_file_path = os.path.join(cap_dir, 'captive_portal_qr_1x.jpg')
+
+        if os.path.exists(cap_file_path):
+            self._raw_cap_pixmap = QPixmap(cap_file_path)
+            self._update_scaled_qr_images()
+
+        wifi_ssid = self.hotspot_config.get('ssid') or "hbwifi"
+        wifi_password = self.hotspot_config.get('password') or ""
+        gateway = self.hotspot_config.get('hotspot_gateway') or "192.168.137.1"
+        portal_url = f"http://{gateway}:5000/scan"
+
+        displayed_pwd = wifi_password if wifi_password else '(not available)'
+        if hasattr(self, 'hotspot_network_info_label') and self.hotspot_network_info_label:
+            self.hotspot_network_info_label.setText(f"SSID: {wifi_ssid}   Password: {displayed_pwd}")
+
+        if hasattr(self, 'hotspot_url_label') and self.hotspot_url_label:
+            self.hotspot_url_label.setText(portal_url)        
+
+    def _update_scaled_qr_images(self):
+        """전체 픽스맵을 비율 유지하며 라벨 크기에 맞게 스케일링"""
+        if hasattr(self, '_raw_net_pixmap') and not self._raw_net_pixmap.isNull() and hasattr(self, 'hotspot_network_qr_label') and self.hotspot_network_qr_label:
+            self._set_fitted_pixmap(self.hotspot_network_qr_label, self._raw_net_pixmap)
+
+        if hasattr(self, '_raw_cap_pixmap') and not self._raw_cap_pixmap.isNull() and hasattr(self, 'hotspot_qr_label') and self.hotspot_qr_label:
+            self._set_fitted_pixmap(self.hotspot_qr_label, self._raw_cap_pixmap)
+
+    def _set_fitted_pixmap(self, label, pixmap):
+        if pixmap.isNull():
+            return
+        size = label.size()
+        if size.width() < 20 or size.height() < 20:
+            return
+        scaled = pixmap.scaled(size.width(), size.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        label.setPixmap(scaled)
+
+    def _on_wifi_group_toggled(self, checked):
+        widgets_to_toggle = [
+            getattr(self, 'hotspot_network_qr_label', None),
+            getattr(self, 'hotspot_network_info_label', None),
+            getattr(self, 'network_print_btn', None),
+            getattr(self, 'hotspot_qr_label', None),
+            getattr(self, 'hotspot_qr_caption', None),
+            getattr(self, 'hotspot_url_label', None),
+            getattr(self, 'captive_print_btn', None)
+        ]
+        
+        for widget in widgets_to_toggle:
+            if widget:
+                widget.setVisible(checked)
+
+        if checked:
+            self.qr_group_box.setMaximumHeight(16777215)
+            if hasattr(self, '_prev_linkshare_splitter_sizes') and self._prev_linkshare_splitter_sizes:
+                self.linkshare_splitter.setSizes(self._prev_linkshare_splitter_sizes)
         else:
-            window.hotspot_image_label.clear()
+            self._prev_linkshare_splitter_sizes = self.linkshare_splitter.sizes()
+            total = sum(self._prev_linkshare_splitter_sizes)
+            self.qr_group_box.setMaximumHeight(35)
+            self.linkshare_splitter.setSizes([35, max(0, total - 35)])
 
-        qr_group = tab2_widget.findChild(QGroupBox, "qr_group")
-        qr_layout = qr_group.layout()
-        qr_layout.setContentsMargins(1, 1, 1, 1)
-        qr_layout.setSpacing(0)
-        window.qr_layout = qr_layout
-
-        qr_pair_layout = QHBoxLayout()
-        
-        network_group = QGroupBox("Network Connection")
-        network_group.setStyleSheet(
-            "QGroupBox { color: #1565c0; font-weight: bold; background: #e3f2fd; "
-            "border: 2px solid #64b5f6; border-radius: 6px; margin-top: 8px; padding-top: 8px; }"
-        )
-        network_layout = QHBoxLayout(network_group)
-        window.hotspot_network_qr_label = QLabel()
-        window.hotspot_network_qr_label.setAlignment(Qt.AlignCenter)
-        window.hotspot_network_qr_label.setMaximumSize(220, 220)
-        window.hotspot_network_qr_label.setStyleSheet("border: 1px solid #64b5f6; background-color: #ffffff; border-radius: 5px;")
-        network_layout.addWidget(window.hotspot_network_qr_label, 0, Qt.AlignCenter)
-
-        network_info_layout = QVBoxLayout()
-        network_print_btn = QPushButton("PRINT")
-        network_print_btn.setFixedSize(84, 30)
-        network_print_btn.setStyleSheet(
-            "QPushButton { color: #0d47a1; background-color: #e3f2fd; "
-            "border: 1px solid #64b5f6; border-radius: 4px; padding: 2px 8px; font-size: 10px; font-weight: bold; }"
-            "QPushButton:hover { background-color: #bbdefb; }"
-        )
-        network_print_btn.clicked.connect(window.show_network_qr_print_dialog)
-        window.hotspot_network_info_label = QLabel("SSID: -\nPassword: -")
-        window.hotspot_network_info_label.setAlignment(Qt.AlignCenter)
-        window.hotspot_network_info_label.setStyleSheet("font-size: 9px; color: #263238;")
-        network_info_layout.addWidget(window.hotspot_network_info_label)
-        network_info_layout.addWidget(network_print_btn, 0, Qt.AlignHCenter)
-        network_layout.addLayout(network_info_layout)
-
-        captive_group = QGroupBox("Captive Portal")
-        captive_group.setStyleSheet(
-            "QGroupBox { color: #2e7d32; font-weight: bold; background: #e8f5e9; "
-            "border: 2px solid #81c784; border-radius: 6px; margin-top: 8px; padding-top: 8px; }"
-        )
-        captive_layout = QHBoxLayout(captive_group)
-        window.hotspot_qr_label = QLabel()
-        window.hotspot_qr_label.setAlignment(Qt.AlignCenter)
-        window.hotspot_qr_label.setMaximumSize(220, 220)
-        window.hotspot_qr_label.setStyleSheet("border: 1px solid #ccc; background-color: #f9f9f9; border-radius: 5px;")
-        
-        window.hotspot_qr_caption = QLabel("This QR code is for Internet access requests.")
-        window.hotspot_qr_caption.setAlignment(Qt.AlignCenter)
-        window.hotspot_qr_caption.setStyleSheet("font-size: 9px; font-weight: bold; color: #16803c; margin: 0;")
-        
-        window.hotspot_url_label = QLabel("Generated URL: ")
-        window.hotspot_url_label.setAlignment(Qt.AlignCenter)
-        window.hotspot_url_label.setWordWrap(True)
-        window.hotspot_url_label.setStyleSheet("font-size: 9px; font-weight: bold; color: #007BFF; margin: 0;")
-
-        captive_layout.addWidget(window.hotspot_qr_label, 0, Qt.AlignCenter)
-        captive_info_layout = QVBoxLayout()
-        
-        captive_print_btn = QPushButton("PRINT")
-        captive_print_btn.setFixedSize(84, 30)
-        captive_print_btn.setStyleSheet(
-            "QPushButton { color: #1b5e20; background-color: #e8f5e9; "
-            "border: 1px solid #81c784; border-radius: 4px; padding: 2px 8px; font-size: 10px; font-weight: bold; }"
-            "QPushButton:hover { background-color: #c8e6c9; }"
-        )
-        captive_print_btn.clicked.connect(window.show_captive_qr_print_dialog)
-        
-        captive_info_layout.addWidget(window.hotspot_qr_caption)
-        captive_info_layout.addWidget(window.hotspot_url_label)
-        captive_info_layout.addWidget(captive_print_btn, 0, Qt.AlignHCenter)
-        captive_layout.addLayout(captive_info_layout)
-
-        qr_pair_layout.addWidget(network_group)
-        qr_pair_layout.addWidget(captive_group)
-        qr_layout.addLayout(qr_pair_layout)
-
-        window.hotspot_horizontal_splitter.setStretchFactor(0, 1)
-        window.hotspot_horizontal_splitter.setStretchFactor(1, 3)
-        window.hotspot_horizontal_splitter.setSizes([280, 900])
-
-        card_style = (
-            "QGroupBox { background-color: #ffffff; color: #17324d; border: 2px solid #90a4ae; "
-            "border-radius: 8px; margin-top: 8px; padding-top: 12px; font-weight: bold; }"
-            " QGroupBox::title { color: #0d47a1; background-color: #ffffff; "
-            "subcontrol-origin: margin; left: 12px; padding: 0 8px; }"
-            " QLabel { color: #263238; font-weight: normal; background-color: transparent; }"
-            " QLineEdit { color: #263238; background-color: #ffffff; border: 1px solid #b0bec5; border-radius: 4px; padding: 2px; }"
-            " QComboBox { color: #263238; background-color: #ffffff; border: 1px solid #b0bec5; border-radius: 4px; padding: 2px; }"
-            " QComboBox QAbstractItemView { color: #263238; background-color: #ffffff; selection-background-color: #1565c0; selection-color: #ffffff; }"
-        )
-        
-        hotspot_info_group = tab2_widget.findChild(QGroupBox, "hotspot_info_group")
-        hotspot_info_group.setStyleSheet(card_style)
-        
-        session_monitor_group = tab2_widget.findChild(QGroupBox, "session_monitor_group")
-        if session_monitor_group:
-            session_monitor_group.setStyleSheet(card_style)
-
-        linkshare_filter_group = tab2_widget.findChild(QGroupBox, "linkshare_filter_group")
-        linkshare_filter_group.setStyleSheet(
-            card_style + 
-            " QLineEdit { color: #263238; background-color: #ffffff; border: 1px solid #90a4ae; border-radius: 4px; padding: 4px; }"
-            " QComboBox { color: #263238; background-color: #ffffff; border: 1px solid #90a4ae; border-radius: 4px; padding: 4px; }"
-        )
-        linkshare_filter_group.setMinimumHeight(75)
-        linkshare_filter_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-
-        hotspot_control_group.setStyleSheet(card_style)
-        qr_group.setStyleSheet(card_style)
-
-        window.status_group = tab2_widget.findChild(QGroupBox, "status_group")
-        window.status_layout = window.status_group.layout()
-        window.status_layout.setSpacing(12)
-        
-        window.status_title_label = AutoFitTextLabel("Currently Connected Clients Summary", 11)
-        window.status_layout.addWidget(window.status_title_label, 1)
-        
-        window.status_label = AutoFitTextLabel(f"Devices connected: 0 of {max_connections}", 12)
-        window.status_layout.addWidget(window.status_label)
-        
-        window.windows_hotspot_clients_label = AutoFitTextLabel("Windows Mobile Hotspot: checking actual client limit...", 10)
-        window.status_layout.addWidget(window.windows_hotspot_clients_label, 2)
-        
-        window.status_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        window.status_group.setMaximumHeight(72)
-        window.status_group.setStyleSheet(card_style)
-        window.status_title_label.setStyleSheet("color: #0d47a1; font-weight: bold;")
-        window.status_label.setStyleSheet("color: #1565c0; font-weight: bold;")
-        window.windows_hotspot_clients_label.setStyleSheet("color: #455a64; font-weight: bold;")
-
-        window.usage_history_tabs = tab2_widget.findChild(QTabWidget, "usage_history_tabs")
-        window.usage_history_tabs.setStyleSheet(
-            "QTabWidget::pane { border: 1px solid #90a4ae; background: #ffffff; border-radius: 4px; }"
-            " QTabBar::tab { background: #eceff1; color: #37474f; padding: 6px 12px; margin-right: 2px; border-top-left-radius: 4px; border-top-right-radius: 4px; font-weight: bold; }"
-            " QTabBar::tab:selected { background: #1565c0; color: white; }"
-            " QTabBar::tab:hover { background: #cfd8dc; color: #263238; }"
-        )
-        
-        while window.usage_history_tabs.count() > 0:
-            window.usage_history_tabs.removeTab(0)
-
-        window.usage_history_tables = {}
-
-        conn_tab = ConnectionStatusTab(window=window)
-        req_tab = UsageRequestsTab(window=window)
-        appr_tab = UsageApprovalsTab(window=window)
-        hist_tab = UsageHistoryTab(window=window, existing_table=tab2_widget.findChild(QTableWidget, "history_table"))
-
-        window.usage_history_tables["Connection Status"] = conn_tab.table
-        window.usage_history_tables["Usage Requests"] = req_tab.table
-        window.usage_history_tables["Usage Approvals"] = appr_tab.table
-        window.usage_history_tables["Usage History"] = hist_tab.table
-
-        window.usage_history_tabs.addTab(conn_tab, "Connection Status")
-        window.usage_history_tabs.addTab(req_tab, "Usage Requests")
-        window.usage_history_tabs.addTab(appr_tab, "Usage Approvals")
-        window.usage_history_tabs.addTab(hist_tab, "Usage History")
-
-        usage_tabs_keys = ["Connection Status", "Usage Requests", "Usage Approvals", "Usage History"]
-
-        window.usage_history_filter = tab2_widget.findChild(QComboBox, "usage_history_filter")
-        window.usage_history_filter.clear()
-        window.usage_history_filter.addItems([
-            "Today", "Yesterday", 
-            "2 days ago", "3 days ago", "4 days ago", 
-            "5 days ago", "6 days ago", "7 days ago", "Custom", "All" 
-        ])
-
-        if not hasattr(window, 'tab_filter_states'):
-            window.tab_filter_states = {}
-            for t_name in usage_tabs_keys:
-                window.tab_filter_states[t_name] = {
-                    "combo_index": 0,
-                    "start": "",
-                    "end": ""
+    def _setup_splitter_style(self):
+        if hasattr(self, 'linkshare_splitter') and self.linkshare_splitter:
+            splitter_style = """
+                QSplitter::handle {
+                    background-color: #3498db;
+                    margin: 6px;
+                    border-radius: 8px;
                 }
+                QSplitter::handle:hover {
+                    background-color: #2ecc71;
+                }
+            """
+            self.linkshare_splitter.setHandleWidth(8)
+            self.linkshare_splitter.setChildrenCollapsible(False)
+            self.linkshare_splitter.setStyleSheet(splitter_style)
 
-        window._is_updating_filter_ui = False
+    def _on_splitter_manually_moved(self, pos, index):
+        if hasattr(self, 'linkshare_splitter') and self.linkshare_splitter:
+            if not hasattr(self, '_is_collapsed') or not self._is_collapsed:
+                self._user_custom_splitter_sizes = self.linkshare_splitter.sizes()            
 
-        window.usage_history_start = tab2_widget.findChild(QLineEdit, "usage_history_start")
-        window.usage_history_end = tab2_widget.findChild(QLineEdit, "usage_history_end")
-        window.usage_history_total_label = tab2_widget.findChild(QLabel, "usage_history_total_label")
+    def open_internet_share_approval_dialog(self):
+        approval_dialog = get_approval_dialog()
+        approval_dialog.show_unique_dialog(parent=self, session_data=None)        
 
-        def handle_approval_decision(client_ip, is_approved, minutes):
-            session_db = InternetShareSessionDatabase()
-            sessions = session_db.load_sessions()
+    def check_pending_requests_on_startup(self):
+        try:
+            from LinkShare.db.internet_share_db import internet_share_db
+            records = internet_share_db.load(view_type="REQUEST")
+            pending_records = [r for r in records if r.get("overall_status") == "PENDING" or r.get("approval_status") == "PENDING"]
+            if pending_records:
+                logd(f"[LinkShare] 프로그램 시작 시 미승인 사용 요청 {len(pending_records)}건 감지 -> 승인 다이얼로그 자동 팝업")
+                approval_dialog = get_approval_dialog()
+                approval_dialog.show_unique_dialog(parent=self, session_data=None)        
+        except Exception as e:
+            loge(f"[LinkShare] 미승인 요청 확인 중 오류 발생: {e}")
 
-            if client_ip in sessions:
-                session = sessions[client_ip]
-                if is_approved:
-                    session['status'] = 'Approved'
-                    session['end_timestamp'] = datetime.datetime.now().timestamp() + (minutes * 60)
-                else:
-                    session['status'] = 'Rejected'
-                
-                session_db.save_session(session)
-                trigger_table_update()
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(50, self._update_scaled_qr_images)
 
-        window.approval_dialog.decision_made.connect(handle_approval_decision)
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_scaled_qr_images()
 
-        def trigger_table_update():
-            if getattr(window, '_is_updating_filter_ui', False):
-                return
-            
-            session_db = InternetShareSessionDatabase()
-            window.shared_sessions = session_db.load_sessions()
-            
-            if hasattr(window, 'usage_history') and hasattr(window, 'get_record_price'):
-                update_usage_history_tables(
-                    window,
-                    window.usage_history,
-                    window.shared_sessions,
-                    window.get_record_price
-                )
-
-        def on_filter_combo_changed(index):
-            if window._is_updating_filter_ui:
-                return
-                
-            current_tab_idx = window.usage_history_tabs.currentIndex()
-            current_tab_name = window.usage_history_tabs.tabText(current_tab_idx)
-            combo_text = window.usage_history_filter.currentText()
-            
-            today = datetime.date.today()
-            start_date = ""
-            end_date = ""
-            
-            if combo_text == "Today":
-                start_date = end_date = today.strftime("%Y-%m-%d")
-            elif combo_text == "Yesterday":
-                d = today - datetime.timedelta(days=1)
-                start_date = end_date = d.strftime("%Y-%m-%d")
-            elif "days ago" in combo_text:
-                days_num = int(combo_text.split()[0])
-                d = today - datetime.timedelta(days=days_num)
-                start_date = end_date = d.strftime("%Y-%m-%d")
-            elif combo_text == "All":
-                start_date = ""
-                end_date = ""
-                
-            window._is_updating_filter_ui = True
-            if combo_text != "Custom":
-                window.usage_history_start.setText(start_date)
-                window.usage_history_end.setText(end_date)
-            window._is_updating_filter_ui = False
-            
-            window.tab_filter_states[current_tab_name] = {
-                "combo_index": index,
-                "start": window.usage_history_start.text(),
-                "end": window.usage_history_end.text()
-            }
-            
-            trigger_table_update()
-
-        def on_date_field_changed():
-            if window._is_updating_filter_ui:
-                return
-                
-            current_tab_idx = window.usage_history_tabs.currentIndex()
-            current_tab_name = window.usage_history_tabs.tabText(current_tab_idx)
-            
-            start_val = window.usage_history_start.text().strip()
-            end_val = window.usage_history_end.text().strip()
-            
-            if start_val or end_val:
-                window._is_updating_filter_ui = True
-                custom_idx = window.usage_history_filter.count() - 1
-                window.usage_history_filter.setCurrentIndex(custom_idx)
-                window._is_updating_filter_ui = False
-
-            window.tab_filter_states[current_tab_name] = {
-                "combo_index": window.usage_history_filter.currentIndex(),
-                "start": start_val,
-                "end": end_val
-            }
-            
-            trigger_table_update()
-
-        def custom_tab_changed(index):
-            self.linkshare_config.set('active_tab_index', index)    
-
-            tab_name = window.usage_history_tabs.tabText(index)
-            state = window.tab_filter_states.get(tab_name, {"combo_index": 0, "start": "", "end": ""})
-            
-            window._is_updating_filter_ui = True
-            window.usage_history_filter.setCurrentIndex(state["combo_index"])
-            window.usage_history_start.setText(state["start"])
-            window.usage_history_end.setText(state["end"])
-            window._is_updating_filter_ui = False
-            
-            if hasattr(window, 'on_usage_history_tab_changed'):
-                window.on_usage_history_tab_changed(index)
-            trigger_table_update()
-
-        window.usage_history_filter.currentIndexChanged.connect(on_filter_combo_changed)
-        window.usage_history_start.textChanged.connect(on_date_field_changed)
-        window.usage_history_end.textChanged.connect(on_date_field_changed)
-        window.usage_history_tabs.currentChanged.connect(custom_tab_changed)
-
-        saved_tab_index = self.linkshare_config.get('active_tab_index')
-        if 0 <= saved_tab_index < window.usage_history_tabs.count():
-            window.usage_history_tabs.setCurrentIndex(saved_tab_index)
-            custom_tab_changed(saved_tab_index)
-
-        window.usage_history_total_label.setStyleSheet(
-            "QLabel { color: #0d47a1; background-color: #f5f5f5; font-weight: bold; padding: 6px; border-radius: 4px; border: 1px solid #cfd8dc; }"
-        )
-
-        status_panel = tab2_widget.findChild(QWidget, "status_panel")
-        status_panel_layout = status_panel.layout()
-        status_panel_layout.addWidget(window.status_group, 0)
-        status_panel_layout.addWidget(window.usage_history_tabs, 1)
-        
-        hotspot_info_group.setMinimumHeight(120)
-        status_panel.setMinimumHeight(100)
-        
-        window.linkshare_splitter.setStretchFactor(0, 3)
-        window.linkshare_splitter.setStretchFactor(1, 3)
-        window.linkshare_splitter.setSizes(getattr(window, 'linkshare_splitter_sizes', [450, 450]))
-        window.linkshare_splitter.splitterMoved.connect(window.handle_linkshare_splitter_moved)
-        
-        window.linkshare_splitter_save_timer = QTimer(window)
-        window.linkshare_splitter_save_timer.setSingleShot(True)
-        window.linkshare_splitter_save_timer.setInterval(250)
-        window.linkshare_splitter_save_timer.timeout.connect(window.persist_settings)
-
-        window.session_sync_timer = QTimer(window)
-        window.session_sync_timer.setInterval(2000)
-        window.session_sync_timer.timeout.connect(trigger_table_update)
-        window.session_sync_timer.start()
-
-        QTimer.singleShot(0, window.adjust_linkshare_spacing)
-
-        window.main_tabs.addTab(tab2_widget, "Wi-Fi Pass Manager (LinkShare)")
-        window.main_titles = getattr(window, 'main_titles', [])
-        window.main_tabs.setCurrentIndex(1 if current_main_tab == "wifi_pass" else 0)
-
-        # --- 하위 파일(웹 서비스)에 매개변수로 전달 ---
-        link_share_start(
-            signals=self.share_signals,
-            session_identity_lock=self.session_identity_lock,
-            client_identity_map=self.client_identity_map,
-            client_metadata_map=self.client_metadata_map
-        )
-
-    def handle_approval_requested_slot(self, client_ip, minutes, dur_str):
-        """웹 서버 스레드에서 보낸 승인 요청 시그널을 UI 스레드에서 받아 처리하는 슬롯"""
-        window = self.window
-        if hasattr(window, 'approval_dialog') and window.approval_dialog:
-            window.approval_dialog.show_request(client_ip, minutes, dur_str)
-
-    def update_captive_portal_status(self, text):
-        label = getattr(self.window, 'captive_portal_status_label', None)
-        if label is not None:
-            label.setText(text)
+        if hasattr(self, 'linkshare_splitter') and self.linkshare_splitter:
+            if hasattr(self, '_user_custom_splitter_sizes') and self._user_custom_splitter_sizes:
+                if not hasattr(self, '_is_collapsed') or not self._is_collapsed:
+                    self.linkshare_splitter.setSizes(self._user_custom_splitter_sizes)
+    

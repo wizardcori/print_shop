@@ -5,6 +5,7 @@ import queue
 import time
 from datetime import datetime
 import colorlog
+import ast
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QCheckBox, QGroupBox, QLabel, QHBoxLayout, QComboBox, QSpinBox
 from PySide6.QtCore import Qt
@@ -22,6 +23,7 @@ DEFAULT_LOG_ALL_FILE_PATH = os.path.join(LOG_DIR, DEFAULT_LOG_ALL_FILE)
 # ==============================================================================
 # 2. Logger Classes & Infrastructure
 # ==============================================================================
+import os,inspect
 
 class LogTag:
     SYSTEM = "SYSTEM"
@@ -38,13 +40,91 @@ class LogTag:
         return self.name
 
 
+class FileTagManager:
+    """파일(모듈)별 기본 로그 태그 및 레벨/모듈 활성화 맵을 소유하는 관리 클래스"""
+    _file_default_tags = {}
+    
+    # 1. 태그 및 레벨 활성화 여부를 관리하는 기본 맵 소유
+    _level_enabled = {
+        "DEBUG": True,
+        "INFO": True,
+        "WARNING": True,
+        "ERROR": True,
+        "CRITICAL": True
+    }
+    
+    _module_enabled = {
+        "SYSTEM": True,
+        "DB": True,
+        "NET": True,
+        "SEC": True,
+        "USER": True,
+        "DEFAULT": True
+    }
+
+    @classmethod
+    def get_level_enabled(cls) -> dict:
+        return cls._level_enabled
+
+    @classmethod
+    def get_module_enabled(cls) -> dict:
+        return cls._module_enabled
+
+    @classmethod
+    def set_level_enabled(cls, level_cfg: dict):
+        """소스/설정에서 레벨 활성화 상태 변경 시 맵 업데이트"""
+        if isinstance(level_cfg, dict):
+            cls._level_enabled.update(level_cfg)
+
+    @classmethod
+    def set_module_enabled(cls, module_cfg: dict):
+        """소스/설정에서 모듈 활성화 상태 변경 시 맵 업데이트"""
+        if isinstance(module_cfg, dict):
+            cls._module_enabled.update(module_cfg)
+
+    @classmethod
+    def set_file_tag(cls, *tags):
+        """현재 호출한 파일(모듈)의 기본 로그 태그를 지정하고, 맵에 없으면 새로 추가"""
+        frame = inspect.currentframe().f_back
+        filename = os.path.normpath(frame.f_code.co_filename)
+        upper_tags = [str(t).upper() for t in tags]
+        
+        cls._file_default_tags[filename] = upper_tags
+        
+        # 새로운 태그가 감지되면 맵에 존재하지 않을 경우에만 추가
+        for tag in upper_tags:
+            if tag not in cls._module_enabled:
+                cls._module_enabled[tag] = True
+
+    @classmethod
+    def get_current_file_mods(cls, default_tag):
+        """호출 스택을 추적하여 현재 파일에 지정된 태그 목록을 반환합니다."""
+        for step, f in enumerate(inspect.stack()):
+            if step > 2:
+                break       
+            filename = os.path.normpath(f.filename)             
+            if filename in cls._file_default_tags:
+                return cls._file_default_tags[filename]
+        
+        if isinstance(default_tag, (list, tuple)):
+            return [str(t).upper() for t in default_tag]
+        return [str(default_tag).upper()]
+
+set_file_tag = FileTagManager.set_file_tag
+
+
+
+
+##############################################################################################
 class CustomLogFormatter(logging.Formatter):
     """[노컬러 포맷터] 상대경로 및 고정폭 패딩을 적용하여 런타임 정렬 수행"""
+
     def format(self, record):
         if not hasattr(record, 'tag'):
             record.tag = LogTag.DEFAULT
-            
-        log_cfg = LogConfig()
+
+        from Common.log_config import log_config_instance        
+        log_cfg = log_config_instance
         path_style = log_cfg.get('path_style')
         fixed_width = log_cfg.get('fixed_width_size')
         do_tabular = log_cfg.get('enable_tabular_alignment')
@@ -74,8 +154,8 @@ class CustomColoredFormatter(colorlog.ColoredFormatter):
     def format(self, record):
         if not hasattr(record, 'tag'):
             record.tag = LogTag.DEFAULT
-            
-        log_cfg = LogConfig()
+        from Common.log_config import log_config_instance        
+        log_cfg = log_config_instance
         path_style = log_cfg.get('path_style')
         fixed_width = log_cfg.get('fixed_width_size')
         do_tabular = log_cfg.get('enable_tabular_alignment')
@@ -200,7 +280,8 @@ class LoggerManager:
         self.console_handlers = []
         self.file_handler_color = None
 
-        log_cfg = LogConfig()
+        from Common.log_config import log_config_instance
+        log_cfg = log_config_instance
         default_fmt = log_cfg.build_format_string()
 
         self.default_individual_format = individual_format or default_fmt
@@ -213,7 +294,6 @@ class LoggerManager:
         self.listener = None
         self.logger = self._initialize_logger()
 
-        # 생성된 로거 매니저를 전역 레지스트리에 자동 등록[cite: 5]
         LogManagerRegistry.register(self)
 
     @classmethod
@@ -242,8 +322,8 @@ class LoggerManager:
             'ERROR':    'red',
             'CRITICAL': 'bold_red',
         }
-
-        log_cfg = LogConfig()
+        from Common.log_config import log_config_instance
+        log_cfg = log_config_instance
         initial_global_fmt = log_cfg.build_format_string()
         enable_global = log_cfg.get('enable_global_log')
         enable_global_color = log_cfg.get('enable_global_color_file')
@@ -336,7 +416,6 @@ class LoggerManager:
         return logger
 
     def close_logs(self):
-        """현재 열려 있는 개별 로그 리스너와 핸들러를 닫고 파일 잠금을 해제합니다[cite: 5]."""
         if self.listener:
             self.listener.stop()
             self.listener = None
@@ -348,7 +427,6 @@ class LoggerManager:
                 pass
 
     def reopen_logs(self):
-        """로그 시스템을 다시 열어 로깅을 재개합니다[cite: 5]."""
         self.file_handlers.clear()
         LoggerManager._global_initialized = False
         self._initialize_global_system()
@@ -480,14 +558,32 @@ class LoggerManager:
             self.listener.stop()
         LogManagerRegistry.unregister(self)
 
+    @classmethod
+    def update_all_logger_formats(cls):
+        """모든 LoggerManager 인스턴스 및 전역 통합 핸들러의 포맷을 LogConfig 최신 설정으로 갱신합니다."""
+        from Common.log_config import log_config_instance
+        new_fmt = log_config_instance.build_format_string()
+        
+        date_format = "%Y-%m-%d %H:%M:%S"
+        log_colors = {'DEBUG': 'cyan', 'INFO': 'green', 'WARNING': 'yellow', 'ERROR': 'red', 'CRITICAL': 'bold_red'}
+        
+        # 1. 전역 통합 로그 핸들러 포맷 갱신
+        if cls._global_normal_handler:
+            cls._global_normal_handler.setFormatter(CustomLogFormatter(new_fmt, datefmt=date_format))
+        if cls._global_color_handler:
+            cls._global_color_handler.setFormatter(CustomColoredFormatter("%(log_color)s" + new_fmt + "%(reset)s", datefmt=date_format, log_colors=log_colors))
+            
+        # 2. 등록된 모든 LoggerManager 인스턴스(SubLoggerManager 포함) 포맷 갱신
+        for manager in LogManagerRegistry._instances:
+            manager.set_individual_format(new_fmt)
 
 class SubLoggerManager(LoggerManager):
     def __init__(self, log_file=DEFAULT_LOG_FILE_PATH, flush_interval=5.0, module_name="SubModule", default_tag=LogTag.DEFAULT, individual_format=None, global_format=None):
         super().__init__(log_file=log_file, flush_interval=flush_interval, logger_name=module_name, individual_format=individual_format, global_format=global_format)
-        self.default_tag = str(default_tag)
+        self.default_mod = str(default_tag)
 
     def _log(self, level, message: str, tag=None):
-        current_tag = str(tag) if tag is not None else self.default_tag
+        current_tag = str(tag) if tag is not None else self.default_mod
         if level == 'debug': self.logger.debug(message, extra={'tag': current_tag}, stacklevel=3)
         elif level == 'info': self.logger.info(message, extra={'tag': current_tag}, stacklevel=3)
         elif level == 'warning': self.logger.warning(message, extra={'tag': current_tag}, stacklevel=3)
@@ -513,7 +609,7 @@ class SubLoggerManager(LoggerManager):
 
 _shared_logger = None
 
-def setup_global_logd(log_file=DEFAULT_LOG_FILE_PATH, module_name="GlobalModule", default_tag=LogTag.DEFAULT):
+def setup_global_log(log_file=DEFAULT_LOG_FILE_PATH, module_name="GlobalModule", default_tag=LogTag.DEFAULT):
     global _shared_logger
     if _shared_logger is None:
         _shared_logger = SubLoggerManager(log_file=log_file, module_name=module_name, default_tag=default_tag)
@@ -522,43 +618,83 @@ def setup_global_logd(log_file=DEFAULT_LOG_FILE_PATH, module_name="GlobalModule"
     builtins.logd = logd
     builtins.loge = loge    
     builtins.LogTag = LogTag
+    builtins.set_file_tag = set_file_tag    
 
-def reset_global_logd():
+def reset_global_log():
     global _shared_logger
     if _shared_logger is not None:
         _shared_logger.stop()
         _shared_logger = None    
 
-def logd(message: str, tag=None, level="debug"):
+from Common.log_config import log_config_instance
+
+def logd(message: str, mod=None, level="debug"):
     global _shared_logger
     if _shared_logger is None:
-        setup_global_logd()  
+        setup_global_log()  
+
+    # 1. 레벨 점검 (True가 아니면 리턴)
+    if not log_config_instance.is_level_enabled(level):
+        return
+
+    # 1. 인자로 태그가 안 넘어왔다면 FileTagManager를 통해 현재 파일의 복수 태그 획득
+    current_mods = mod
+    if not current_mods:
+        current_mods = FileTagManager.get_current_file_mods(_shared_logger.default_mod)
     
+    # 단일 문자열로 들어온 경우 리스트로 변환
+    if isinstance(current_mods, str):
+        current_mods = [current_mods]
+
+    # 3. 모듈 활성화 점검 (하나도 켜져 있지 않으면 리턴)
+    if not log_config_instance.is_module_enabled(current_mods):
+        return
+
+    # 복수 태그를 슬래시(/) 형태로 결합 (예: [SETTINGS/SYSTEM])
+    mod_str = "/".join(current_mods)
+
     lev = level.lower()
+    extra_dict = {'tag': mod_str}
+    
     if lev == 'info': 
-        _shared_logger.logger.info(message, extra={'tag': str(tag) if tag else _shared_logger.default_tag}, stacklevel=2)
+        _shared_logger.logger.info(message, extra=extra_dict, stacklevel=2)
     elif lev == 'warning': 
-        _shared_logger.logger.warning(message, extra={'tag': str(tag) if tag else _shared_logger.default_tag}, stacklevel=2)
+        _shared_logger.logger.warning(message, extra=extra_dict, stacklevel=2)
     elif lev == 'error': 
-        _shared_logger.logger.error(message, extra={'tag': str(tag) if tag else _shared_logger.default_tag}, stacklevel=2)
+        _shared_logger.logger.error(message, extra=extra_dict, stacklevel=2)
     elif lev == 'critical': 
-        _shared_logger.logger.critical(message, extra={'tag': str(tag) if tag else _shared_logger.default_tag}, stacklevel=2)
+        _shared_logger.logger.critical(message, extra=extra_dict, stacklevel=2)
     else: 
-        _shared_logger.logger.debug(message, extra={'tag': str(tag) if tag else _shared_logger.default_tag}, stacklevel=2)
+        _shared_logger.logger.debug(message, extra=extra_dict, stacklevel=2)
 
 def loge(message: str, tag=None, level="error"):
     global _shared_logger
     if _shared_logger is None:
-        setup_global_logd()  
+        setup_global_log()  
     
+    # 1. 인자로 태그가 안 넘어왔다면 FileTagManager를 통해 현재 파일의 복수 태그 획득
+    current_tags = tag
+    if not current_tags:
+        current_tags = FileTagManager.get_current_file_mods(_shared_logger.default_mod)
+    
+    # 단일 문자열로 들어온 경우 리스트로 변환
+    if isinstance(current_tags, str):
+        current_tags = [current_tags]
+
+    # 복수 태그를 슬래시(/) 형태로 결합 (예: [SETTINGS/SYSTEM])
+    tag_str = "/".join(current_tags)
+
     lev = level.lower()
-    if lev == 'info':      
-        _shared_logger.logger.info(message, extra={'tag': str(tag) if tag else _shared_logger.default_tag}, stacklevel=2)
+    extra_dict = {'tag': tag_str}
+    
+    if lev == 'info': 
+        _shared_logger.logger.info(message, extra=extra_dict, stacklevel=2)
     elif lev == 'warning': 
-        _shared_logger.logger.warning(message, extra={'tag': str(tag) if tag else _shared_logger.default_tag}, stacklevel=2)
-    elif lev == 'error':   
-        _shared_logger.logger.error(message, extra={'tag': str(tag) if tag else _shared_logger.default_tag}, stacklevel=2)
+        _shared_logger.logger.warning(message, extra=extra_dict, stacklevel=2)
+    elif lev == 'error': 
+        _shared_logger.logger.error(message, extra=extra_dict, stacklevel=2)
     elif lev == 'critical': 
-        _shared_logger.logger.critical(message, extra={'tag': str(tag) if tag else _shared_logger.default_tag}, stacklevel=2)
+        _shared_logger.logger.critical(message, extra=extra_dict, stacklevel=2)
     else: 
-        _shared_logger.logger.error(message, extra={'tag': str(tag) if tag else _shared_logger.default_tag}, stacklevel=2)
+        _shared_logger.logger.debug(message, extra=extra_dict, stacklevel=2)
+

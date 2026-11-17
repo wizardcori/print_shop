@@ -54,12 +54,12 @@ echo.
 echo [3/5] Checking package installation status...
 call .venv\Scripts\activate.bat
 
-python -c "import PySide6, Flask, qrcode, PIL, cryptography, psutil, winrt.windows.foundation, winrt.windows.networking.connectivity, winrt.windows.networking.networkoperators" > nul 2>&1
+python -c "import PySide6, Flask, qrcode, requests, psutil, pywin32, PIL, cryptography, psutil, winrt.windows.foundation, winrt.windows.networking.connectivity, winrt.windows.networking.networkoperators" > nul 2>&1
 if %errorlevel% equ 0 goto skip_pip
 
 echo [INFO] Installing required packages (PySide6, Flask, qrcode, Pillow, cryptography, psutil, WinRT networking)...
 python -m pip install --upgrade pip > nul
-pip install PySide6 colorlog Flask qrcode[pil] nicegui waitress PyMuPDF cryptography psutil winrt-Windows.Foundation winrt-Windows.Networking.Connectivity winrt-Windows.Networking.NetworkOperators
+pip install PySide6 colorlog Flask redis qrcode[pil] nicegui waitress PyMuPDF cryptography psutil winrt-Windows.Foundation winrt-Windows.Networking.Connectivity winrt-Windows.Networking.NetworkOperators
 echo Package installation complete.
 goto check_ssl
 

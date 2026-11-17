@@ -13,7 +13,7 @@ import configparser
 import atexit
 import json
 from datetime import datetime, timezone
-from Common.paths import LOG_DIR, PRINT_MONITOR_SOUND_DIR, CONFIG_FILE, TRANSFER_REGISTRY_FILE
+import Common.paths as paths
 from Common.globals import CONFIG_ENCODING
 
 try:
@@ -28,7 +28,7 @@ PRINT_MONITOR_SECTION = 'PrintMonitor'
 
 # Printer-monitor values edited in Settings are persisted with application
 # settings. The implementation config remains separate for standalone needs.
-LOG_CONFIG_PATH = CONFIG_FILE
+LOG_CONFIG_PATH = paths.CONFIG_FILE
 _sound_queue = queue.Queue(maxsize=32)
 _sound_thread = None
 _sound_stop = threading.Event()
@@ -37,7 +37,7 @@ _sound_generation = 0
 _sound_generation_lock = threading.Lock()
 _transfer_files = {}
 _transfer_files_lock = threading.RLock()
-_transfer_registry_path = TRANSFER_REGISTRY_FILE
+_transfer_registry_path = paths.TRANSFER_REGISTRY_FILE
 
 
 def _load_transfer_registry():
@@ -153,7 +153,7 @@ def _open_utf8_log(path):
 def _write_sound_log(level, message, *args):
     """Append one sound event and close the file immediately."""
     try:
-        log_dir = LOG_DIR
+        log_dir = paths.LOG_DIR
         os.makedirs(log_dir, exist_ok=True)
         path = os.path.join(log_dir, datetime.now().strftime('%Y%m%d_sound.log'))
         rendered = message % args if args else message
@@ -170,7 +170,7 @@ def _write_sound_log(level, message, *args):
 def write_print_detect_log(level, message, *args):
     """Write printer detection/tree-registration details to a daily log."""
     try:
-        log_dir = LOG_DIR
+        log_dir = paths.LOG_DIR
         os.makedirs(log_dir, exist_ok=True)
         path = os.path.join(log_dir, datetime.now().strftime('%Y%m%d_print_detect.log'))
         rendered = message % args if args else message
@@ -187,7 +187,7 @@ def write_print_detect_log(level, message, *args):
 def write_system_log(level, message, *args):
     """Write system log."""
     try:
-        log_dir = LOG_DIR
+        log_dir = paths.LOG_DIR
         os.makedirs(log_dir, exist_ok=True)
         path = os.path.join(log_dir, datetime.now().strftime('%Y%m%d_system.log'))
         rendered = message % args if args else message

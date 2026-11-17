@@ -35,3 +35,14 @@ class CurrentUserSession:
         if self.get_authority() == 1:
             return True
         return False
+
+    def get_username(self):
+        return self.username
+
+# 싱글톤 인스턴스
+current_user_session = CurrentUserSession()
+
+
+def get_username():
+    """현재 로그인된 사용자 세션 인스턴스를 반환합니다."""
+    return current_user_session.get_username()    

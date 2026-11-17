@@ -7,15 +7,17 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
-from Common.paths import DB_DIR
+import Common.paths as paths
+from Common.log import logd, loge  # logd, loge 임포트 확인
 
 
 class BaseDb:
     # 부모 클래스 기본 설정 변수 선언
-    db_path: str = os.path.join(DB_DIR, "app.db")
+    db_path: str = os.path.join(paths.DB_DIR, "app.db")
     table_name: str = "table1"
     create_table_sql: Optional[str] = None
     initial_records: List[Dict[str, Any]] = []
+    child_class_name: str = "Child"
     config_kind: str = "print_bw_short"
     key_column: str = "item_name"  # 자식 클래스에서 식별자 컬럼 지정 가능 (예: operators는 "user_name")
 
@@ -29,7 +31,7 @@ class BaseDb:
         cls = self.__class__
         
         # 자식 클래스에 정의된 항목이 없으면 부모 클래스의 기본값 사용
-        self.db_path = db_path or getattr(cls, "db_path", os.path.join(DB_DIR, "app_config.db"))
+        self.db_path = db_path or getattr(cls, "db_path", os.path.join(paths.DB_DIR, "app_config.db"))
         self.table_name = table_name or getattr(cls, "table_name", "printing_prices")
         self.create_table_sql = create_table_sql or getattr(cls, "create_table_sql", None)
         self.key_column = key_column or getattr(cls, "key_column", "item_name")
@@ -40,6 +42,12 @@ class BaseDb:
             self.initial_records = getattr(cls, "initial_records", [])
             
         self.config_kind = config_kind or getattr(cls, "config_kind", "print_bw_short")
+
+        # 1. 자식 클래스명 변수로 저장
+        self.child_class_name = cls.__name__
+
+        # 2. 초기화(__init__) 시점에 단 한 번 로그 출력
+        logd(f"[DB 초기화] 자식 클래스: {self.child_class_name} | 테이블명: {self.table_name} | 경로: {self.db_path}")
         
         # 멀티스레드 동시성 제어를 위한 락 생성
         self._lock = threading.RLock()
@@ -50,13 +58,32 @@ class BaseDb:
     @contextmanager
     def _connect(self):
         """Yield a SQLite connection with row factory and always close it safely."""
-        connection = sqlite3.connect(self.db_path, timeout=10)
-        connection.row_factory = sqlite3.Row
+
         try:
+            connection = sqlite3.connect(self.db_path, timeout=10)
+        except Exception as e:
+            loge(f"[DB] SQLite 데이터베이스 연결 실패 [{self.child_class_name} / {self.table_name}] (path={self.db_path}): {e}")
+            raise
+
+        try:
+            # 잠금 발생 시 대기 시간 설정 먼저 적용
+            connection.execute("PRAGMA busy_timeout=5000;")
+            
+            # WAL 모드 변경은 이미 적용되어 있거나 외부 툴 점유 시 예외 발생 가능
+            try:
+                connection.execute("PRAGMA journal_mode=WAL;")
+            except sqlite3.OperationalError as e:
+                # 외부 툴(DB Browser 등) 점유로 인한 정상적인 우회 상황은 디버그(logd)로 기록
+                logd(f"[DB] WAL 모드 변경 건너뜀 [{self.child_class_name}.{self.table_name}]: {e}")
+
+            connection.row_factory = sqlite3.Row
+
             yield connection
             connection.commit()
-        except BaseException:
+        except BaseException as e:
             connection.rollback()
+            # 비정상 종료 또는 쿼리 실행 중 예외 발생 시 에러(loge)로 기록
+            loge(f"[DB] 트랜잭션 오류 발생으로 롤백 수행 [{self.child_class_name}.{self.table_name}]: {e}")
             raise
         finally:
             connection.close()
@@ -68,10 +95,42 @@ class BaseDb:
             cursor.execute(f"PRAGMA table_info({self.table_name})")
             return [row[1] for row in cursor.fetchall()]
 
+    def get_table_columns_with_index(self) -> List[Dict[str, Any]]:
+        """
+        테이블의 컬럼명과 인덱스를 매핑하여 
+        [{'column_name': 'id', 'index': 0}, {'column_name': 'request_time', 'index': 1}, ...] 
+        형태의 리스트로 반환합니다.
+        """
+        columns = self._get_table_columns()
+        return [{"column_name": col, "index": idx} for idx, col in enumerate(columns)]        
+
+    def get_table_columns_with_details(self) -> List[Dict[str, Any]]:
+        """
+        테이블의 컬럼 인덱스, 이름, 데이터 타입을 함께 조회하여 반환합니다.
+        반환 예시: 
+        [
+            {'index': 0, 'column_name': 'id', 'data_type': 'INTEGER'},
+            {'index': 1, 'column_name': 'request_time', 'data_type': 'TEXT'},
+            ...
+        ]
+        """
+        with self._lock, self._connect() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"PRAGMA table_info({self.table_name})")
+            # PRAGMA table_info 결과 row 구조: (cid, name, type, notnull, dflt_value, pk)
+            return [
+                {
+                    "index": row[0],
+                    "column_name": row[1],
+                    "data_type": row[2].upper()
+                } 
+                for row in cursor.fetchall()
+            ]    
+
     def _ensure_table_exists(self):
         """테이블 생성 및 자동 스키마 마이그레이션 수행 후 초기 데이터(Seed) 적재"""
-        if DB_DIR and not os.path.exists(DB_DIR):
-            os.makedirs(DB_DIR, exist_ok=True)
+        if paths.DB_DIR and not os.path.exists(paths.DB_DIR):
+            os.makedirs(paths.DB_DIR, exist_ok=True)
 
         with self._lock, self._connect() as conn:
             cursor = conn.cursor()

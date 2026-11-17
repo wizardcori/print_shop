@@ -15,7 +15,7 @@ from PySide6.QtGui import QColor, QPixmap, QFont, QFontMetrics, QImage, QPainter
 from PySide6.QtCore import Qt, QTimer, Signal, QFile
 from PySide6.QtUiTools import QUiLoader
 
-from Common.paths import NETWORK_QR_OUTPUT_DIR, CAPTIVE_QR_OUTPUT_DIR
+import Common.paths as paths
 from Common.config import FileConfigManager, ConfigType
 from Common.geometry_manager import AutoGeometryWidget
 from Common.settings_registry import register_settings_tab
@@ -64,12 +64,12 @@ class HotspotNetworkConfig(FileConfigManager):
         'hotspot_ip': {"default": "", "type": ConfigType.STRING},
         'hotspot_gateway': {"default": DEFAULT_HOTSPOT_GATEWAY, "type": ConfigType.STRING},
         'hotspot_network': {"default": DEFAULT_HOTSPOT_NETWORK, "type": ConfigType.STRING},
-        'network_qr_output_dir': {"default": NETWORK_QR_OUTPUT_DIR, "type": ConfigType.STRING},
-        'captive_qr_output_dir': {"default": CAPTIVE_QR_OUTPUT_DIR, "type": ConfigType.STRING},
+        'network_qr_output_dir': {"default": paths.NETWORK_QR_OUTPUT_DIR, "type": ConfigType.STRING},
+        'captive_qr_output_dir': {"default": paths.CAPTIVE_QR_OUTPUT_DIR, "type": ConfigType.STRING},
         'last_qr_hash': {"default": "", "type": ConfigType.STRING},
     }
 
-
+from .ui_hotspot_settings import Ui_HotspotSettingsWidget
 class HotspotNetworkTab(AutoGeometryWidget):
     qr_export_completed = Signal(str, bool, str)
 
@@ -82,8 +82,8 @@ class HotspotNetworkTab(AutoGeometryWidget):
         self._auto_retry_done = False
         
         self.qr_output_dirs = {
-            'network': self.config.get('network_qr_output_dir') or NETWORK_QR_OUTPUT_DIR,
-            'captive': self.config.get('captive_qr_output_dir') or CAPTIVE_QR_OUTPUT_DIR
+            'network': self.config.get('network_qr_output_dir') or paths.NETWORK_QR_OUTPUT_DIR,
+            'captive': self.config.get('captive_qr_output_dir') or paths.CAPTIVE_QR_OUTPUT_DIR
         }
         
         # 원본 QR 픽스맵 저장용 변수 초기화
@@ -103,23 +103,24 @@ class HotspotNetworkTab(AutoGeometryWidget):
 
         # 3. 최초 QR 코드 업데이트
         self.update_qr_codes()
-
     def init_ui(self):
-        """QUiLoader를 사용하여 외부 hotspot_settings.ui 파일을 동적으로 로드"""
-        ui_file_path = os.path.join(os.path.dirname(__file__), "hotspot_settings.ui")
-        loader = QUiLoader()
-        ui_file = QFile(ui_file_path)
-        
-        if not ui_file.open(QFile.ReadOnly):
-            raise FileNotFoundError(f"UI 파일을 찾을 수 없습니다: {ui_file_path}")
+        # ==========================================
+        # 1. 변환된 파이썬 UI 모듈(Ui_HotspotSettingsWidget)을 self에 직접 적용
+        # ==========================================
+        try:
+            ui_instance = Ui_HotspotSettingsWidget()
+            ui_instance.setupUi(self)
+            logd("UI_LOAD (Python Module 성공) : Ui_HotspotSettingsWidget setupUi 완료")
+        except Exception as e:
+            loge(f"[오류] UI setupUi 실행 중 예외 발생: {e}")
+            # 폴백: UI 로드 실패 시 기본 레이아웃 생성
+            main_layout = QVBoxLayout(self)
+            main_layout.setContentsMargins(0, 0, 0, 0)
+            self.main_tabs = QTabWidget(self)
+            main_layout.addWidget(self.main_tabs)
 
-        self.ui = loader.load(ui_file, self)
-        ui_file.close()
-
-        from PySide6.QtWidgets import QVBoxLayout
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.addWidget(self.ui)
+        # self가 곧 UI가 생성된 위젯이므로 self.ui를 자기 자신으로 지정
+        self.ui = self
 
         # UI 내 위젯 바인딩
         self.hotspot_status_btn = self.ui.findChild(QWidget, "hotspot_status_btn")
@@ -327,7 +328,7 @@ class HotspotNetworkTab(AutoGeometryWidget):
             self.config.save()
 
     def select_qr_folder(self, qr_type):
-        current_dir = self.qr_output_dirs.get(qr_type, NETWORK_QR_OUTPUT_DIR)
+        current_dir = self.qr_output_dirs.get(qr_type, paths.NETWORK_QR_OUTPUT_DIR)
         dialog = FolderExplorerDialog(current_dir, self)
         if dialog.exec() == QDialog.Accepted and dialog.selected_path:
             selected_dir = dialog.selected_path
@@ -375,7 +376,7 @@ class HotspotNetworkTab(AutoGeometryWidget):
                 
             self._update_and_save_qr_hash()
             
-            output_dir = self.qr_output_dirs.get('network', NETWORK_QR_OUTPUT_DIR)
+            output_dir = self.qr_output_dirs.get('network', paths.NETWORK_QR_OUTPUT_DIR)
             if not silent:
                 QMessageBox.information(self, "Network QR Print", f"네트워크 연결 QR 코드 (1x~4x)가\n다음 경로에 저장되었습니다:\n{output_dir}")
         except Exception as e:
@@ -403,7 +404,7 @@ class HotspotNetworkTab(AutoGeometryWidget):
                 
             self._update_and_save_qr_hash()
             
-            output_dir = self.qr_output_dirs.get('captive', CAPTIVE_QR_OUTPUT_DIR)
+            output_dir = self.qr_output_dirs.get('captive', paths.CAPTIVE_QR_OUTPUT_DIR)
             if not silent:
                 QMessageBox.information(self, "Captive QR Print", f"캡티브 포털 QR 코드 (1x~4x)가\n다음 경로에 저장되었습니다:\n{output_dir}")
         except Exception as e:
@@ -473,7 +474,7 @@ class HotspotNetworkTab(AutoGeometryWidget):
         if pixmap.isNull():
             return
         
-        output_dir = self.qr_output_dirs.get(qr_type, NETWORK_QR_OUTPUT_DIR)
+        output_dir = self.qr_output_dirs.get(qr_type, paths.NETWORK_QR_OUTPUT_DIR)
         os.makedirs(output_dir, exist_ok=True)
         
         qr_size = 240 * scale

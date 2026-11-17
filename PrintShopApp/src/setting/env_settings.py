@@ -6,7 +6,7 @@ import shutil
 import ctypes
 from dotenv import load_dotenv
 
-from Common.paths import DATA_DIR
+import Common.paths as paths 
 from Common.config import FileConfigManager, ConfigType
 from Common.geometry_manager import AutoGeometryWidget
 from Common.settings_registry import register_settings_tab
@@ -217,14 +217,14 @@ class EnvSettingsTab(AutoGeometryWidget):
 
     def on_delete_all_config(self):
         """DATA_DIR 하위의 모든 파일 및 폴더를 삭제하고 등록된 모든 로그 시스템을 재시작합니다."""
-        if not os.path.exists(DATA_DIR):
-            QMessageBox.information(self, "안내", f"데이터 디렉토리가 존재하지 않습니다:\n{DATA_DIR}")
+        if not os.path.exists(paths.DATA_DIR):
+            QMessageBox.information(self, "안내", f"데이터 디렉토리가 존재하지 않습니다:\n{paths.DATA_DIR}")
             return
 
         reply = QMessageBox.question(
             self, 
             "경고", 
-            f"다음 경로의 하위 모든 파일이 삭제됩니다:\n{DATA_DIR}\n\n정말 삭제하시겠습니까?",
+            f"다음 경로의 하위 모든 파일이 삭제됩니다:\n{paths.DATA_DIR}\n\n정말 삭제하시겠습니까?",
             QMessageBox.Yes | QMessageBox.No, 
             QMessageBox.No
         )
@@ -236,8 +236,8 @@ class EnvSettingsTab(AutoGeometryWidget):
                 LogManagerRegistry.close_all_logs()
 
                 # 2단계: DATA_DIR 하위 파일 및 폴더 삭제
-                for filename in os.listdir(DATA_DIR):
-                    file_path = os.path.join(DATA_DIR, filename)
+                for filename in os.listdir(paths.DATA_DIR):
+                    file_path = os.path.join(paths.DATA_DIR, filename)
                     try:
                         if os.path.isfile(file_path) or os.path.islink(file_path):
                             os.unlink(file_path)
@@ -248,7 +248,7 @@ class EnvSettingsTab(AutoGeometryWidget):
                         continue  # 오류가 난 파일은 건너뛰고 다음 파일/폴더로 진행
 
                 # 3단계: 삭제되었을 수 있는 로그 디렉토리 재생성
-                log_dir = os.path.join(DATA_DIR, 'log')
+                log_dir = os.path.join(paths.DATA_DIR, 'log')
                 os.makedirs(log_dir, exist_ok=True)
                 
                 # 4단계: 레지스트리에 등록된 모든 로그 시스템 재오픈 (로깅 재개)
