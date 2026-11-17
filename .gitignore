@@ -151,3 +151,6 @@ sw/
 PrintShopTests/
 test/
 dist/
+init_data/
+data/
+release/
