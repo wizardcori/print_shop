@@ -20,7 +20,7 @@ from . import network_utils
 from . import order_service
 from . import order_ui_controller
 from . import order_workflow
-from . import paths
+from . import path_mgr
 from . import print_workflow
 from . import server_signals
 from . import service_context
@@ -51,7 +51,7 @@ __all__ = [
     "order_service",
     "order_ui_controller",
     "order_workflow",
-    "paths",
+    "path_mgr",
     "print_workflow",
     "server_signals",
     "service_context",

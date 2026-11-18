@@ -1,5 +1,5 @@
 import os
-import Common.paths as paths 
+from Common.path_mgr import PathMgr 
 from Common.log import SubLoggerManager
 
 

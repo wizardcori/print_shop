@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui  import QPixmap
 
 from Common.config import FileConfigManager, ConfigType
-import Common.paths as paths 
+from Common.path_mgr import PathMgr 
 from Common.geometry_manager import AutoGeometryWidget
 from Common.settings_registry import register_settings_tab
 

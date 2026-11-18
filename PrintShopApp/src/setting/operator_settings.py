@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from Common.config import DbConfigManager
-import Common.paths as paths 
+from Common.path_mgr import PathMgr 
 from Common.geometry_manager import AutoGeometryWidget
 from Common.settings_registry import register_settings_tab
 from Common import globals as app_globals  # 상단에 추가
@@ -48,8 +48,8 @@ class OperatorConfig(DbConfigManager):
 
     def _drop_old_table_if_needed(self):
         try:
-            if paths.DB_DIR and os.path.exists(paths.DB_DIR):
-                db_path = os.path.join(paths.DB_DIR, "app_config.db")
+            if PathMgr.DB_DIR and os.path.exists(PathMgr.DB_DIR):
+                db_path = os.path.join(PathMgr.DB_DIR, "app_config.db")
                 if os.path.exists(db_path):
                     with sqlite3.connect(db_path) as conn:
                         cursor = conn.cursor()

@@ -11,7 +11,7 @@ from PySide6.QtCore import QObject, QTimer
 
 from .linkbox_setting import load_monitored_printers
 from .print_log_writer import load_log_settings
-import Common.paths as paths 
+from Common.path_mgr import PathMgr 
 from .print_request_monitor import (
     PrintMonitorDiagnostics,
     WindowsPrintServiceMonitor,

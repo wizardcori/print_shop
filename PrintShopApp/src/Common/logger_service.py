@@ -13,7 +13,7 @@ import threading
 import time
 from typing import Optional, Dict
 
-import Common.paths as paths
+from Common.path_mgr import PathMgr
 from Common.log_config import LogConfig
 
 DEFAULT_BATCH_SIZE = 50

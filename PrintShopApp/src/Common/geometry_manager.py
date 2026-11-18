@@ -1,5 +1,5 @@
 from typing import Dict, Any, List, Optional
-import Common.paths as paths
+from Common.path_mgr import PathMgr
 from Common.config import FileConfigManager, ConfigType
 from Common.log import logd, loge
 
@@ -17,7 +17,7 @@ except ImportError:
 
 
 class GeometryConfig(FileConfigManager):
-    file_dir: str = paths.CONFIG_DIR
+    file_dir: str = PathMgr.CONFIG_DIR
     file_name: str = "geometry.ini"
     config_encoding: str = "utf-8"
     section: str = "General"

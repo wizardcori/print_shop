@@ -15,7 +15,7 @@ from PySide6.QtGui import QColor, QPixmap, QFont, QFontMetrics, QImage, QPainter
 from PySide6.QtCore import Qt, QTimer, Signal, QFile
 from PySide6.QtUiTools import QUiLoader
 
-import Common.paths as paths
+from Common.path_mgr import PathMgr
 from Common.config import FileConfigManager, ConfigType
 from Common.geometry_manager import AutoGeometryWidget
 from Common.settings_registry import register_settings_tab

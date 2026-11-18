@@ -7,13 +7,13 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
-import Common.paths as paths
+from Common.path_mgr import PathMgr
 from Common.log import logd, loge  # logd, loge 임포트 확인
 
 
 class BaseDb:
     # 부모 클래스 기본 설정 변수 선언
-    db_path: str = os.path.join(paths.DB_DIR, "app.db")
+    db_path: str = os.path.join(PathMgr.DB_DIR, "app.db")
     table_name: str = "table1"
     create_table_sql: Optional[str] = None
     initial_records: List[Dict[str, Any]] = []
@@ -31,7 +31,7 @@ class BaseDb:
         cls = self.__class__
         
         # 자식 클래스에 정의된 항목이 없으면 부모 클래스의 기본값 사용
-        self.db_path = db_path or getattr(cls, "db_path", os.path.join(paths.DB_DIR, "app_config.db"))
+        self.db_path = db_path or getattr(cls, "db_path", os.path.join(PathMgr.DB_DIR, "app_config.db"))
         self.table_name = table_name or getattr(cls, "table_name", "printing_prices")
         self.create_table_sql = create_table_sql or getattr(cls, "create_table_sql", None)
         self.key_column = key_column or getattr(cls, "key_column", "item_name")
@@ -129,8 +129,8 @@ class BaseDb:
 
     def _ensure_table_exists(self):
         """테이블 생성 및 자동 스키마 마이그레이션 수행 후 초기 데이터(Seed) 적재"""
-        if paths.DB_DIR and not os.path.exists(paths.DB_DIR):
-            os.makedirs(paths.DB_DIR, exist_ok=True)
+        if PathMgr.DB_DIR and not os.path.exists(PathMgr.DB_DIR):
+            os.makedirs(PathMgr.DB_DIR, exist_ok=True)
 
         with self._lock, self._connect() as conn:
             cursor = conn.cursor()

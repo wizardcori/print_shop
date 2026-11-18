@@ -10,20 +10,16 @@ import ast
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QCheckBox, QGroupBox, QLabel, QHBoxLayout, QComboBox, QSpinBox
 from PySide6.QtCore import Qt
 
-#from Common.config import FileConfigManager, ConfigType
-from .paths import LOG_DIR
+from Common.path_mgr import PathMgr
 from Common.log_config import LogConfig
 
 DEFAULT_LOG_FILE = "system.log"
-DEFAULT_LOG_FILE_PATH = os.path.join(LOG_DIR, DEFAULT_LOG_FILE)
-
 DEFAULT_LOG_ALL_FILE = "log_all.log"
-DEFAULT_LOG_ALL_FILE_PATH = os.path.join(LOG_DIR, DEFAULT_LOG_ALL_FILE)
 
 # ==============================================================================
 # 2. Logger Classes & Infrastructure
 # ==============================================================================
-import os,inspect
+import os, inspect
 
 class LogTag:
     SYSTEM = "SYSTEM"
@@ -44,7 +40,6 @@ class FileTagManager:
     """파일(모듈)별 기본 로그 태그 및 레벨/모듈 활성화 맵을 소유하는 관리 클래스"""
     _file_default_tags = {}
     
-    # 1. 태그 및 레벨 활성화 여부를 관리하는 기본 맵 소유
     _level_enabled = {
         "DEBUG": True,
         "INFO": True,
@@ -72,33 +67,28 @@ class FileTagManager:
 
     @classmethod
     def set_level_enabled(cls, level_cfg: dict):
-        """소스/설정에서 레벨 활성화 상태 변경 시 맵 업데이트"""
         if isinstance(level_cfg, dict):
             cls._level_enabled.update(level_cfg)
 
     @classmethod
     def set_module_enabled(cls, module_cfg: dict):
-        """소스/설정에서 모듈 활성화 상태 변경 시 맵 업데이트"""
         if isinstance(module_cfg, dict):
             cls._module_enabled.update(module_cfg)
 
     @classmethod
     def set_file_tag(cls, *tags):
-        """현재 호출한 파일(모듈)의 기본 로그 태그를 지정하고, 맵에 없으면 새로 추가"""
         frame = inspect.currentframe().f_back
         filename = os.path.normpath(frame.f_code.co_filename)
         upper_tags = [str(t).upper() for t in tags]
         
         cls._file_default_tags[filename] = upper_tags
         
-        # 새로운 태그가 감지되면 맵에 존재하지 않을 경우에만 추가
         for tag in upper_tags:
             if tag not in cls._module_enabled:
                 cls._module_enabled[tag] = True
 
     @classmethod
     def get_current_file_mods(cls, default_tag):
-        """호출 스택을 추적하여 현재 파일에 지정된 태그 목록을 반환합니다."""
         for step, f in enumerate(inspect.stack()):
             if step > 2:
                 break       
@@ -113,9 +103,6 @@ class FileTagManager:
 set_file_tag = FileTagManager.set_file_tag
 
 
-
-
-##############################################################################################
 class CustomLogFormatter(logging.Formatter):
     """[노컬러 포맷터] 상대경로 및 고정폭 패딩을 적용하여 런타임 정렬 수행"""
 
@@ -220,10 +207,6 @@ class LogManagerRegistry:
 
     @classmethod
     def close_all_logs(cls):
-        """등록된 모든 로거와 전역 리스너를 일괄적으로 닫고 파일 잠금을 해제합니다."""
-
-        logd("등록된 모든 로거와 전역 리스너를 일괄적으로 닫고 파일 잠금을 해제합니다.")
-
         for manager in cls._instances:
             try:
                 manager.close_logs()
@@ -248,7 +231,6 @@ class LogManagerRegistry:
 
     @classmethod
     def reopen_all_logs(cls):
-        """등록된 모든 로거 매니저를 다시 열어 로깅을 재개합니다."""
         for manager in cls._instances:
             try:
                 manager.reopen_logs()
@@ -267,13 +249,13 @@ class LoggerManager:
 
     def __init__(
         self, 
-        log_file=DEFAULT_LOG_FILE_PATH,
+        log_file=None,
         flush_interval=5.0, 
         logger_name="BaseLogger",
         individual_format=None,
         global_format=None
     ):
-        self.base_log_file = log_file
+        self.base_log_file = log_file or os.path.join(PathMgr.LOG_DIR, DEFAULT_LOG_FILE)
         self.flush_interval = flush_interval
         self.logger_name = logger_name
         self.file_handlers = []
@@ -310,8 +292,8 @@ class LoggerManager:
         return os.path.join(dir_name, new_file_name) if dir_name else new_file_name
 
     @classmethod
-    def _initialize_global_system(cls):
-        if cls._global_initialized:
+    def _initialize_global_system(cls, force=False):
+        if cls._global_initialized and not force:
             return
 
         date_format = "%Y-%m-%d %H:%M:%S"
@@ -328,7 +310,16 @@ class LoggerManager:
         enable_global = log_cfg.get('enable_global_log')
         enable_global_color = log_cfg.get('enable_global_color_file')
 
+        if cls._global_normal_handler:
+            try: cls._global_normal_handler.close()
+            except Exception: pass
+        if cls._global_color_handler:
+            try: cls._global_color_handler.close()
+            except Exception: pass
+        cls._all_file_handlers.clear()
+
         all_target_handlers = []
+        DEFAULT_LOG_ALL_FILE_PATH = os.path.join(PathMgr.LOG_DIR, DEFAULT_LOG_ALL_FILE)
 
         dir_name = os.path.dirname(DEFAULT_LOG_ALL_FILE_PATH)
         if dir_name:
@@ -351,6 +342,10 @@ class LoggerManager:
         if enable_global and enable_global_color:
             all_target_handlers.append(cls._global_color_handler)
         cls._all_file_handlers.append(cls._global_color_handler)
+
+        if cls._global_listener:
+            try: cls._global_listener.stop()
+            except Exception: pass
 
         cls._global_listener = logging.handlers.QueueListener(cls._global_queue, *all_target_handlers, respect_handler_level=True)
         cls._global_listener.start()
@@ -383,18 +378,19 @@ class LoggerManager:
             target_handlers.append(console_handler)
             self.console_handlers.append(console_handler)
 
-            dir_name = os.path.dirname(self.base_log_file)
+            actual_base_log_file = self.base_log_file or os.path.join(PathMgr.LOG_DIR, DEFAULT_LOG_FILE)
+            dir_name = os.path.dirname(actual_base_log_file)
             if dir_name:
                 os.makedirs(dir_name, exist_ok=True)
 
-            normal_log_path = self._get_dated_file_path(self.base_log_file, is_color=False)
+            normal_log_path = self._get_dated_file_path(actual_base_log_file, is_color=False)
             file_handler_normal = PeriodicFlushFileHandler(normal_log_path, encoding="utf-8", flush_interval=self.flush_interval)
             file_handler_normal.setLevel(logging.DEBUG)
             file_handler_normal.setFormatter(CustomLogFormatter(self.default_individual_format, datefmt=date_format))
             target_handlers.append(file_handler_normal)
             self.file_handlers.append(file_handler_normal)
 
-            color_log_path = self._get_dated_file_path(self.base_log_file, is_color=True)
+            color_log_path = self._get_dated_file_path(actual_base_log_file, is_color=True)
             self.file_handler_color = PeriodicFlushFileHandler(color_log_path, encoding="utf-8", flush_interval=self.flush_interval)
             self.file_handler_color.setLevel(logging.DEBUG)
             self.file_handler_color.setFormatter(CustomColoredFormatter(
@@ -428,8 +424,9 @@ class LoggerManager:
 
     def reopen_logs(self):
         self.file_handlers.clear()
-        LoggerManager._global_initialized = False
-        self._initialize_global_system()
+        
+        # 바뀐 경로(PathMgr.LOG_DIR)를 반영하여 글로벌 시스템 강제 재초기화
+        LoggerManager._initialize_global_system(force=True)
         
         self.logger.handlers.clear()
         
@@ -452,18 +449,19 @@ class LoggerManager:
         target_handlers.append(console_handler)
         self.console_handlers.append(console_handler)
 
-        dir_name = os.path.dirname(self.base_log_file)
+        actual_base_log_file = self.base_log_file or os.path.join(PathMgr.LOG_DIR, DEFAULT_LOG_FILE)
+        dir_name = os.path.dirname(actual_base_log_file)
         if dir_name:
             os.makedirs(dir_name, exist_ok=True)
 
-        normal_log_path = self._get_dated_file_path(self.base_log_file, is_color=False)
+        normal_log_path = self._get_dated_file_path(actual_base_log_file, is_color=False)
         file_handler_normal = PeriodicFlushFileHandler(normal_log_path, encoding="utf-8", flush_interval=self.flush_interval)
         file_handler_normal.setLevel(logging.DEBUG)
         file_handler_normal.setFormatter(CustomLogFormatter(self.default_individual_format, datefmt=date_format))
         target_handlers.append(file_handler_normal)
         self.file_handlers.append(file_handler_normal)
 
-        color_log_path = self._get_dated_file_path(self.base_log_file, is_color=True)
+        color_log_path = self._get_dated_file_path(actual_base_log_file, is_color=True)
         self.file_handler_color = PeriodicFlushFileHandler(color_log_path, encoding="utf-8", flush_interval=self.flush_interval)
         self.file_handler_color.setLevel(logging.DEBUG)
         self.file_handler_color.setFormatter(CustomColoredFormatter(
@@ -560,26 +558,25 @@ class LoggerManager:
 
     @classmethod
     def update_all_logger_formats(cls):
-        """모든 LoggerManager 인스턴스 및 전역 통합 핸들러의 포맷을 LogConfig 최신 설정으로 갱신합니다."""
         from Common.log_config import log_config_instance
         new_fmt = log_config_instance.build_format_string()
         
         date_format = "%Y-%m-%d %H:%M:%S"
         log_colors = {'DEBUG': 'cyan', 'INFO': 'green', 'WARNING': 'yellow', 'ERROR': 'red', 'CRITICAL': 'bold_red'}
         
-        # 1. 전역 통합 로그 핸들러 포맷 갱신
         if cls._global_normal_handler:
             cls._global_normal_handler.setFormatter(CustomLogFormatter(new_fmt, datefmt=date_format))
         if cls._global_color_handler:
             cls._global_color_handler.setFormatter(CustomColoredFormatter("%(log_color)s" + new_fmt + "%(reset)s", datefmt=date_format, log_colors=log_colors))
             
-        # 2. 등록된 모든 LoggerManager 인스턴스(SubLoggerManager 포함) 포맷 갱신
         for manager in LogManagerRegistry._instances:
             manager.set_individual_format(new_fmt)
 
+
 class SubLoggerManager(LoggerManager):
-    def __init__(self, log_file=DEFAULT_LOG_FILE_PATH, flush_interval=5.0, module_name="SubModule", default_tag=LogTag.DEFAULT, individual_format=None, global_format=None):
-        super().__init__(log_file=log_file, flush_interval=flush_interval, logger_name=module_name, individual_format=individual_format, global_format=global_format)
+    def __init__(self, log_file=None, flush_interval=5.0, module_name="SubModule", default_tag=LogTag.DEFAULT, individual_format=None, global_format=None):
+        actual_log_file = log_file or os.path.join(PathMgr.LOG_DIR, DEFAULT_LOG_FILE)
+        super().__init__(log_file=actual_log_file, flush_interval=flush_interval, logger_name=module_name, individual_format=individual_format, global_format=global_format)
         self.default_mod = str(default_tag)
 
     def _log(self, level, message: str, tag=None):
@@ -609,10 +606,12 @@ class SubLoggerManager(LoggerManager):
 
 _shared_logger = None
 
-def setup_global_log(log_file=DEFAULT_LOG_FILE_PATH, module_name="GlobalModule", default_tag=LogTag.DEFAULT):
+def setup_global_log(log_file=None, module_name="GlobalModule", default_tag=LogTag.DEFAULT):
     global _shared_logger
     if _shared_logger is None:
-        _shared_logger = SubLoggerManager(log_file=log_file, module_name=module_name, default_tag=default_tag)
+        actual_log_file = log_file or os.path.join(PathMgr.LOG_DIR, DEFAULT_LOG_FILE)
+        os.makedirs(PathMgr.LOG_DIR, exist_ok=True)
+        _shared_logger = SubLoggerManager(log_file=actual_log_file, module_name=module_name, default_tag=default_tag)
     
     import builtins
     builtins.logd = logd
@@ -626,6 +625,18 @@ def reset_global_log():
         _shared_logger.stop()
         _shared_logger = None    
 
+def reopen_global_log(new_log_file=None):
+    reset_global_log()
+    
+    LoggerManager._initialize_global_system(force=True)
+    
+    # 등록된 개별 로거 매니저들도 재시작
+    LogManagerRegistry.reopen_all_logs()
+    
+    # 새로운 경로로 전역 로그 재설정
+    setup_global_log(log_file=new_log_file)
+
+
 from Common.log_config import log_config_instance
 
 def logd(message: str, mod=None, level="debug"):
@@ -633,24 +644,19 @@ def logd(message: str, mod=None, level="debug"):
     if _shared_logger is None:
         setup_global_log()  
 
-    # 1. 레벨 점검 (True가 아니면 리턴)
     if not log_config_instance.is_level_enabled(level):
         return
 
-    # 1. 인자로 태그가 안 넘어왔다면 FileTagManager를 통해 현재 파일의 복수 태그 획득
     current_mods = mod
     if not current_mods:
         current_mods = FileTagManager.get_current_file_mods(_shared_logger.default_mod)
     
-    # 단일 문자열로 들어온 경우 리스트로 변환
     if isinstance(current_mods, str):
         current_mods = [current_mods]
 
-    # 3. 모듈 활성화 점검 (하나도 켜져 있지 않으면 리턴)
     if not log_config_instance.is_module_enabled(current_mods):
         return
 
-    # 복수 태그를 슬래시(/) 형태로 결합 (예: [SETTINGS/SYSTEM])
     mod_str = "/".join(current_mods)
 
     lev = level.lower()
@@ -672,16 +678,13 @@ def loge(message: str, tag=None, level="error"):
     if _shared_logger is None:
         setup_global_log()  
     
-    # 1. 인자로 태그가 안 넘어왔다면 FileTagManager를 통해 현재 파일의 복수 태그 획득
     current_tags = tag
     if not current_tags:
         current_tags = FileTagManager.get_current_file_mods(_shared_logger.default_mod)
     
-    # 단일 문자열로 들어온 경우 리스트로 변환
     if isinstance(current_tags, str):
         current_tags = [current_tags]
 
-    # 복수 태그를 슬래시(/) 형태로 결합 (예: [SETTINGS/SYSTEM])
     tag_str = "/".join(current_tags)
 
     lev = level.lower()
@@ -697,4 +700,3 @@ def loge(message: str, tag=None, level="error"):
         _shared_logger.logger.critical(message, extra=extra_dict, stacklevel=2)
     else: 
         _shared_logger.logger.debug(message, extra=extra_dict, stacklevel=2)
-

@@ -31,7 +31,7 @@ import win32ts
 APP_CHECK_INTERVAL_SEC = 30.0   # 메인 앱 프로세스 검사 주기 (초)
 HEARTBEAT_TIMEOUT_SEC =  90.0    # 메인 앱 하트비트 응답 대기 제한 시간 (타임아웃)
 
-SERVICE_NAME = "print_shop_update_service"
+SERVICE_NAME = "PrintShopUpdateService"
 PORT = 54321
 
 # ==============================================================================
@@ -83,7 +83,7 @@ try:
     from version import VERSION as UPDATER_VERSION, NAME as UPDATER_NAME
 except ImportError:
     UPDATER_VERSION = "1.2.0"
-    UPDATER_NAME = "print_shop_update_service"
+    UPDATER_NAME = "PrintShopUpdateService"
 
 SERVICE_DISPLAY_NAME = f"PrintShop Updater & Watchdog Service v{UPDATER_VERSION}"
 REG_KEY_PATH = f"SOFTWARE\\{UPDATER_NAME}"
@@ -190,11 +190,9 @@ class CentralUpdaterService(win32serviceutil.ServiceFramework):
         local_app_data = os.environ.get("LOCALAPPDATA", os.path.expanduser("~\\AppData\\Local"))
         self.data_dir = os.path.join(local_app_data, "PrintShopApp")
         
-        self.backup_dir = os.path.join(self.data_dir, "backups")
         self.versions_dir = os.path.join(self.data_dir, "versions")
 
         os.makedirs(self.data_dir, exist_ok=True)
-        os.makedirs(self.backup_dir, exist_ok=True)
         os.makedirs(self.versions_dir, exist_ok=True)
 
         self.config_mgr = ConfigManager(self.data_dir)

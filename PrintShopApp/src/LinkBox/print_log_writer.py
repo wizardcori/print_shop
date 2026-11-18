@@ -13,7 +13,7 @@ import configparser
 import atexit
 import json
 from datetime import datetime, timezone
-import Common.paths as paths
+from Common.path_mgr import PathMgr
 from Common.globals import CONFIG_ENCODING
 
 try:
@@ -28,7 +28,7 @@ PRINT_MONITOR_SECTION = 'PrintMonitor'
 
 # Printer-monitor values edited in Settings are persisted with application
 # settings. The implementation config remains separate for standalone needs.
-LOG_CONFIG_PATH = paths.CONFIG_FILE
+LOG_CONFIG_PATH = PathMgr.CONFIG_FILE
 _sound_queue = queue.Queue(maxsize=32)
 _sound_thread = None
 _sound_stop = threading.Event()

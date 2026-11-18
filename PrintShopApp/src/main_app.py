@@ -73,7 +73,7 @@ if __name__ == "__main__":
     logd("[DEBUG] Step 2: Creating PrintShopApp...")
 
     # 💡 [선택] 경로 설정 확인용 로그 추가
-    import Common.paths as paths
+    from Common.path_mgr import PathMgr
     logd(f"[INFO] APPLICATION_DIR : {paths.APPLICATION_DIR}")
     logd(f"[INFO] CUSTOM_DATA_DIR : {paths.DATA_DIR}")    
 

@@ -48,7 +48,7 @@ class VersionTab(QWidget):
             base_dir=updater_dir,
             version_filename="version.txt",
             default_version="1.2.0",
-            app_name="print_shop_update_service"
+            app_name="PrintShopUpdateService"
         )
 
     def init_ui(self):
@@ -265,7 +265,7 @@ class VersionTab(QWidget):
         # 업데이터 서비스 EXE 파일의 EOF 복호화 버전 조회
         updater_exe_path = os.path.join(self.updater_dir, "PSUpdateService.exe")
         if not os.path.exists(updater_exe_path):
-            updater_exe_path = os.path.join(self.updater_dir, "print_shop_update_service.exe")
+            updater_exe_path = os.path.join(self.updater_dir, "PrintShopUpdateService.exe")
         if os.path.exists(updater_exe_path):
             self.lbl_updater_eof_version.setText(extract_version_from_exe(updater_exe_path))
         else:
@@ -386,7 +386,7 @@ class VersionTab(QWidget):
         """Windows 레지스트리에서 설정된 JsonUrl 불러오기"""
         import winreg
         try:
-            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\print_shop_update_service", 0, winreg.KEY_READ)
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\PrintShopUpdateService", 0, winreg.KEY_READ)
             json_url, _ = winreg.QueryValueEx(key, "JsonUrl")
             winreg.CloseKey(key)
             return json_url

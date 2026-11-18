@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QLineEdit
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QCheckBox, QPushButton, QHBoxLayout, QRadioButton, QButtonGroup, QFileDialog, QMessageBox
 from Common.config import FileConfigManager, ConfigType
 from Common.settings_registry import register_settings_tab
-import Common.paths as paths 
+from Common.path_mgr import PathMgr 
 from Common.geometry_manager import AutoGeometryWidget
 from LinkBox.print_log_writer import play_notification_sound
 

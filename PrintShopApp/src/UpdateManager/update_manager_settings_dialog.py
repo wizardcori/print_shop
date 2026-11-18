@@ -6,9 +6,9 @@ from PySide6.QtWidgets import (
 )
 
 # 정의된 상수 임포트
-from github_config_manager import (
+from UpdateManager.update_manager_config import (
     DEF_REPO_OWNER, DEF_REPO_NAME, DEF_GITHUB_TOKEN,
-    DEF_LOCAL_VERSION_DIR, DEF_BACKUP_DIR, DEF_OVERWRITE_RELEASE
+    DEF_VERSION_DIR, DEF_OVERWRITE_RELEASE
 )
 
 from Common.log import logd, loge
@@ -54,15 +54,6 @@ class UpdateManagerSettingsDialog(QDialog):
         dir_hbox.addWidget(self.btn_browse_ver)
         form_layout.addLayout(dir_hbox)
         
-        form_layout.addWidget(QLabel("백업 저장 디렉토리:"))
-        backup_hbox = QHBoxLayout()
-        self.backup_dir_input = QLineEdit(self)
-        backup_hbox.addWidget(self.backup_dir_input)
-        self.btn_browse_bak = QPushButton("폴더 선택...", self)
-        self.btn_browse_bak.clicked.connect(lambda: self.select_directory(self.backup_dir_input))
-        backup_hbox.addWidget(self.btn_browse_bak)
-        form_layout.addLayout(backup_hbox)
-        
         self.cb_overwrite = QCheckBox("이미 존재하는 GitHub 릴리스 자동 덮어쓰기 (Overwrite Existing Release)", self)
         form_layout.addWidget(self.cb_overwrite)
 
@@ -106,8 +97,7 @@ class UpdateManagerSettingsDialog(QDialog):
         self.owner_input.setText(config.get("repo_owner", DEF_REPO_OWNER))
         self.repo_input.setText(config.get("repo_name", DEF_REPO_NAME))
         self.token_input.setText(config.get("github_token", DEF_GITHUB_TOKEN))
-        self.dir_input.setText(config.get("version_dir", DEF_LOCAL_VERSION_DIR))
-        self.backup_dir_input.setText(config.get("backup_dir", DEF_BACKUP_DIR))
+        self.dir_input.setText(config.get("version_dir", DEF_VERSION_DIR))
         self.cb_overwrite.setChecked(bool(config.get("overwrite_release", DEF_OVERWRITE_RELEASE)))
 
     def save_settings(self):
@@ -116,7 +106,6 @@ class UpdateManagerSettingsDialog(QDialog):
             "repo_name": self.repo_input.text().strip(),
             "github_token": self.token_input.text().strip(),
             "version_dir": self.dir_input.text().strip(),
-            "backup_dir": self.backup_dir_input.text().strip(),
             "overwrite_release": self.cb_overwrite.isChecked(),
             "udp_port": 54321
         }
@@ -145,8 +134,7 @@ class UpdateManagerSettingsDialog(QDialog):
             self.owner_input.setText(DEF_REPO_OWNER)
             self.repo_input.setText(DEF_REPO_NAME)
             self.token_input.setText(DEF_GITHUB_TOKEN)
-            self.dir_input.setText(DEF_LOCAL_VERSION_DIR)
-            self.backup_dir_input.setText(DEF_BACKUP_DIR)
+            self.dir_input.setText(DEF_VERSION_DIR)
             self.cb_overwrite.setChecked(DEF_OVERWRITE_RELEASE)
             logd("설정 기본값으로 UI 필드 복원 완료")
             QMessageBox.information(self, "안내", "기본값으로 복원되었습니다. 적용하려면 [설정 저장] 버튼을 눌러주세요.")

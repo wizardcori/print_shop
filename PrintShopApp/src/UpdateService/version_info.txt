@@ -1,8 +1,8 @@
 # UTF-8
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 2, 62, 0),
-    prodvers=(1, 2, 62, 0),
+    filevers=(1, 2, 65, 0),
+    prodvers=(1, 2, 65, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -17,11 +17,11 @@ VSVersionInfo(
         '040904B0',
         [StringStruct('CompanyName', 'PrintShop'),
          StringStruct('FileDescription', 'PrintShopUpdateService Executable'),
-         StringStruct('FileVersion', '1.2.62'),
+         StringStruct('FileVersion', '1.2.65'),
          StringStruct('InternalName', 'PrintShopUpdateService'),
          StringStruct('OriginalFilename', 'PrintShopUpdateService.exe'),
          StringStruct('ProductName', 'PrintShopUpdateService'),
-         StringStruct('ProductVersion', '1.2.62')])
+         StringStruct('ProductVersion', '1.2.65')])
       ]),
     VarFileInfo([VarStruct('Translation', [1033, 1200])])
   ]

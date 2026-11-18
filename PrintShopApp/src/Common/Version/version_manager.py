@@ -19,7 +19,7 @@ class VersionManager:
         version_filename: str = "version.txt", 
         default_version: str = "1.2.0", 
         version_var_name: str = "VERSION",
-        app_name: str = "print_shop_update_service"
+        app_name: str = "PrintShopUpdateService"
     ):
         self.base_dir = base_dir
         self.version_filename = version_filename        
@@ -118,7 +118,7 @@ if __name__ == "__main__":
     parser.add_argument("part", nargs="?", default="patch", choices=["major", "minor", "patch"], help="증가시킬 버전 단위")
     parser.add_argument("--dir", default=".", help="version.txt 및 version.py가 위치한 대상 폴더")
     parser.add_argument("--txt", default="version.txt", help="버전 텍스트 파일 이름 (기본값: version.txt)")
-    parser.add_argument("--name", default="print_shop_update_service", help="version.py에 기록할 NAME 값")
+    parser.add_argument("--name", default="PrintShopUpdateService", help="version.py에 기록할 NAME 값")
 
     args = parser.parse_args()
 

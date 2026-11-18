@@ -10,7 +10,7 @@ from datetime import date, datetime, time
 from typing import Dict, Any, List, Type, Optional
 
 from Common.globals import CONFIG_ENCODING
-import Common.paths as paths
+from Common.path_mgr import PathMgr
 
 
 # ==========================================
@@ -35,8 +35,8 @@ class ConfigType:
 # 2. 설정 모델의 메타데이터 정의 셰이프
 # ==========================================
 class ConfigModelShape:
-    file_dir: str = paths.CONFIG_DIR
-    file_name: str = paths.CONFIG_FILE
+    file_dir: str = PathMgr.CONFIG_DIR
+    file_name: str = PathMgr.CONFIG_FILE
     config_encoding: str = CONFIG_ENCODING
     section: str = "General"
     section_order: int = 1
@@ -278,10 +278,10 @@ import sqlite3
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
-import Common.paths as paths
+from Common.path_mgr import PathMgr
 
 class DbConfigManager:
-    db_path: str = os.path.join(paths.DB_DIR, "app_config.db")
+    db_path: str = os.path.join(PathMgr.DB_DIR, "app_config.db")
     table_name: str = "printing_prices"
     create_table_sql: Optional[str] = None
     initial_records: List[Dict[str, Any]] = []
@@ -297,7 +297,7 @@ class DbConfigManager:
         
         cls = self.__class__
         
-        self.db_path = db_path or getattr(cls, "db_path", os.path.join(paths.DB_DIR, "app_config.db"))
+        self.db_path = db_path or getattr(cls, "db_path", os.path.join(PathMgr.DB_DIR, "app_config.db"))
         self.table_name = table_name or getattr(cls, "table_name", "printing_prices")
         self.create_table_sql = create_table_sql or getattr(cls, "create_table_sql", None)
         self.key_column = key_column or getattr(cls, "key_column", "item_name")
@@ -323,8 +323,8 @@ class DbConfigManager:
 
     def _ensure_table_exists(self):
         """테이블 생성 및 자동 스키마 마이그레이션 수행 후 초기 데이터(Seed) 적재"""
-        if paths.CONFIG_DIR and not os.path.exists(paths.CONFIG_DIR):
-            os.makedirs(paths.CONFIG_DIR, exist_ok=True)
+        if PathMgr.CONFIG_DIR and not os.path.exists(PathMgr.CONFIG_DIR):
+            os.makedirs(PathMgr.CONFIG_DIR, exist_ok=True)
 
         with self._get_connection() as conn:
             cursor = conn.cursor()

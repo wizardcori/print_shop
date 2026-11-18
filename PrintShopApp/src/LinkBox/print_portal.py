@@ -6,7 +6,7 @@ import threading  # 백그라운드 스레드 실행용
 from fastapi import BackgroundTasks, UploadFile, File
 from nicegui import ui, app
 
-import Common.paths as paths
+from Common.path_mgr import PathMgr
 
 os.makedirs(paths.QRCODE_DIR, exist_ok=True)
 

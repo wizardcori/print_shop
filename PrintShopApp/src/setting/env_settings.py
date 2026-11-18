@@ -6,7 +6,7 @@ import shutil
 import ctypes
 from dotenv import load_dotenv
 
-import Common.paths as paths 
+from Common.path_mgr import PathMgr 
 from Common.config import FileConfigManager, ConfigType
 from Common.geometry_manager import AutoGeometryWidget
 from Common.settings_registry import register_settings_tab

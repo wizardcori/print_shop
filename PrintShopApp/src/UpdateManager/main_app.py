@@ -16,25 +16,32 @@ common_dir = os.path.join(parent_dir, 'Common')
 if common_dir not in sys.path:
     sys.path.insert(0, common_dir)
 
-import Common.paths as paths
-from Common.log import logd, loge
-from github_config_manager import GitHubConfigManager
-from printshop_update_manager_github import GitHubSettingsDialog
+from Common.path_mgr import PathMgr
+from Common.log import logd, loge, reopen_global_log,DEFAULT_LOG_FILE
+from UpdateManager.update_manager_config import GitHubConfigManager
+from UpdateManager.printshop_update_manager import UpdateManagerWindow
 
 if __name__ == "__main__":
+
+    data_dir = os.path.join(os.path.dirname(__file__),"")
+    PathMgr.refresh_paths("data_update_mgr")
+    reopen_global_log()
+
     logd("PrintShop Update Manager 애플리케이션 실행 시작 [main_app.py]")
     
-    # 주요 디렉토리 경로 초기화 및 로그 출력
-    #paths.refresh_paths("c:\\temp")
-
-    logd(f"[환경 설정] APPLICATION_DIR: {paths.APPLICATION_DIR}")
-    logd(f"[환경 설정] PROGRAM_DATA_DIR: {paths.PROGRAM_DATA_DIR}")
-    logd(f"[환경 설정] CUSTOM_DATA_DIR: {paths.CUSTOM_DATA_DIR}")
-    logd(f"[환경 설정] DATA_DIR: {paths.DATA_DIR}")    
-    logd(f"[환경 설정] CONFIG_DIR: {paths.CONFIG_DIR}")    
+    logd(f"[환경 설정] APPLICATION_DIR: {PathMgr.APPLICATION_DIR}")
+    logd(f"[환경 설정] PROGRAM_DATA_DIR: {PathMgr.PROGRAM_DATA_DIR}")
+    logd(f"[환경 설정] CUSTOM_DATA_DIR: {PathMgr.CUSTOM_DATA_DIR}")
+    logd(f"[환경 설정] DATA_DIR: {PathMgr.DATA_DIR}")    
+    logd(f"[환경 설정] CONFIG_DIR: {PathMgr.CONFIG_DIR}")    
+    logd(f"[환경 설정] LOG_DIR: {PathMgr.LOG_DIR}")        
 
     app = QApplication(sys.argv) if not QApplication.instance() else QApplication.instance()
-    config_mgr = GitHubConfigManager(config_dir=paths.CONFIG_DIR, filename="github_config.ini")
-    dialog = GitHubSettingsDialog(config_mgr)
-    dialog.exec()
-    logd("PrintShop Update Manager 애플리케이션 종료")
+    config_mgr = GitHubConfigManager(config_dir=PathMgr.CONFIG_DIR, filename="github_config.ini")
+    
+    # QMainWindow는 exec() 대신 show()를 사용합니다.
+    window = UpdateManagerWindow(config_mgr)
+    window.show()
+    
+    logd("PrintShop Update Manager 애플리케이션 진입점 실행 완료")
+    sys.exit(app.exec())

@@ -9,14 +9,14 @@ from packaging import version
 
 # logd, loge 임포트 시도 (없을 경우 기본 print 함수로 대체)
 from Common.log import logd, loge
-import github_config_manager as github_config_manager
+import UpdateManager.update_manager_config as update_manager_config
 
 from Common.Version.exe_version_crypto import extract_version_from_exe
 
 
 class GitHubUpdateSyncManager:
     """하드디스크와 GitHub 간 동기화 및 릴리스 삭제/관리 클래스"""
-    def __init__(self, repo_owner: str, repo_name: str, github_token: str = None, local_versions_dir: str = github_config_manager.DEF_LOCAL_VERSION_DIR, overwrite_release: bool = True):
+    def __init__(self, repo_owner: str, repo_name: str, github_token: str = None, local_versions_dir: str = update_manager_config.DEF_VERSION_DIR, overwrite_release: bool = True):
         self.repo_owner = repo_owner
         self.repo_name = repo_name
         self.github_token = github_token
@@ -338,7 +338,7 @@ class GitHubUpdateSyncManager:
 # 1. 사용자가 특정 버전(예: `v1.3.2`)을 원격에서 삭제합니다.
 # 2. 릴리스와 Git 태그 레퍼런스가 정상적으로 삭제됩니다.
 # 3. 곧바로 원격 저장소의 `version.json`을 읽어와서, 방금 삭제한 버전이 `latest_version`으로 등록되어 있었는지 확인합니다.
-# 4. 맞다면, **남아있는 다른 릴리스 중 가장 최신 버전(예: `v1.3.1`)을 자동으로 찾아 `version.json`을 해당 버전으로 갱신(롤백)**합니다. 만약 더 이상 남은 릴리스가 없다면 필드를 안전하게 비워줍니다[cite: 7].
+# 4. 맞다면, **남아있는 다른 릴리스 중 가장 최신 버전(예: `v1.3.1`)을 자동으로 찾아 `version.json`을 해당 버전으로 갱신(롤백)**합니다. 만약 더 이상 남은 릴리스가 없다면 필드를 안전하게 비워줍니다
 
 
     def auto_sync_remote_version_json(self) -> bool:
@@ -427,7 +427,7 @@ class GitHubUpdateSyncManager:
 
     def upload_to_github_with_progress(self, version: str, file_path: str, progress_callback=None, cancel_check=None):
         """
-        GitHub 릴리스 및 태그 충돌 방지 로직이 포함된 안전한 업로드 메서드
+        GitHub 릴리스 및 태그 충돌 방지 로직과 단계별 상세 로그가 포함된 업로드 메서드
         """
         tag_name = f"v{version}"
         release_name = f"Release v{version}"
@@ -440,45 +440,62 @@ class GitHubUpdateSyncManager:
         base_url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/releases"
         
         try:
+            # 1단계: 로컬 파일 검증 및 사전 확인
             if progress_callback:
-                progress_callback(10, f"[{version}] 원격 기존 릴리스 및 태그 존재 여부 확인 중...")
+                progress_callback(5, f"[{version}] 1단계: 로컬 파일 존재 여부 및 크기 검증 중...")
+            logd(f"[{version}] 업로드 시작 - 대상 파일 경로: {file_path}")
             
-            # 1. 이미 존재하는 릴리스가 있는지 태그(tag_name)로 조회
-            tag_lookup_url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/releases/tags/{tag_name}"
-            res = requests.get(tag_lookup_url, headers=headers)
-            
-            if res.status_code == 200:
-                # 이미 동일한 태그/릴리스가 존재함 -> Immutable 422 에러 방지를 위해 기존 릴리스 사전 삭제 처리
-                existing_release = res.json()
-                release_id = existing_release.get("id")
-                logd(f"[{version}] 원격에 이미 존재하는 릴리스(ID: {release_id}) 및 태그 발견. 사전 정리 진행...")
+            if not os.path.exists(file_path):
+                err_msg = f"로컬 파일이 존재하지 않습니다: {file_path}"
+                loge(f"[{version}] {err_msg}")
+                return False, err_msg
                 
-                if progress_callback:
-                    progress_callback(20, f"[{version}] 기존 릴리스 정리 중 (Immutable 에러 방지)...")
-                
-                # 릴리스 삭제
-                del_rel_res = requests.delete(f"{base_url}/{release_id}", headers=headers)
-                
-                # 연동된 Git Ref(태그) 삭제 추가 요청
-                tag_del_url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/git/refs/tags/{tag_name}"
-                requests.delete(tag_del_url, headers=headers)
-                
-                logd(f"[{version}] 기존 릴리스 및 태그 정리 완료.")
+            file_size = os.path.getsize(file_path)
+            logd(f"[{version}] 파일 검증 완료 (크기: {file_size:,} bytes)")
 
             if cancel_check and cancel_check():
                 return False, "사용자에 의해 취소되었습니다."
 
-            # 2. [3단계-1 & 2] 원격 GitHub 릴리스(Release) 및 태그(Tag) 생성 로그 추가 및 실행
+            # 2단계: 기존 릴리스 및 태그 존재 여부 확인 및 사전 정리 (Immutable 에러 방지)
             if progress_callback:
-                progress_callback(30, f"[{version}] 1. 원격 GitHub 릴리스 및 2. 태그({tag_name}) 생성 중...")
+                progress_callback(15, f"[{version}] 2단계: 원격 기존 릴리스 및 태그 중복 확인 중...")
+            logd(f"[{version}] 원격 릴리스 태그 조회 요청: {tag_name}")
             
-            logd(f"[{version}] GitHub API 호출: 신규 릴리스 및 태그 생성 시도 (tag: {tag_name})")
+            tag_lookup_url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/releases/tags/{tag_name}"
+            res = requests.get(tag_lookup_url, headers=headers)
+            
+            if res.status_code == 200:
+                existing_release = res.json()
+                release_id = existing_release.get("id")
+                logd(f"[{version}] ⚠️ 원격에 이미 존재하는 릴리스(ID: {release_id}) 및 태그 발견. 충돌 방지를 위해 사전 삭제 진행...")
+                
+                if progress_callback:
+                    progress_callback(25, f"[{version}] 기존 릴리스 정리 중 (Immutable 에러 방지)...")
+                
+                # 기존 릴리스 삭제
+                del_rel_res = requests.delete(f"{base_url}/{release_id}", headers=headers)
+                logd(f"[{version}] 기존 릴리스 삭제 응답 코드: {del_rel_res.status_code}")
+                
+                # 기존 Git Ref(태그) 삭제
+                tag_del_url = f"https://api.github.com/repos/{self.repo_owner}/{self.repo_name}/git/refs/tags/{tag_name}"
+                tag_del_res = requests.delete(tag_del_url, headers=headers)
+                logd(f"[{version}] 기존 Git 태그 레퍼런스 삭제 응답 코드: {tag_del_res.status_code}")
+                
+                logd(f"[{version}] 기존 릴리스 및 태그 사전 정리 완료.")
+
+            if cancel_check and cancel_check():
+                return False, "사용자에 의해 취소되었습니다."
+
+            # 3단계: 신규 GitHub 릴리스 및 태그 생성 (초안(Draft) 상태로 생성하여 에셋 업로드 제한 방지)
+            if progress_callback:
+                progress_callback(35, f"[{version}] 3단계: GitHub 초안 릴리스 및 태그({tag_name}) 생성 중...")
+            logd(f"[{version}] GitHub API 호출: 초안(Draft) 릴리스 및 태그 생성 시도")
             
             release_payload = {
                 "tag_name": tag_name,
                 "name": release_name,
                 "body": f"Automated release for version {version}",
-                "draft": False,
+                "draft": True,          # 💡 핵심: 처음에 초안(Draft)으로 생성해야 에셋 업로드가 가능합니다.
                 "prerelease": False
             }
             
@@ -487,46 +504,70 @@ class GitHubUpdateSyncManager:
             if create_res.status_code not in (200, 201):
                 err_json = create_res.json()
                 err_msg = err_json.get("message", "Unknown error")
-                loge(f"[{version}] 릴리스 생성 실패 (Status {create_res.status_code}): {err_msg}")
+                loge(f"[{version}] ❌ 릴리스 생성 실패 (Status {create_res.status_code}): {err_msg}")
                 return False, f"릴리스 생성 실패: {create_res.status_code} - {json.dumps(err_json)}"
             
             release_data = create_res.json()
-            upload_url_template = release_data.get("upload_url")  # '{?name,label}' 형태 포함
+            release_id = release_data.get("id")         # 💡 나중에 공개 상태로 바꿀 때 사용할 ID 확보
+            upload_url_template = release_data.get("upload_url")
             upload_url = upload_url_template.split("{")[0]
             
-            logd(f"[{version}] ✅ 1. 원격 릴리스 생성 성공 및 2. 태그({tag_name}) 등록 완료 (Upload URL 확보)")
+            logd(f"[{version}] ✅ 3단계 성공: 초안 릴리스 생성 완료 (ID: {release_id})")
 
             if cancel_check and cancel_check():
                 return False, "사용자에 의해 취소되었습니다."
 
-            # 3. [4단계] 빌드된 에셋(Asset) 파일 업로드
+            # 4단계: 빌드된 에셋(Asset) 파일 스트림 업로드
             if progress_callback:
-                progress_callback(50, f"[{version}] 3. 압축 파일 에셋 업로드 중...")
+                progress_callback(50, f"[{version}] 4단계: 파일 에셋 업로드 스트림 준비 중... (총 {file_size:,} bytes)")
+            logd(f"[{version}] 에셋 파일 업로드 시작: {file_path}")
                 
             file_name = os.path.basename(file_path)
             asset_upload_url = f"{upload_url}?name={file_name}"
             
             headers_asset = headers.copy()
-            headers_asset["Content-Type"] = "application/zip" # 파일 형식에 맞게 조정
+            headers_asset["Content-Type"] = "application/zip"
             
             with open(file_path, "rb") as f:
                 file_data = f.read()
                 
+            logd(f"[{version}] 바이너리 데이터 전송 중...")
+            
+            if progress_callback:
+                progress_callback(75, f"[{version}] 4단계: GitHub 서버로 바이트 스트림 전송 중...")
+
             asset_res = requests.post(asset_upload_url, headers=headers_asset, data=file_data)
             
             if asset_res.status_code not in (200, 201):
                 err_msg = asset_res.text
-                loge(f"[{version}] 에셋 업로드 실패: {err_msg}")
+                loge(f"[{version}] ❌ 에셋 업로드 실패 (Status {asset_res.status_code}): {err_msg}")
                 return False, f"에셋 업로드 실패: {asset_res.status_code} - {err_msg}"
                 
-            logd(f"[{version}] ✅ 에셋 업로드 성공: {file_name}")
+            logd(f"[{version}] ✅ 4단계 성공: 에셋 파일 업로드 완료 ({file_name})")
+
+            # 5단계: 에셋 업로드가 끝났으므로 초안(Draft) 릴리스를 최종 공개(Publish) 상태로 전환
             if progress_callback:
-                progress_callback(100, f"[{version}] 업로드 완료!")
+                progress_callback(90, f"[{version}] 5단계: 릴리스 최종 공개(Publish) 처리 중...")
+            logd(f"[{version}] 릴리스 공개 상태로 전환 요청 (release_id: {release_id})...")
+            
+            publish_payload = {
+                "draft": False  # 💡 초안 해제 = 일반 사용자에게 릴리스 공개 배포
+            }
+            publish_res = requests.patch(f"{base_url}/{release_id}", headers=headers, json=publish_payload)
+            
+            if publish_res.status_code not in (200, 201):
+                err_msg = publish_res.text
+                loge(f"[{version}] ⚠️ 릴리스 공개 전환 경고 (Status {publish_res.status_code}): {err_msg}")
+            else:
+                logd(f"[{version}] ✅ 릴리스 최종 공개 완료!")
+
+            if progress_callback:
+                progress_callback(100, f"[{version}] 🎉 모든 업로드 프로세스가 성공적으로 완료되었습니다!")
                 
             return True, ""
 
         except Exception as e:
-            loge(f"[{version}] 업로드 프로세스 중 예외 발생: {str(e)}")
+            loge(f"[{version}] ❌ 업로드 프로세스 중 예외 발생: {str(e)}")
             return False, str(e)
 
     def download_from_github_with_progress(self, version_str: str, download_url: str, progress_callback=None, cancel_check=None) -> tuple:

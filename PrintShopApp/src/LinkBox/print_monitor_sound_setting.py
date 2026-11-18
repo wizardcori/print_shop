@@ -3,7 +3,7 @@ import os
 from PySide6.QtWidgets import QWidget, QLineEdit, QPushButton, QLabel, QFileDialog
 from PySide6.QtUiTools import QUiLoader
 
-import Common.paths as paths
+from Common.path_mgr import PathMgr
 from Common.globals import load_ui_safely
 from Common.config import FileConfigManager, ConfigType
 from Common.settings_registry import register_settings_tab
