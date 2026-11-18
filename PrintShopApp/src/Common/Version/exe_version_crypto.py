@@ -4,10 +4,30 @@ import json
 import time
 import getpass
 import argparse
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
+from dotenv import load_dotenv
+from Common.log import logd, loge
 
-# 프로젝트 전용 대칭키 (운영 배포 전 Fernet.generate_key()로 발급한 고유 키로 교체 권장)
-SECRET_KEY = b'A1b2C3d4E5f6G7h8I9J0K1L2M3N4O5P6Q7R8S9T0U1V='
+# .env 파일 로드 (프로젝트 루트 경로에 .env가 위치할 경우)
+load_dotenv()
+
+# 1. 메인 키와 디폴트(백업) 키를 환경 변수 또는 직접 선언에서 불러오기
+env_key = os.getenv("EXE_VERSION_SECRET_KEY", "")
+env_key_def = os.getenv("EXE_VERSION_SECRET_KEY_DEF", "")
+
+def parse_key(k_str: str) -> bytes:
+    """문자열 형태의 키를 안전한 bytes 타입으로 변환"""
+    if not k_str:
+        return b''
+    if k_str.startswith("b'") and k_str.endswith("'"):
+        return k_str[2:-1].encode("utf-8")
+    return k_str.encode("utf-8")
+
+if not env_key_def:
+    env_key_def = "b'A1b2C3d4E5f6G7h8I9J0K1L2M3N4O5P6Q7R8S9T0U1V='"
+
+# 사용할 두 개의 키 리스트 정의 (순서대로 시도: 메인 키 -> 디폴트 키)
+EXE_VERSION_SECRET_KEYS = [parse_key(env_key), parse_key(env_key_def)]
 
 
 def generate_win_version_info(version_str: str, output_path: str = "version_info.txt", app_name: str = "PrintShopApp"):
@@ -51,7 +71,7 @@ VSVersionInfo(
 
 
 def create_metadata_footer(user_name: str = None) -> bytes:
-    """[추가] 언제(타임스탬프), 누가(계정명) 마킹했는지 정보를 담은 정확히 64바이트 고정 크기 바이트 생성"""
+    """언제(타임스탬프), 누가(계정명) 마킹했는지 정보를 담은 정확히 64바이트 고정 크기 바이트 생성"""
     if not user_name:
         try:
             user_name = getpass.getuser()  # 현재 윈도우 시스템 계정명 탐색
@@ -79,7 +99,7 @@ def create_metadata_footer(user_name: str = None) -> bytes:
 
 
 def read_metadata_footer(exe_path: str) -> dict:
-    """[추가] 파일 맨 마지막 64바이트에서 마킹 정보(누가, 언제)를 읽어 파싱"""
+    """파일 맨 마지막 64바이트에서 마킹 정보(누가, 언제)를 읽어 파싱"""
     if not os.path.exists(exe_path):
         return {}
     try:
@@ -97,7 +117,17 @@ def encrypt_and_append_version(exe_path: str, version_str: str, user_name: str =
     if not os.path.exists(exe_path):
         raise FileNotFoundError(f"대상 실행 파일을 찾을 수 없습니다: {exe_path}")
 
-    cipher = Fernet(SECRET_KEY)
+    # 💡 암호화할 때는 첫 번째 유효한 키(메인 키 또는 디폴트 키)를 사용
+    active_key = None
+    for k in EXE_VERSION_SECRET_KEYS:
+        if k:
+            active_key = k
+            break
+            
+    if not active_key:
+        raise ValueError("사용 가능한 유효한 대칭키가 없습니다.")
+
+    cipher = Fernet(active_key)
     encrypted_data = cipher.encrypt(version_str.encode("utf-8"))
     
     # 64바이트 마킹 푸터 생성
@@ -107,40 +137,53 @@ def encrypt_and_append_version(exe_path: str, version_str: str, user_name: str =
         f.write(encrypted_data)   # 1. 암호화된 버전 토큰 주입
         f.write(metadata_footer)  # 2. 파일 맨 끝에 64바이트 메타데이터 주입
         
-    print(f"[SUCCESS] '{version_str}' 토큰 및 64바이트 마킹 정보(누가/언제)가 {exe_path} 끝에 기록되었습니다.")
+    print(f"[SUCCESS] '{version_str}' 토큰 및 64바이트 마킹 정보가 {exe_path} 끝에 기록되었습니다.")
 
 
 def extract_version_from_exe(exe_path: str) -> str:
-    """지정된 .exe 파일 끝(EOF)에서 암호화된 버전 토큰 추출 및 64바이트 메타데이터 확인"""
+    """지정된 .exe 파일 끝(EOF)에서 암호화된 버전 토큰을 순차적인 키로 복호화 시도"""
     if not os.path.exists(exe_path):
         return "파일 없음"
 
     try:
-        cipher = Fernet(SECRET_KEY)
         with open(exe_path, "rb") as f:
             f.seek(0, os.SEEK_END)
             file_size = f.tell()
             if file_size < 64:
                 return "파일 크기 부족 (메타데이터 없음)"
 
-            # 뒤쪽 영역에서 메타데이터(64바이트)와 암호화 토큰 읽기
             read_size = min(320, file_size)
             f.seek(-read_size, os.SEEK_END)
             tail_data = f.read(read_size)
 
-            # 마지막 64바이트를 제외한 영역에서 버전 토큰 탐색
             search_area = tail_data[:-64]
             start_idx = search_area.find(b'gAAAAA')
             if start_idx == -1:
                 return "미적용 (EOF 토큰 없음)"
 
             encrypted_token = search_area[start_idx:]
-            version_str = cipher.decrypt(encrypted_token).decode("utf-8")
             
-            # 64바이트 마킹 정보(누가, 언제) 콘솔 출력 연동
+            # 💡 등록된 키들을 순서대로 복호화 시도 (메인 키 실패 시 def 키로 시도)
+            version_str = None
+            for key in EXE_VERSION_SECRET_KEYS:
+                if not key:
+                    continue
+                try:
+                    cipher = Fernet(key)
+                    version_str = cipher.decrypt(encrypted_token).decode("utf-8")
+                    break  # 복호화 성공 시 루프 탈출
+                except InvalidToken:
+                    continue  # 현재 키로 실패하면 다음 키 시도
+                except Exception:
+                    continue
+
+            if not version_str:
+                return "복호화 오류 (유효한 키 없음)"
+            
+            # 64바이트 마킹 정보(누가, 언제) 확인
             meta = read_metadata_footer(exe_path)
             if meta:
-                print(f"   📌 [마킹 이력] 일시: {meta.get('time')} | 작업자/PC: {meta.get('who')}")
+                logd(f"   📌 [마킹 이력] 일시: {meta.get('time')} | 작업자/PC: {meta.get('who')}")
                 
             return version_str
     except Exception as e:

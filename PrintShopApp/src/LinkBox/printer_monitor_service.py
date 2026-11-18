@@ -26,7 +26,7 @@ class IntegratedPrinterMonitor(QObject):
     def __init__(self, parent=None, data_dir=None, interval_ms=10000, on_request=None):
         super().__init__(parent)
         self.logger = logging.getLogger('printshop.print_monitor')
-        log_dir = data_dir and os.path.join(data_dir, 'log') or paths.LOG_DIR
+        log_dir = data_dir and os.path.join(data_dir, 'log') or PathMgr.LOG_DIR
         log_path = os.path.join(log_dir, datetime.datetime.now().strftime('%Y%m%d_print.log'))
         configure_print_logging(log_path)
         # Validate and repair the Windows PrintService channel from the

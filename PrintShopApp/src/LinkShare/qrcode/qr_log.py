@@ -13,7 +13,7 @@ class QrcodeLog(SubLoggerManager):
         """공용 로거 인스턴스를 반환하는 싱글톤 내부 메서드"""
         if cls._instance is None:
             cls._instance = cls(
-                log_file=os.path.join(paths.QRCODE_LOG_FULLPATH),
+                log_file=os.path.join(PathMgr.QRCODE_LOG_FULLPATH),
                 flush_interval=5.0,
                 module_name="QrcodeModule",
                 default_tag="QRCODE"
@@ -22,7 +22,7 @@ class QrcodeLog(SubLoggerManager):
 
     def __init__(
         self, 
-        log_file=os.path.join(paths.QRCODE_LOG_FULLPATH), 
+        log_file=os.path.join(PathMgr.QRCODE_LOG_FULLPATH), 
         flush_interval=5.0, 
         module_name="QrcodeModule", 
         default_tag="QRCODE", 

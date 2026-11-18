@@ -13,8 +13,8 @@ class PrintClientConfig(FileConfigManager):
 
     schema = {
         'service_ip': {"default": '127.0.0.1', "type": ConfigType.STRING},
-        'qr_save_folder': {"default": os.path.join(paths.PRINT_REQUEST_QRCODE_FULLPATH, 'insert.wav'), "type": ConfigType.FULLPATH},
-        'completion_sound': {"default": os.path.join(paths.PRINT_REQUEST_ADDED_SOUND, 'complete.wav'), "type": ConfigType.FULLPATH}
+        'qr_save_folder': {"default": os.path.join(PathMgr.PRINT_REQUEST_QRCODE_FULLPATH, 'insert.wav'), "type": ConfigType.FULLPATH},
+        'completion_sound': {"default": os.path.join(PathMgr.PRINT_REQUEST_ADDED_SOUND, 'complete.wav'), "type": ConfigType.FULLPATH}
     }
 
 

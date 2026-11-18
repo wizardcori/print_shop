@@ -1,7 +1,4 @@
-### 2. 실행 코드가 제거된 순수 서비스 및 설정 모듈: `print_shop_update_service.py`
-# 파이썬 프로그램 업데이트 시스템 및 설정 관리 소스 코드 총정리
-# (메인앱 프로세스 정밀 체크 및 versions\버전별 폴더 저장 적용 버전)
-
+# print_shop_update_service.py
 import os
 import sys
 import time
@@ -27,58 +24,17 @@ from ctypes import wintypes
 import win32security
 import win32ts
 
-
-APP_CHECK_INTERVAL_SEC = 30.0   # 메인 앱 프로세스 검사 주기 (초)
-HEARTBEAT_TIMEOUT_SEC =  90.0    # 메인 앱 하트비트 응답 대기 제한 시간 (타임아웃)
+from Protocol.update_service_protocol import (
+    DEFAULT_PORT, HEARTBEAT_TIMEOUT_SEC,
+    HEARTBEAT_INTERVAL_SEC, HEARTBEAT_LOG_BURST_COUNT, HEARTBEAT_MISSING_THRESHOLD,
+    HEARTBEAT_RESET_COUNTER_THRESHOLD, COMMAND_COOLDOWN_MAP,
+    UpdateServicePacket, UpdateServiceToUpdateClientPacketBuilder,
+    parse_client_request, parse_bool_payload, ShutdownMode, ResponseCode, Cmd
+)
 
 SERVICE_NAME = "PrintShopUpdateService"
-PORT = 54321
+PORT = DEFAULT_PORT
 
-# ==============================================================================
-# [시스템 아키텍처 기획 문서: 업데이트 & 롤백 및 가용성 보장 정책]
-# ==============================================================================
-#
-# 1. 동시성 및 중복 실행 제어 정책 (Concurrency & Cooldown Policy)
-#    - 상호 배타적 실행 (Mutual Exclusion):
-#      'APPLY_UPDATE'와 'ROLLBACK'은 둘 다 메인 앱 종료, 파일 덮어쓰기(xcopy),
-#      프로세스 재기동을 수행하므로 동시에 실행될 경우 파일 락(File Lock) 충돌 및
-#      실행 파일 손상을 유발합니다. 따라서 단일 스레드 락(heavy_task_lock)과 상태 플래그
-#      (is_heavy_task_running)를 통해 한 번에 오직 하나의 작업만 수행되도록 강제합니다.
-#    - 쿨다운 제한 (Throttling / 명령어별 개별 적용):
-#      COMMAND_COOLDOWN_MAP에 정의된 최소 허용 간격 이내에 들어오는 중복/교차 요청은 
-#      시스템 안정화를 위해 즉시 거부(FREQUENT_REQUEST_THROTTLED)합니다. (GET_HEARTBEAT는 5초)
-#    - 비동기 위임 처리:
-#      압축 해제 및 파일 복사 소요 시간으로 인한 UDP 소켓 블로킹을 방지하기 위해,
-#      요청 수신 즉시 "OK:PROCESSING"을 응답하고 실제 작업은 백그라운드 스레드로 분리합니다.
-#
-# 2. HEARTBEAT 및 카운터/시간 변수 추적 관리 정책
-#    - 메인 앱은 카운터와 별개로 4바이트 정수형 시간 변수를 포함하여 "HEARTBEAT:<counter>:<time_val>" 형태로 전송합니다.
-#    - 리셋(초기화) 조건: 보낸 카운터가 마지막 카운터보다 작고, 보낸 카운터가 지정된 임계값(HEARTBEAT_RESET_COUNTER_THRESHOLD)
-#      이하인 경우(메인 앱 재시작 등) 최초 시간/카운터 및 서버 측 측정 시간을 새롭게 클리어하고 세션을 재시작합니다.
-#    - 'GET_HEARTBEAT' 명령을 통해 5초 간격으로 해당 상태 정보를 모두 조회할 수 있습니다.
-# ==============================================================================
-
-REJECT_REASON_FREQUENT = "FREQUENT_REQUEST_THROTTLED"
-REJECT_REASON_HEAVY_RUNNING = "HEAVY_TASK_ALREADY_RUNNING"
-
-# 1. HEARTBEAT 관련 제어 상수
-HEARTBEAT_INTERVAL_SEC = 10.0                 # 기본 하트비트 주기 간격
-HEARTBEAT_LOG_BURST_COUNT = 5                 # 연결 복구 시점부터 연속으로 로그를 출력할 횟수
-HEARTBEAT_MISSING_THRESHOLD = 3               # 유실 판단 임계 횟수 (3회 이상 미수신 시 단절로 간주)
-HEARTBEAT_RESET_COUNTER_THRESHOLD = 10        # 메인앱 재시작 판정을 위한 카운터 리셋 기준 상한선 (50 이하)
-
-# 2. 명령어별 최소 요청 허용 간격 (Cooldown / Throttling, 단위: 초)
-COMMAND_COOLDOWN_MAP = {
-    "GET_STATUS": 2.0,       # 상태 조회는 빈번한 폴링 부하를 막기 위해 최소 2초 간격 제한
-    "GET_VERSIONS": 5.0,     # 백업 버전 목록 조회는 디스크 I/O를 고려해 최소 5초 간격 제한
-    "GET_PATHS": 10.0,       # 경로 정보 조회는 고정값이므로 최소 10초 간격 제한
-    "CONFIG_AND_TEST": 5.0,  # 외부 네트워크(JSON)를 호출하는 테스트는 최소 5초 간격 제한
-    "APPLY_UPDATE": 60.0,    # 업데이트 적용은 파일 다운로드/압축 해제가 수반되므로 중복/동시 실행 방지를 위해 60초 제한
-    "ROLLBACK": 60.0,        # 롤백 역시 파일 교체 및 재기동이 수반되므로 업데이트와 동일하게 60초 제한
-    "GET_HEARTBEAT": 5.0     # 하트비트 상태 통계 조회는 5초 간격 요청 가능
-}
-
-# version.py에서 VERSION과 NAME 가져오기 (없을 경우 기본값 사용)
 try:
     from version import VERSION as UPDATER_VERSION, NAME as UPDATER_NAME
 except ImportError:
@@ -90,6 +46,8 @@ REG_KEY_PATH = f"SOFTWARE\\{UPDATER_NAME}"
 
 APP_NAME = "PrintShopApp.exe"
 MAIN_APP_CURRENT_VERSION = "1.2.0"
+
+APP_CHECK_INTERVAL_SEC = 5
 GIT_HUB_UPDATE_VERSIOC_CHECK_INTERVAL = 1800
 
 
@@ -164,22 +122,19 @@ class CentralUpdaterService(win32serviceutil.ServiceFramework):
         self.last_heartbeat = time.time()
         self.heartbeat_timeout_limit = HEARTBEAT_TIMEOUT_SEC
         
-        # 하트비트 및 명령어별 제어를 위한 상태 변수
         self.hb_missing_count = 0
         self.hb_log_remaining = 0
         self.last_hb_received_time = time.time()
-        self.command_last_called_time = {}  # 쿨다운 관리를 위한 명령어별 최근 호출 타임스탬프
+        self.command_last_called_time = {}
         
-        # 💡 [HEARTBEAT 시간 변수, 서버 측정 시간 및 카운터 추적 상태 변수]
-        self.hb_first_time = None           # 메인앱 전송 최초 시간 변수
-        self.hb_first_server_time = None    # 최초 수신 시 서버 측 측정 시간
-        self.hb_first_counter = None        # 최초 카운터
-        self.hb_last_time = None            # 메인앱 전송 마지막 시간 변수
-        self.hb_last_server_time = None     # 마지막 수신 시 서버 측 측정 시간
-        self.hb_last_counter = None         # 마지막 카운터
-        self.hb_total_count = 0             # 누적 수신 횟수
+        self.hb_first_time = None
+        self.hb_first_server_time = None
+        self.hb_first_counter = None
+        self.hb_last_time = None
+        self.hb_last_server_time = None
+        self.hb_last_counter = None
+        self.hb_total_count = 0
 
-        # 상호 배타적 제어 변수 (업데이트 및 롤백 동시 실행 방지)
         self.is_heavy_task_running = False
         self.heavy_task_lock = threading.Lock()
 
@@ -189,11 +144,12 @@ class CentralUpdaterService(win32serviceutil.ServiceFramework):
 
         local_app_data = os.environ.get("LOCALAPPDATA", os.path.expanduser("~\\AppData\\Local"))
         self.data_dir = os.path.join(local_app_data, "PrintShopApp")
-        
         self.versions_dir = os.path.join(self.data_dir, "versions")
+        self.backup_dir = os.path.join(self.versions_dir, "backups")
 
         os.makedirs(self.data_dir, exist_ok=True)
         os.makedirs(self.versions_dir, exist_ok=True)
+        os.makedirs(self.backup_dir, exist_ok=True)
 
         self.config_mgr = ConfigManager(self.data_dir)
         self.saved_config = self.config_mgr.load_config()
@@ -204,6 +160,12 @@ class CentralUpdaterService(win32serviceutil.ServiceFramework):
             "message": "시스템 대기 중...",
             "version": ""
         }
+        
+        # 메인앱 자동 재실행(launch_main_app) 활성화 여부 기본값 True
+        self.launch_main_app_enabled = True
+        
+        # 패킷 빌더 초기화 (UpdateService -> UpdateClient)
+        self.packet_builder = UpdateServiceToUpdateClientPacketBuilder()
 
     def info(self, phase: str, progress: int, msg: str, ver: str = ""):
         self.status_info["phase"] = phase
@@ -239,8 +201,11 @@ class CentralUpdaterService(win32serviceutil.ServiceFramework):
             if current_time - check_app_timer > APP_CHECK_INTERVAL_SEC:
                 check_app_timer = current_time
                 if not self.is_main_app_running():
-                    self.info("LAUNCH", 0, f"메인 프로그램({APP_NAME})이 프로세스에 없어 자동 실행합니다.")
-                    self.launch_main_app()
+                    if self.launch_main_app_enabled:
+                        self.info("LAUNCH", 0, f"메인 프로그램({APP_NAME})이 프로세스에 없어 자동 실행합니다.")
+                        self.launch_main_app()
+                    else:
+                        self.info("LAUNCH_SKIPPED", 0, f"메인 프로그램({APP_NAME})이 비활성화 설정으로 인해 자동 실행되지 않습니다.")
 
                 if current_time - self.last_hb_received_time > HEARTBEAT_INTERVAL_SEC:
                     self.hb_missing_count += 1
@@ -253,36 +218,50 @@ class CentralUpdaterService(win32serviceutil.ServiceFramework):
 
             try:
                 data_bytes, addr = server_socket.recvfrom(4096)
-                command = data_bytes.decode('utf-8')
                 
-                # UPDATE 및 ROLLBACK 요청 처리 (상호 배타적 검증 및 쿨다운 체크)
-                if command.startswith("APPLY_UPDATE:") or command.startswith("ROLLBACK:"):
-                    cmd_key = "APPLY_UPDATE" if command.startswith("APPLY_UPDATE:") else "ROLLBACK"
+                # 프로토콜 파싱 적용
+                is_valid, pkt, err_code = parse_client_request(data_bytes)
+                if not is_valid:
+                    if pkt is not None:
+                        fail_pkt = self.packet_builder.res_fail(err_code)
+                        server_socket.sendto(fail_pkt.encode(), addr)
+                    continue
+
+                cmd_val = pkt.cmd
+                base_cmd_val = pkt.base_cmd
+                payload = pkt.payload
+
+                # APPLY_UPDATE 또는 ROLLBACK 중인 경우 무거운 작업 검증
+                if base_cmd_val in (Cmd.APPLY_UPDATE, Cmd.ROLLBACK):
+                    cmd_key = "APPLY_UPDATE" if base_cmd_val == Cmd.APPLY_UPDATE else "ROLLBACK"
                     
                     with self.heavy_task_lock:
                         if self.is_heavy_task_running:
-                            self.info("UDP_REJECT", 0, f"요청 거부 ({REJECT_REASON_HEAVY_RUNNING}): {command}")
-                            server_socket.sendto(f"FAIL:{REJECT_REASON_HEAVY_RUNNING}".encode('utf-8'), addr)
+                            self.info("UDP_REJECT", 0, f"요청 거부 ({ResponseCode.to_str(ResponseCode.HEAVY_TASK_ALREADY_RUNNING)}): Cmd={pkt.cmd_full_name}")
+                            fail_pkt = self.packet_builder.res_fail(ResponseCode.HEAVY_TASK_ALREADY_RUNNING)
+                            server_socket.sendto(fail_pkt.encode(), addr)
                             continue
 
-                        cooldown = COMMAND_COOLDOWN_MAP.get(cmd_key, 30.0)
-                        last_update_time = self.command_last_called_time.get("APPLY_UPDATE", 0)
-                        last_rollback_time = self.command_last_called_time.get("ROLLBACK", 0)
+                        cooldown = COMMAND_COOLDOWN_MAP.get(cmd_val, 30.0)
+                        last_update_time = self.command_last_called_time.get(Cmd.APPLY_UPDATE, 0)
+                        last_rollback_time = self.command_last_called_time.get(Cmd.ROLLBACK, 0)
                         max_last_time = max(last_update_time, last_rollback_time)
 
                         if current_time - max_last_time < cooldown:
-                            self.info("UDP_REJECT", 0, f"요청 거부 ({REJECT_REASON_FREQUENT}): {command}")
-                            server_socket.sendto(f"FAIL:{REJECT_REASON_FREQUENT}".encode('utf-8'), addr)
+                            self.info("UDP_REJECT", 0, f"요청 거부 ({ResponseCode.to_str(ResponseCode.FREQUENT_REQUEST_THROTTLED)}): Cmd={pkt.cmd_full_name}")
+                            fail_pkt = self.packet_builder.res_fail(ResponseCode.FREQUENT_REQUEST_THROTTLED)
+                            server_socket.sendto(fail_pkt.encode(), addr)
                             continue
 
-                        self.command_last_called_time[cmd_key] = current_time
+                        self.command_last_called_time[cmd_val] = current_time
                         self.is_heavy_task_running = True
 
-                    server_socket.sendto("OK:PROCESSING".encode('utf-8'), addr)
-                    threading.Thread(target=self.handle_heavy_command_async, args=(command,), daemon=True).start()
+                    processing_pkt = self.packet_builder.res_ok(ResponseCode.PROCESSING, req_cmd=cmd_val)
+                    server_socket.sendto(processing_pkt.encode(), addr)
+                    threading.Thread(target=self.handle_heavy_command_async, args=(base_cmd_val, payload), daemon=True).start()
                 else:
-                    response = self.handle_udp_command(command, current_time)
-                    server_socket.sendto(response.encode('utf-8'), addr)
+                    response_pkt = self.handle_udp_command(pkt, current_time)
+                    server_socket.sendto(response_pkt.encode(), addr)
             except socket.timeout:
                 continue
             except Exception:
@@ -327,54 +306,57 @@ class CentralUpdaterService(win32serviceutil.ServiceFramework):
                     self.info("DOWNLOAD_ERROR", 0, f"다운로드 중 예외 발생: {e}")
             time.sleep(GIT_HUB_UPDATE_VERSIOC_CHECK_INTERVAL)
 
-    def handle_heavy_command_async(self, command: str):
-        self.info("HEAVY_CMD_START", 0, f"무거운 백그라운드 작업 시작: {command}")
+    def handle_heavy_command_async(self, base_cmd_val: int, payload: str):
+        self.info("HEAVY_CMD_START", 0, f"무거운 백그라운드 작업 시작: Cmd={base_cmd_val}")
         try:
-            if command.startswith("APPLY_UPDATE:"):
-                parts = command.split(":")
-                target_ver = parts[1] if len(parts) > 1 else ""
-                self_shutdown = parts[2] == "SELF" if len(parts) > 2 else False
+            if base_cmd_val == Cmd.APPLY_UPDATE:
+                parts = payload.split(":") if payload else []
+                target_ver = parts[0] if len(parts) > 0 and parts[0] in [v.replace("v","") for v in self.get_available_backup_versions() or [""]] else (parts[0] if len(parts) > 0 and "." in parts[0] else "")
+                self_shutdown = True
+                if len(parts) > 1 and parts[1] == ShutdownMode.SERVICE:
+                    self_shutdown = False
+                elif len(parts) == 1 and parts[0] == ShutdownMode.SERVICE:
+                    self_shutdown = False
+                    target_ver = ""
                 self.execute_update_process(target_ver, self_shutdown)
-            elif command.startswith("ROLLBACK:"):
-                parts = command.split(":")
-                target_ver = parts[1] if len(parts) > 1 else ""
-                self_shutdown = parts[2] == "SELF" if len(parts) > 2 else False
+            elif base_cmd_val == Cmd.ROLLBACK:
+                parts = payload.split(":") if payload else []
+                target_ver = parts[0] if len(parts) > 0 else ""
+                self_shutdown = True
+                if len(parts) > 1 and parts[1] == ShutdownMode.SERVICE:
+                    self_shutdown = False
                 self.execute_rollback_process(target_ver, self_shutdown)
         finally:
             with self.heavy_task_lock:
                 self.is_heavy_task_running = False
-            self.info("HEAVY_CMD_END", 0, f"무거운 백그라운드 작업 종료 및 락 해제 완료: {command}")
+            self.info("HEAVY_CMD_END", 0, f"무거운 백그라운드 작업 종료 및 락 해제 완료: Cmd={base_cmd_val}")
 
-    def handle_udp_command(self, command: str, current_time: float) -> str:
-        base_cmd = command.split(":")[0] if ":" in command else command
+    def handle_udp_command(self, pkt, current_time: float) -> UpdateServicePacket:
+        cmd_val = pkt.cmd
+        base_cmd_val = pkt.base_cmd
+        payload = pkt.payload
 
-        # 일반 명령어 쿨다운(Throttling) 검증
-        if base_cmd in COMMAND_COOLDOWN_MAP:
-            cooldown = COMMAND_COOLDOWN_MAP[base_cmd]
-            last_called = self.command_last_called_time.get(base_cmd, 0.0)
+        if base_cmd_val in COMMAND_COOLDOWN_MAP:
+            cooldown = COMMAND_COOLDOWN_MAP[base_cmd_val]
+            last_called = self.command_last_called_time.get(cmd_val, 0.0)
             if current_time - last_called < cooldown:
-                self.info("UDP_REJECT", 0, f"요청 거부 ({REJECT_REASON_FREQUENT}): {command}")
-                return f"FAIL:{REJECT_REASON_FREQUENT}"
+                self.info("UDP_REJECT", 0, f"요청 거부 ({ResponseCode.to_str(ResponseCode.FREQUENT_REQUEST_THROTTLED)}): {pkt.cmd_full_name}")
+                return self.packet_builder.res_fail(ResponseCode.FREQUENT_REQUEST_THROTTLED)
             
-            self.command_last_called_time[base_cmd] = current_time
+            self.command_last_called_time[cmd_val] = current_time
 
-        # 💡 [HEARTBEAT 처리 및 상수로 정의된 리셋 조건 적용]
-        if command.startswith("HEARTBEAT"):
+        if base_cmd_val == Cmd.HEARTBEAT:
             self.last_heartbeat = current_time
-            
-            # 파싱 형식: HEARTBEAT:<counter>:<time_val> (예: HEARTBEAT:10:1718000000)
             try:
-                parts = command.split(":")
-                current_counter = int(parts[1]) if len(parts) > 1 else 0
-                current_time_val = int(parts[2]) if len(parts) > 2 else int(time.time())
+                parts = payload.split(":") if payload else []
+                current_counter = int(parts[0]) if len(parts) > 0 and parts[0].isdigit() else 0
+                current_time_val = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else int(time.time())
             except Exception:
                 current_counter = 0
                 current_time_val = int(time.time())
 
-            # 서버 측 수신 측정 시간
             server_measured_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-            # 💡 [세션 초기화(리셋) 조건 - 상수 활용]
             is_reset_condition = (
                 self.hb_first_counter is None or 
                 (
@@ -393,7 +375,6 @@ class CentralUpdaterService(win32serviceutil.ServiceFramework):
                 self.hb_last_counter = current_counter
                 self.hb_total_count = 1
                 
-                # 💡 [신규 추가] 하트비트 세션 리셋 시 모든 명령어 쿨다운 초기화
                 self.command_last_called_time.clear()
                 self.info("HEARTBEAT_RESET", 0, "메인 앱 재시작(세션 리셋) 감지: 모든 명령어 쿨다운 타이머가 초기화되었습니다.")
             else:
@@ -402,7 +383,6 @@ class CentralUpdaterService(win32serviceutil.ServiceFramework):
                 self.hb_last_counter = current_counter
                 self.hb_total_count += 1
 
-            # 하트비트 로그 버스트 제어 정책
             if self.hb_missing_count >= HEARTBEAT_MISSING_THRESHOLD:
                 self.hb_log_remaining = HEARTBEAT_LOG_BURST_COUNT
             
@@ -410,16 +390,15 @@ class CentralUpdaterService(win32serviceutil.ServiceFramework):
             self.last_hb_received_time = current_time
 
             if self.hb_log_remaining > 0:
-                self.info("UDP_REQUEST", 0, f"수신된 요청: {command} (서버수신시간: {server_measured_time}, 누적: {self.hb_total_count})")
-                response = "OK"
-                self.info("UDP_RESPONSE", 0, f"반환 응답: {response}")
+                self.info("UDP_REQUEST", 0, f"수신된 요청: {pkt.cmd_full_name} (서버수신시간: {server_measured_time}, 누적: {self.hb_total_count})")
+                res_pkt = self.packet_builder.res_ok("", req_cmd=cmd_val)
+                self.info("UDP_RESPONSE", 0, f"반환 응답: {res_pkt.cmd_full_name}")
                 self.hb_log_remaining -= 1
-                return response
+                return res_pkt
             else:
-                return "OK"
+                return self.packet_builder.res_ok("", req_cmd=cmd_val)
 
-        # 💡 [GET_HEARTBEAT 상태 조회 명령어 처리]
-        if base_cmd == "GET_HEARTBEAT":
+        if base_cmd_val == Cmd.GET_HEARTBEAT:
             heartbeat_status = {
                 "first_time": self.hb_first_time,
                 "first_server_time": self.hb_first_server_time,
@@ -429,43 +408,52 @@ class CentralUpdaterService(win32serviceutil.ServiceFramework):
                 "last_counter": self.hb_last_counter,
                 "total_count": self.hb_total_count
             }
-            response = f"OK:{json.dumps(heartbeat_status)}"
-            self.info("UDP_RESPONSE", 0, f"하트비트 상태 반환: {response}")
-            return response
+            res_pkt = self.packet_builder.res_ok(heartbeat_status, req_cmd=cmd_val)
+            self.info("UDP_RESPONSE", 0, f"하트비트 상태 반환: {res_pkt.cmd_full_name}")
+            return res_pkt
 
-        # 일반 명령어 로그 출력 및 처리
-        self.info("UDP_REQUEST", 0, f"수신된 요청: {command}")
-        
-        response = "FAIL:UNKNOWN_CMD"
+        self.info("UDP_REQUEST", 0, f"수신된 요청: {pkt.cmd_full_name}")
 
-        if command == "GET_STATUS":
-            response = f"OK:{json.dumps(self.status_info)}"
-        elif command == "GET_VERSIONS":
-            response = f"OK:{json.dumps(self.get_available_backup_versions())}"
-        elif command == "GET_PATHS":
+        if base_cmd_val == Cmd.GET_STATUS:
+            res_pkt = self.packet_builder.res_ok(self.status_info, req_cmd=cmd_val)
+        elif base_cmd_val == Cmd.GET_VERSIONS:
+            res_pkt = self.packet_builder.res_ok(self.get_available_backup_versions(), req_cmd=cmd_val)
+        elif base_cmd_val == Cmd.GET_PATHS:
             paths_info = {
                 "main_exe_path": self.main_exe_path,
                 "updater_exe_path": sys.executable if getattr(sys, 'frozen', False) else __file__,
                 "updater_service_dir": self.service_dir
             }
-            response = f"OK:{json.dumps(paths_info)}"
-        elif command.startswith("CONFIG_AND_TEST:"):
+            res_pkt = self.packet_builder.res_ok(paths_info, req_cmd=cmd_val)
+        elif base_cmd_val == Cmd.CONFIG_AND_TEST:
             try:
-                cfg = json.loads(command.split("CONFIG_AND_TEST:", 1)[1])
+                cfg = json.loads(payload) if payload else {}
                 repo_url, json_url = cfg.get("repo_url", ""), cfg.get("json_url", "")
                 if self.config_mgr.save_config(repo_url, json_url):
                     r = requests.get(json_url, timeout=5)
                     if r.status_code == 200 and "version" in r.json():
-                        response = "OK:TEST_SUCCESS"
+                        res_pkt = self.packet_builder.res_ok(ResponseCode.TEST_SUCCESS, req_cmd=cmd_val)
                     else:
-                        response = "FAIL:TEST_FAILED"
+                        res_pkt = self.packet_builder.res_fail(ResponseCode.TEST_FAILED)
                 else:
-                    response = "FAIL:TEST_FAILED"
+                    res_pkt = self.packet_builder.res_fail(ResponseCode.TEST_FAILED)
             except Exception:
-                response = "FAIL:EXCEPTION"
+                res_pkt = self.packet_builder.res_fail(ResponseCode.EXCEPTION)
+        elif base_cmd_val == Cmd.SET_RESTART_FUNCTION:
+            try:
+                enabled = parse_bool_payload(payload)
+                self.launch_main_app_enabled = enabled
+                res_pkt = self.packet_builder.res_ok("1" if enabled else "0", req_cmd=cmd_val)
+                self.info("SET_RESTART_FUNCTION", 0, f"메인 앱 자동 재실행 설정 변경: {enabled}")
+            except Exception:
+                res_pkt = self.packet_builder.res_fail(ResponseCode.EXCEPTION)
+        elif base_cmd_val == Cmd.GET_RESTART_FUNCTION:
+            res_pkt = self.packet_builder.res_ok("1" if self.launch_main_app_enabled else "0", req_cmd=cmd_val)
+        else:
+            res_pkt = self.packet_builder.res_fail(ResponseCode.UNKNOWN_CMD)
 
-        self.info("UDP_RESPONSE", 0, f"반환 응답: {response}")
-        return response
+        self.info("UDP_RESPONSE", 0, f"반환 응답: {res_pkt.cmd_full_name}")
+        return res_pkt
 
     def execute_update_process(self, target_version: str, self_shutdown: bool) -> bool:
         success = False
@@ -590,7 +578,6 @@ class CentralUpdaterService(win32serviceutil.ServiceFramework):
             self.info("LAUNCH_FAIL", 0, f"❌ 메인 앱 실행 실패: 파일 경로를 찾을 수 없습니다 ({self.main_exe_path})")
             return
 
-        # 하트비트 로깅 초기화 정책 (재시작 직후 버스트 로그 허용)
         self.hb_missing_count = HEARTBEAT_MISSING_THRESHOLD
         self.hb_log_remaining = HEARTBEAT_LOG_BURST_COUNT
         self.last_hb_received_time = time.time()

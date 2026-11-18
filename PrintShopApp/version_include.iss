@@ -1,1 +1,1 @@
-#define UpdaterVersion "1.2.65"
+#define UpdaterVersion "1.2.69"

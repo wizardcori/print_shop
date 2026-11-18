@@ -64,8 +64,8 @@ class HotspotNetworkConfig(FileConfigManager):
         'hotspot_ip': {"default": "", "type": ConfigType.STRING},
         'hotspot_gateway': {"default": DEFAULT_HOTSPOT_GATEWAY, "type": ConfigType.STRING},
         'hotspot_network': {"default": DEFAULT_HOTSPOT_NETWORK, "type": ConfigType.STRING},
-        'network_qr_output_dir': {"default": paths.NETWORK_QR_OUTPUT_DIR, "type": ConfigType.STRING},
-        'captive_qr_output_dir': {"default": paths.CAPTIVE_QR_OUTPUT_DIR, "type": ConfigType.STRING},
+        'network_qr_output_dir': {"default": PathMgr.NETWORK_QR_OUTPUT_DIR, "type": ConfigType.STRING},
+        'captive_qr_output_dir': {"default": PathMgr.CAPTIVE_QR_OUTPUT_DIR, "type": ConfigType.STRING},
         'last_qr_hash': {"default": "", "type": ConfigType.STRING},
     }
 
@@ -82,8 +82,8 @@ class HotspotNetworkTab(AutoGeometryWidget):
         self._auto_retry_done = False
         
         self.qr_output_dirs = {
-            'network': self.config.get('network_qr_output_dir') or paths.NETWORK_QR_OUTPUT_DIR,
-            'captive': self.config.get('captive_qr_output_dir') or paths.CAPTIVE_QR_OUTPUT_DIR
+            'network': self.config.get('network_qr_output_dir') or PathMgr.NETWORK_QR_OUTPUT_DIR,
+            'captive': self.config.get('captive_qr_output_dir') or PathMgr.CAPTIVE_QR_OUTPUT_DIR
         }
         
         # 원본 QR 픽스맵 저장용 변수 초기화
@@ -328,7 +328,7 @@ class HotspotNetworkTab(AutoGeometryWidget):
             self.config.save()
 
     def select_qr_folder(self, qr_type):
-        current_dir = self.qr_output_dirs.get(qr_type, paths.NETWORK_QR_OUTPUT_DIR)
+        current_dir = self.qr_output_dirs.get(qr_type, PathMgr.NETWORK_QR_OUTPUT_DIR)
         dialog = FolderExplorerDialog(current_dir, self)
         if dialog.exec() == QDialog.Accepted and dialog.selected_path:
             selected_dir = dialog.selected_path
@@ -376,7 +376,7 @@ class HotspotNetworkTab(AutoGeometryWidget):
                 
             self._update_and_save_qr_hash()
             
-            output_dir = self.qr_output_dirs.get('network', paths.NETWORK_QR_OUTPUT_DIR)
+            output_dir = self.qr_output_dirs.get('network', PathMgr.NETWORK_QR_OUTPUT_DIR)
             if not silent:
                 QMessageBox.information(self, "Network QR Print", f"네트워크 연결 QR 코드 (1x~4x)가\n다음 경로에 저장되었습니다:\n{output_dir}")
         except Exception as e:
@@ -404,7 +404,7 @@ class HotspotNetworkTab(AutoGeometryWidget):
                 
             self._update_and_save_qr_hash()
             
-            output_dir = self.qr_output_dirs.get('captive', paths.CAPTIVE_QR_OUTPUT_DIR)
+            output_dir = self.qr_output_dirs.get('captive', PathMgr.CAPTIVE_QR_OUTPUT_DIR)
             if not silent:
                 QMessageBox.information(self, "Captive QR Print", f"캡티브 포털 QR 코드 (1x~4x)가\n다음 경로에 저장되었습니다:\n{output_dir}")
         except Exception as e:
@@ -474,7 +474,7 @@ class HotspotNetworkTab(AutoGeometryWidget):
         if pixmap.isNull():
             return
         
-        output_dir = self.qr_output_dirs.get(qr_type, paths.NETWORK_QR_OUTPUT_DIR)
+        output_dir = self.qr_output_dirs.get(qr_type, PathMgr.NETWORK_QR_OUTPUT_DIR)
         os.makedirs(output_dir, exist_ok=True)
         
         qr_size = 240 * scale

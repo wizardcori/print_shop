@@ -15,7 +15,7 @@ class StorageDisplayConfig(FileConfigManager):
     section_order = 20
     schema = {
         'hotspot_image': {"default": "", "type": ConfigType.STRING},
-        # 'fare_image_dir': {"default": os.path.join(paths.DATA_DIR, 'fare'), "type": ConfigType.FULLPATH},
+        # 'fare_image_dir': {"default": os.path.join(PathMgr.DATA_DIR, 'fare'), "type": ConfigType.FULLPATH},
     }
 
 class StorageDisplayTab(AutoGeometryWidget):

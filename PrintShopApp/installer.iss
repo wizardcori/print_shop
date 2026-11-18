@@ -19,7 +19,7 @@ RestartApplications=no
 
 [Files]
 ; 💡 dist 폴더 바로 아래에 생성된 단일 실행 파일 및 버전 파일 복사
-Source: "{#SourceDir}\dist\PrintShopApp.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceDir}\dist\PrintShopApp\PrintShopApp.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 ; 기타 리소스 및 서브 서비스 파일 복사
 Source: "src\init_data\sound\approval_sounds\*.wav"; DestDir: "{app}\data\sound\approval_sounds"; Flags: ignoreversion
@@ -27,7 +27,7 @@ Source: "src\LinkBox\templates\*"; DestDir: "{app}\LinkBox\templates"; Flags: ig
 Source: "src\LinkShare\web\templates\*"; DestDir: "{app}\LinkShare\web\templates"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 ; 💡 서비스 빌드가 수행되는 src\UpdateService\dist 폴더 경로 직접 지정
-Source: "{#SourceDir}\src\UpdateService\dist\print_shop_update_service.exe"; DestDir: "{app}\UpdateService"; Flags: ignoreversion
+Source: "{#SourceDir}\dist\PrintShopUpdateService\PrintShopUpdateService.exe"; DestDir: "{app}\UpdateService"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\PrintShopApp"; Filename: "{app}\PrintShopApp.exe"
@@ -51,10 +51,12 @@ begin
   Sleep(1000);
   
   Exec('taskkill', '/f /im print_shop_update_service.exe', '', SW_HIDE, ewNoWait, ResultCode);
+  Exec('taskkill', '/f /im PrintShopUpdateService.exe', '', SW_HIDE, ewNoWait, ResultCode);  
   Exec('taskkill', '/f /im PrintShopApp.exe', '', SW_HIDE, ewNoWait, ResultCode);
   Sleep(1000);
   
   Exec('sc', 'delete print_shop_update_service', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec('sc', 'delete PrintShopUpdateService', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);  
   Sleep(1000);
 
   Result := True;
@@ -71,6 +73,7 @@ begin
   if CurStep = ssInstall then
   begin
     Exec('taskkill', '/f /im print_shop_update_service.exe', '', SW_HIDE, ewNoWait, ResultCode);
+    Exec('taskkill', '/f /im PrintShopUpdateService.exe', '', SW_HIDE, ewNoWait, ResultCode);
     Exec('taskkill', '/f /im python.exe', '', SW_HIDE, ewNoWait, ResultCode); // 파이썬 기반 서비스 프로세스 방어용
     Sleep(1000);
   end;
@@ -78,7 +81,7 @@ begin
   if CurStep = ssPostInstall then
   begin
     AppDir := ExpandConstant('{app}');
-    ServiceExe := AppDir + '\UpdateService\print_shop_update_service.exe';
+    ServiceExe := AppDir + '\UpdateService\PrintShopUpdateService.exe';
 
     // 1. 기본 버전 값 설정
     ServiceVersion := '1.2.0';
@@ -97,10 +100,10 @@ begin
     ServiceDisplayName := 'PrintShop Updater & Watchdog Service v' + ServiceVersion;
 
     // 4. Windows 서비스 등록
-    CmdParams := 'create print_shop_update_service binPath= "' + ServiceExe + '" start= auto DisplayName= "' + ServiceDisplayName + '"';
+    CmdParams := 'create PrintShopUpdateService binPath= "' + ServiceExe + '" start= auto DisplayName= "' + ServiceDisplayName + '"';
     Exec('sc', CmdParams, '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
     // 5. 서비스 시작
-    Exec('net', 'start print_shop_update_service', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Exec('net', 'start PrintShopUpdateService', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   end;
 end;

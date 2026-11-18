@@ -25,7 +25,7 @@ if __name__ == "__main__":
 
     data_dir = os.path.join(os.path.dirname(__file__),"")
     PathMgr.refresh_paths("data_update_mgr")
-    reopen_global_log()
+    #reopen_global_log()
 
     logd("PrintShop Update Manager 애플리케이션 실행 시작 [main_app.py]")
     

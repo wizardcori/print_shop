@@ -16,8 +16,8 @@ class PrintMonitorSoundConfig(FileConfigManager):
         section_order = 10
         #auto_save = False  # 수동 저장 모드
         schema = {
-            'detection_sound': {"default": os.path.join(paths.PRINT_MONITOR_SOUND_DIR, 'detect.wav'), "type": ConfigType.FULLPATH},
-            'tree_sound': {"default": os.path.join(paths.PRINT_MONITOR_SOUND_DIR, 'insert.wav'), "type": ConfigType.FULLPATH},            
+            'detection_sound': {"default": os.path.join(PathMgr.PRINT_MONITOR_SOUND_DIR, 'detect.wav'), "type": ConfigType.FULLPATH},
+            'tree_sound': {"default": os.path.join(PathMgr.PRINT_MONITOR_SOUND_DIR, 'insert.wav'), "type": ConfigType.FULLPATH},            
         }
 
 class PrintMonitorSoundSettings(AutoGeometryWidget):
@@ -35,8 +35,8 @@ class PrintMonitorSoundSettings(AutoGeometryWidget):
 
         loader = QUiLoader()
 
-        ui_file_path = paths.get_ui_file_path(__file__, "ui", "print_monitor_sound_settings.ui")
-        self.ui = paths.load_ui_smart(loader, ui_file_path, "print_monitor_sound_settings.ui",caller_file=__file__)
+        ui_file_path = PathMgr.get_ui_file_path(__file__, "ui", "print_monitor_sound_settings.ui")
+        self.ui = PathMgr.load_ui_smart(loader, ui_file_path, "print_monitor_sound_settings.ui",caller_file=__file__)
 
         # current_dir = os.path.dirname(os.path.abspath(__file__))
         # ui_path = os.path.join(current_dir, "ui", "print_monitor_sound_settings.ui")

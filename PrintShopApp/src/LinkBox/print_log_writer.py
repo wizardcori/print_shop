@@ -37,7 +37,7 @@ _sound_generation = 0
 _sound_generation_lock = threading.Lock()
 _transfer_files = {}
 _transfer_files_lock = threading.RLock()
-_transfer_registry_path = paths.TRANSFER_REGISTRY_FILE
+_transfer_registry_path = PathMgr.TRANSFER_REGISTRY_FILE
 
 
 def _load_transfer_registry():
@@ -153,7 +153,7 @@ def _open_utf8_log(path):
 def _write_sound_log(level, message, *args):
     """Append one sound event and close the file immediately."""
     try:
-        log_dir = paths.LOG_DIR
+        log_dir = PathMgr.LOG_DIR
         os.makedirs(log_dir, exist_ok=True)
         path = os.path.join(log_dir, datetime.now().strftime('%Y%m%d_sound.log'))
         rendered = message % args if args else message
@@ -170,7 +170,7 @@ def _write_sound_log(level, message, *args):
 def write_print_detect_log(level, message, *args):
     """Write printer detection/tree-registration details to a daily log."""
     try:
-        log_dir = paths.LOG_DIR
+        log_dir = PathMgr.LOG_DIR
         os.makedirs(log_dir, exist_ok=True)
         path = os.path.join(log_dir, datetime.now().strftime('%Y%m%d_print_detect.log'))
         rendered = message % args if args else message
@@ -187,7 +187,7 @@ def write_print_detect_log(level, message, *args):
 def write_system_log(level, message, *args):
     """Write system log."""
     try:
-        log_dir = paths.LOG_DIR
+        log_dir = PathMgr.LOG_DIR
         os.makedirs(log_dir, exist_ok=True)
         path = os.path.join(log_dir, datetime.now().strftime('%Y%m%d_system.log'))
         rendered = message % args if args else message

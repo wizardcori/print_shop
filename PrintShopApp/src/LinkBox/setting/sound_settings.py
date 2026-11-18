@@ -29,7 +29,7 @@ class ApprovalSoundTab(AutoGeometryWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.config = ApprovalSoundConfig()
-        self.approval_sound_dir = paths.APPROVAL_SOUND_DIR
+        self.approval_sound_dir = PathMgr.APPROVAL_SOUND_DIR
         self.approval_sounds = list(self.config.get('approval_sounds')[:5])
         self.selected_sound_index = -1
         self.init_ui()

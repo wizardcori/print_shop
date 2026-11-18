@@ -155,7 +155,7 @@ _lock = threading.Lock()
 
 def get_feature_log_dir(feature_name: str, base_dir: Optional[str] = None) -> str:
     """Return directory path partitioned by feature name: <DATA_DIR>/log/<feature_name>."""
-    base = base_dir or paths.LOG_DIR
+    base = base_dir or PathMgr.LOG_DIR
     target = os.path.join(base, feature_name.lower())
     os.makedirs(target, exist_ok=True)
     return target

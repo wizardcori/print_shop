@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['build_update_service.py'],
+    ['main_app.py'],
     pathex=[],
     binaries=[],
     datas=[],

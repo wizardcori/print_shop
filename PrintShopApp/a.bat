@@ -1,1 +1,2 @@
-.\.venv\Scripts\python.exe build.py
+cd src/build_script
+..\..\.venv\Scripts\python.exe build.py

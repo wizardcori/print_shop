@@ -12,16 +12,23 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QBrush
 
+from Protocol.update_service_protocol import (
+    DEFAULT_PORT, UpdateClientToUpdateServicePacketBuilder,
+    parse_server_response, ResponseCode
+)
+
 class UpdateClient:
-    def __init__(self, host="127.0.0.1", port=54321, heartbeat_interval=10):
+    def __init__(self, host="127.0.0.1", port=DEFAULT_PORT, heartbeat_interval=10):
         self.host = host
         self.port = port
         self.heartbeat_interval = heartbeat_interval
         self._running = False
         self._heartbeat_thread = None
         
-        # 💡 [HEARTBEAT 전송용 카운터 및 시간 변수]
         self._counter = 0
+        
+        # 패킷 빌더 초기화 (UpdateClient -> UpdateService)
+        self.packet_builder = UpdateClientToUpdateServicePacketBuilder()
 
     def info(self, stage: str, details: str):
         print(f"📌 [UpdateManager Info] Stage: {stage} | Details: {details}")
@@ -29,75 +36,98 @@ class UpdateClient:
     def start_heartbeat(self):
         if self._running: return
         self._running = True
-        self._counter = 0  # 시작 시 0으로 초기화
+        self._counter = 0
         self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
         self._heartbeat_thread.start()
 
     def _heartbeat_loop(self):
         while self._running:
-            # 💡 메인앱 시작 시점부터 0으로 초기화되어 10씩 증가하는 카운터 및 4바이트 시간 변수(타임스탬프 등) 생성
             current_time_val = int(time.time())
-            packet_msg = f"HEARTBEAT:{self._counter}:{current_time_val}"
+            # 패킷 빌더 활용한 하트비트 패킷 생성 및 인코딩
+            pkt = self.packet_builder.req_heartbeat(self._counter, current_time_val)
+            self._send_udp_packet(pkt, timeout=1.0)
             
-            self._send_udp(packet_msg, timeout=1.0)
-            
-            # 다음 전송을 위해 10 증가 (최대값 한계 도달 시 관리 또는 무한 증가)
             self._counter += 10
-            
             time.sleep(self.heartbeat_interval)
 
-    def _send_udp(self, command: str, timeout=3.0) -> str:
+    def _send_udp_packet(self, pkt, timeout=3.0):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
                 s.settimeout(timeout)
-                s.sendto(command.encode('utf-8'), (self.host, self.port))
+                s.sendto(pkt.encode(), (self.host, self.port))
                 data, _ = s.recvfrom(4096)
-                return data.decode('utf-8')
+                is_valid, res_pkt, err = parse_server_response(data)
+                if is_valid and res_pkt:
+                    return res_pkt
         except Exception:
-            return ""
+            pass
+        return None
+
+    def _send_raw_command(self, pkt, timeout=3.0) -> str:
+        res_pkt = self._send_udp_packet(pkt, timeout=timeout)
+        if res_pkt:
+            return res_pkt.to_str(True, True)
+        return ""
 
     def get_detailed_status(self) -> dict:
-        res = self._send_udp("GET_STATUS", timeout=2.0)
-        if res.startswith("OK:"):
-            try: return json.loads(res.split("OK:", 1)[1])
+        pkt = self.packet_builder.req_get_status()
+        res_pkt = self._send_udp_packet(pkt, timeout=2.0)
+        if res_pkt and res_pkt.payload:
+            try: return json.loads(res_pkt.payload)
             except Exception: pass
         return {"phase": "UNKNOWN", "progress": 0, "message": "대기 중..."}
 
     def get_service_paths(self) -> dict:
-        """업데이터 서비스에 UDP로 경로 정보 요청"""
-        try:
-            res = self._send_udp("GET_PATHS", timeout=2.0)
-            if res.startswith("OK:"):
-                return json.loads(res.split("OK:", 1)[1])
-        except Exception:
-            pass
+        pkt = self.packet_builder.req_get_paths()
+        res_pkt = self._send_udp_packet(pkt, timeout=2.0)
+        if res_pkt and res_pkt.payload:
+            try: return json.loads(res_pkt.payload)
+            except Exception: pass
         return {}    
 
     def get_heartbeat_status(self) -> dict:
-        """업데이터 서비스에 하트비트 통계 상태 조회 (GET_HEARTBEAT, 5초 쿨다운)"""
-        try:
-            res = self._send_udp("GET_HEARTBEAT", timeout=2.0)
-            if res.startswith("OK:"):
-                return json.loads(res.split("OK:", 1)[1])
-        except Exception:
-            pass
+        pkt = self.packet_builder.req_get_heartbeat()
+        res_pkt = self._send_udp_packet(pkt, timeout=2.0)
+        if res_pkt and res_pkt.payload:
+            try: return json.loads(res_pkt.payload)
+            except Exception: pass
         return {}
 
     def send_config_and_test_download(self, repo_url: str, json_url: str) -> bool:
-        config_data = {"repo_url": repo_url, "json_url": json_url}
-        res = self._send_udp(f"CONFIG_AND_TEST:{json.dumps(config_data)}", timeout=5.0)
-        return res == "OK:TEST_SUCCESS"
+        pkt = self.packet_builder.req_config_and_test(repo_url, json_url)
+        res_pkt = self._send_udp_packet(pkt, timeout=5.0)
+        if res_pkt:
+            # res_ok payload가 TEST_SUCCESS이거나 payload가 비어있지 않은 경우 체크
+            return res_pkt.payload == ResponseCode.to_str(ResponseCode.TEST_SUCCESS) or res_pkt.payload == str(ResponseCode.TEST_SUCCESS)
+        return False
 
-    def request_apply_update(self, self_shutdown: bool = True) -> bool:
-        return self._send_udp(f"APPLY_UPDATE:{'SELF' if self_shutdown else 'SERVICE'}", timeout=5.0) == "OK"
+    def request_apply_update(self, target_version: str = "", self_shutdown: bool = True) -> bool:
+        pkt = self.packet_builder.req_apply_update(target_version, self_shutdown)
+        res_pkt = self._send_udp_packet(pkt, timeout=5.0)
+        return res_pkt is not None
 
     def request_rollback(self, target_version: str, self_shutdown: bool = True) -> bool:
-        return self._send_udp(f"ROLLBACK:{target_version}:{'SELF' if self_shutdown else 'SERVICE'}", timeout=5.0) == "OK"
+        pkt = self.packet_builder.req_rollback(target_version, self_shutdown)
+        res_pkt = self._send_udp_packet(pkt, timeout=5.0)
+        return res_pkt is not None
+
+    def request_set_restart_function(self, enabled: bool) -> bool:
+        pkt = self.packet_builder.req_set_restart_function(enabled)
+        res_pkt = self._send_udp_packet(pkt, timeout=2.0)
+        return res_pkt is not None
+
+    def request_get_restart_function(self) -> bool:
+        pkt = self.packet_builder.req_get_restart_function()
+        res_pkt = self._send_udp_packet(pkt, timeout=2.0)
+        if res_pkt and res_pkt.payload:
+            return res_pkt.payload in ("1", "true", "True")
+        return True
 
     def get_available_versions(self) -> list:
-        res = self._send_udp("GET_VERSIONS", timeout=3.0)
-        if res.startswith("OK:"):
-            try: return json.loads(res.split("OK:", 1)[1])
+        pkt = self.packet_builder.req_get_versions()
+        res_pkt = self._send_udp_packet(pkt, timeout=3.0)
+        if res_pkt and res_pkt.payload:
+            try: return json.loads(res_pkt.payload)
             except Exception: pass
         return []
 
@@ -116,7 +146,6 @@ class GitHubAssistModelessDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("<b>[단계별 가이드]</b> GitHub 계정과 저장소 이름만 입력하면 자동으로 링크를 조합하여 검증합니다."))
         
-        # 1. 입력 필드 레이아웃 (계정명, 저장소명 분리 입력)
         input_layout = QHBoxLayout()
         
         self.user_input = QLineEdit(self)
@@ -133,7 +162,6 @@ class GitHubAssistModelessDialog(QDialog):
         
         layout.addLayout(input_layout)
         
-        # 2. 상태 테이블
         self.table = QTableWidget(self)
         self.table.setRowCount(4)
         self.table.setColumnCount(3)
@@ -149,7 +177,6 @@ class GitHubAssistModelessDialog(QDialog):
         self.populate_table()
         layout.addWidget(self.table)
         
-        # 3. 버튼 영역
         btn_layout = QHBoxLayout()
         self.btn_recheck = QPushButton("모든 단계 자동 재점검 (Re-check)", self)
         self.btn_recheck.setStyleSheet("font-weight: bold; color: #4EC9B0;")
@@ -220,10 +247,9 @@ class GitHubAssistModelessDialog(QDialog):
                 assets = release_data.get("assets", [])
                 if any(asset.get("name", "").endswith(".zip") for asset in assets):
                     release_ok = True
+            self.steps_data[3]["pass"] = release_ok
         except Exception:
-            pass
-        
-        self.steps_data[3]["pass"] = release_ok
+            self.steps_data[3]["pass"] = False
 
         self.populate_table()
         
@@ -247,5 +273,5 @@ class GitHubAssistModelessDialog(QDialog):
             QMessageBox.warning(self, "경고", "먼저 모든 단계 재점검을 완료해주세요.")
 
 
-updater_client = UpdateClient(port=54321)
+updater_client = UpdateClient(port=DEFAULT_PORT)
 updater_client.start_heartbeat()

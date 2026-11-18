@@ -1,36 +1,29 @@
 import os
 import sys
 
-# 공통 빌더 임포트를 위한 경로 설정
+# 공통 빌더 임포트를 위한 경로 설정 (src/build_script 의 상위인 src 폴더 추가)
 current_dir = os.path.dirname(os.path.abspath(__file__))
 src_dir = os.path.abspath(os.path.join(current_dir, ".."))
 if src_dir not in sys.path:
     sys.path.insert(0, src_dir)
 
-# 프로젝트 루트 또는 base_sub_builder가 위치한 디렉토리 경로를 sys.path에 추가
-current_dir = os.path.dirname(os.path.abspath(__file__))
-# 프로젝트 구조에 맞게 상위 혹은 하위 경로 지정 (예시: 상위 폴더가 루트인 경우)
-parent_dir = os.path.abspath(os.path.join(current_dir, '..')) 
-if parent_dir not in sys.path:
-    sys.path.insert(0, parent_dir)
-    
+# 상대 패키지 방식 대신 일반 절대 임포트로 변경
 from base_sub_builder import BaseSubBuilder
-
 
 class UpdateServiceBuilder(BaseSubBuilder):
     app_name = "PrintShopUpdateService"  # 💡 콤마 제거 완료 (문자열로 고정)
+    source_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "UpdateService")
 
     def __init__(self, python_path: str = None):
         super().__init__(
-            source_dir=os.path.dirname(os.path.abspath(__file__)),
+            source_dir=self.source_dir,
             app_name=self.app_name,
             exe_name=f"{self.app_name}.exe",
             spec_name=f"{self.app_name}.spec",
             sub_folder_name=self.app_name,
             python_path=python_path,
-            dist_to_main_folder=False  # dist/UpdateService에 출력
+            dist_to_main_folder=False  # dist/PrintShopUpdateService 폴더에 출력
         )
-
 
 if __name__ == "__main__":
     builder = UpdateServiceBuilder()
