@@ -157,3 +157,4 @@ release/
 releases/
 *.zip
 *.log
+*.ini
