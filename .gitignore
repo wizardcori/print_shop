@@ -147,6 +147,7 @@ PrintShopApp/data/
 PrintShop.si4project/
 
 versions_printshop/
+printshop_versions/
 sw/
 test/
 dist/
@@ -154,3 +155,5 @@ init_data/
 data/
 release/
 releases/
+*.zip
+*.log
