@@ -148,6 +148,7 @@ PrintShop.si4project/
 
 versions_printshop/
 printshop_versions/
+build_archive/
 sw/
 test/
 dist/
@@ -158,3 +159,5 @@ releases/
 *.zip
 *.log
 *.ini
+
+exe_version_public_key.py
