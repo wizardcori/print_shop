@@ -42,6 +42,10 @@ APP_OVERRIDE_FIELDS: tuple[str, ...] = (
     "version_rel_paths",
     "console",
     "bump_unit",
+    "mode",    
+    "clean_work",
+    "clean_dist",
+    "clean_spec",
 )
 
 

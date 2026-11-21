@@ -106,8 +106,7 @@ class SettingsWindow(QDialog):
             self.settings_applied.emit()
 
     def _on_child_config_changed(self, _payload: dict[str, Any]) -> None:
-        self.project_root = self.build_target_config_tab.project_root
-        self.config_path = self.build_target_config_tab.config_path
+        pass
 
     def _on_save_all(self) -> None:
         if hasattr(self, "general_tab"):

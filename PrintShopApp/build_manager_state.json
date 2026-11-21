@@ -9,7 +9,7 @@
     "BuildManagerApp"
   ],
   "mode": "production",
-  "bump_unit": null,
+  "bump_unit": "patch",
   "skip_installer": false,
   "installer_only": false,
   "clean_build": false,

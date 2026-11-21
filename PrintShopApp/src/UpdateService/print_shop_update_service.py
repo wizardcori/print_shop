@@ -38,7 +38,7 @@ except ImportError:
 SERVICE_DISPLAY_NAME = f"PrintShop Updater & Watchdog Service v{UPDATER_VERSION}"
 REG_KEY_PATH = f"SOFTWARE\\{UPDATER_NAME}"
 
-APP_NAME = "PrintShopApp.exe"
+APP_EXE_NAME = "PrintShopApp.exe"
 MAIN_APP_CURRENT_VERSION = "1.2.0"
 
 APP_CHECK_INTERVAL_SEC = 5
@@ -120,7 +120,7 @@ class CentralUpdaterService(win32serviceutil.ServiceFramework):
             os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__)
         )
         self.app_dir = os.path.abspath(os.path.join(self.service_dir, ".."))
-        self.main_exe_path = os.path.join(self.app_dir, APP_NAME)
+        self.main_exe_path = os.path.join(self.app_dir, APP_EXE_NAME)
 
         local_app_data = os.environ.get("LOCALAPPDATA", os.path.expanduser("~\\AppData\\Local"))
         self.data_dir = os.path.join(local_app_data, "PrintShopApp")
@@ -196,10 +196,10 @@ class CentralUpdaterService(win32serviceutil.ServiceFramework):
                 check_app_timer = current_time
                 if not self.is_main_app_running():
                     if self.launch_main_app_enabled:
-                        self.info("LAUNCH", 0, f"메인 프로그램({APP_NAME})이 프로세스에 없어 자동 실행합니다.")
+                        self.info("LAUNCH", 0, f"메인 프로그램({APP_EXE_NAME})이 프로세스에 없어 자동 실행합니다.")
                         self.launch_main_app()
                     else:
-                        self.info("LAUNCH_SKIPPED", 0, f"메인 프로그램({APP_NAME})이 비활성화 설정으로 인해 자동 실행되지 않습니다.")
+                        self.info("LAUNCH_SKIPPED", 0, f"메인 프로그램({APP_EXE_NAME})이 비활성화 설정으로 인해 자동 실행되지 않습니다.")
 
             if self.protocol_handler.check_heartbeat_health(current_time, self.is_main_app_running()):
                 self.info("WATCHDOG_TIMEOUT", 0, "⚠️ 메인 앱 응답 없음! 직전 안정 버전으로 긴급 롤백을 수행합니다.")
@@ -305,8 +305,8 @@ class CentralUpdaterService(win32serviceutil.ServiceFramework):
 
     def _terminate_main_app_if_needed(self, self_shutdown: bool):
         if self.is_main_app_running() and not self_shutdown:
-            self.info("UPDATE_KILL", 40, f"실행 중인 메인 앱({APP_NAME})을 종료합니다.")
-            subprocess.run(["taskkill", "/f", "/im", APP_NAME], capture_output=True)
+            self.info("UPDATE_KILL", 40, f"실행 중인 메인 앱({APP_EXE_NAME})을 종료합니다.")
+            subprocess.run(["taskkill", "/f", "/im", APP_EXE_NAME], capture_output=True)
             time.sleep(1)
 
     def execute_update_process(self, target_version: str, self_shutdown: bool) -> bool:
@@ -361,7 +361,7 @@ class CentralUpdaterService(win32serviceutil.ServiceFramework):
         success = False
         try:
             self.info("ROLLBACK_START", 20, f"버전 v{target_version}으로 롤백을 시작합니다.", target_version)
-            base_name = APP_NAME.replace(".exe", "").lower()
+            base_name = APP_EXE_NAME.replace(".exe", "").lower()
             target_zip = os.path.join(self.backup_dir, f"{base_name}_v{target_version}.zip")
             if not os.path.exists(target_zip) or not zipfile.is_zipfile(target_zip):
                 self.info("ROLLBACK_FAIL", 0, f"롤백 대상 백업 파일을 찾을 수 없습니다: {target_zip}", target_version)
@@ -401,15 +401,15 @@ class CentralUpdaterService(win32serviceutil.ServiceFramework):
             self.execute_rollback_process(versions[0], False)
 
     def backup_current_version(self, ver: str):
-        base_name = APP_NAME.replace(".exe", "").lower()
+        base_name = APP_EXE_NAME.replace(".exe", "").lower()
         backup_zip = os.path.join(self.backup_dir, f"{base_name}_v{ver}.zip")
         if not os.path.exists(backup_zip) and os.path.exists(self.main_exe_path):
             with zipfile.ZipFile(backup_zip, "w", zipfile.ZIP_DEFLATED) as zipf:
-                zipf.write(self.main_exe_path, arcname=APP_NAME)
+                zipf.write(self.main_exe_path, arcname=APP_EXE_NAME)
 
     def get_available_backup_versions(self) -> list[str]:
         versions_list = []
-        base_name = APP_NAME.replace(".exe", "").lower()
+        base_name = APP_EXE_NAME.replace(".exe", "").lower()
         prefix = f"{base_name}_v"
 
         if os.path.exists(self.backup_dir):
@@ -423,7 +423,7 @@ class CentralUpdaterService(win32serviceutil.ServiceFramework):
     def is_main_app_running(self) -> bool:
         try:
             for proc in psutil.process_iter(["name"]):
-                if proc.info["name"] and proc.info["name"].lower() == APP_NAME.lower():
+                if proc.info["name"] and proc.info["name"].lower() == APP_EXE_NAME.lower():
                     return True
             return False
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
@@ -439,7 +439,7 @@ class CentralUpdaterService(win32serviceutil.ServiceFramework):
         self.protocol_handler.notify_app_launched()
 
         try:
-            subprocess.run(["taskkill", "/f", "/im", APP_NAME], capture_output=True)
+            subprocess.run(["taskkill", "/f", "/im", APP_EXE_NAME], capture_output=True)
             time.sleep(0.5)
 
             active_session_id = win32ts.WTSGetActiveConsoleSessionId()

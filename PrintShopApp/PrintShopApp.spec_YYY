@@ -17,7 +17,7 @@ for file_path in ui_py_files:
     auto_hidden_imports.append(mod_path)
 
 a = Analysis(
-    ['src/main_app.py'],
+    ['main_app.py'],
     pathex=['.', 'src'],
     binaries=[('C:/Espressif/tools/python/python311.dll', '.'), ('C:/Espressif/tools/python/vcruntime140.dll', '.'), ('C:/Espressif/tools/python/vcruntime140_1.dll', '.')],
     datas=[('src/LinkBox/templates', 'LinkBox/templates'), ('src/LinkShare/web/templates', 'LinkShare/web/templates'), ('.env.feature.runtime', '.'), ('src/LinkBox/ui', 'LinkBox/ui')],

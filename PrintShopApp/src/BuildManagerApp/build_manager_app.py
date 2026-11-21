@@ -8,12 +8,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QFont, QFontMetrics, QResizeEvent
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -42,95 +41,12 @@ set_file_tag("BUILD_MGR")
 
 from build_script.build import BuildApp, PrintShopBuildStepTimer, parse_targets  # noqa: E402
 from build_script.build_targets import BuildTargets, DEFAULT_CONFIG_FILENAME  # noqa: E402
-from build_script.target_config_io import InstallerBuildConfig  # noqa: E402
+from build_script.target_config_io import InstallerBuildConfig, write_build_config_json  # noqa: E402
 from build_target_config_tab import BuildTargetConfigTab  # noqa: E402
 from BuildManagerApp.settings_window import SettingsWindow  # noqa: E402
 from Common.prio_worker_queue import CancelToken, TaskListenerBase, TaskManager, TaskPriority  # noqa: E402
 
 MANAGER_STATE_FILENAME: str = "build_manager_state.json"
-
-
-class SingleLineFitCheckBox(QCheckBox):
-    """한 줄에 모두 표시하되 가용 폭을 넘으면 글꼴 크기를 자동으로 축소하는 체크박스."""
-
-    def __init__(
-        self,
-        text: str = "",
-        base_pt: float = 10.0,
-        min_pt: float = 7.5,
-        indicator_reserve_px: int = 22,
-        h_pad: int = 8,
-        parent: QWidget | None = None,
-    ) -> None:
-        super().__init__(parent)
-        self._full_text = text
-        self._base_pt = base_pt
-        self._min_pt = min_pt
-        self._indicator_reserve_px = indicator_reserve_px
-        self._h_pad = h_pad
-        self.setMinimumWidth(0)
-        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
-        self.setText(text)
-
-    def fullText(self) -> str:
-        return self._full_text
-
-    def setText(self, text: str) -> None:  # type: ignore[override]
-        self._full_text = text or ""
-        super().setToolTip(self._full_text)
-        self._refit_font()
-        self.updateGeometry()
-
-    def resizeEvent(self, event: QResizeEvent) -> None:
-        super().resizeEvent(event)
-        self._refit_font()
-
-    def _calc_fitted_font_and_width(self, available_width: int) -> tuple[Any, int]:
-        font = self.font()
-        clean_text = self._full_text or ""
-        if not clean_text:
-            font.setPointSizeF(self._base_pt)
-            return font, self._indicator_reserve_px + self._h_pad
-
-        text_budget = max(12, available_width - self._indicator_reserve_px - self._h_pad)
-        chosen_pt = self._min_pt
-        pt = self._base_pt
-        while pt >= self._min_pt:
-            font.setPointSizeF(pt)
-            fm = QFontMetrics(font)
-            if fm.horizontalAdvance(clean_text) <= text_budget:
-                chosen_pt = pt
-                break
-            pt = round(pt - 0.5, 2)
-
-        font.setPointSizeF(chosen_pt)
-        fm = QFontMetrics(font)
-        desired_w = fm.horizontalAdvance(clean_text) + self._indicator_reserve_px + self._h_pad
-        return font, desired_w
-
-    def _refit_font(self) -> None:
-        avail = self.width() if self.width() > 0 else self.maximumWidth()
-        if avail <= 0:
-            avail = 10_000
-        font, _ = self._calc_fitted_font_and_width(avail)
-        self.setFont(font)
-        super().setText(self._full_text)
-
-    def sizeHint(self) -> QSize:
-        hint = super().sizeHint()
-        _, desired_w = self._calc_fitted_font_and_width(10_000)
-        hint.setWidth(desired_w)
-        return hint
-
-    def minimumSizeHint(self) -> QSize:
-        hint = super().minimumSizeHint()
-        font = self.font()
-        font.setPointSizeF(self._min_pt)
-        fm = QFontMetrics(font)
-        min_text_w = fm.horizontalAdvance(self._full_text or "")
-        hint.setWidth(min_text_w + self._indicator_reserve_px + self._h_pad)
-        return hint
-
 
 BUILD_APP_ACCEPTED_KEYS: set[str] = {
     "project_root",
@@ -352,7 +268,7 @@ class BuildManagerWindow(QMainWindow):
             else (self.project_root / MANAGER_STATE_FILENAME)
         )
 
-        self._target_checks: dict[str, SingleLineFitCheckBox] = {}
+        self._target_checks: dict[str, QCheckBox] = {}
         self._dir_overrides: dict[str, Any] = {}
         self._app_overrides: dict[str, dict[str, Any]] = {}
         self._installer_overrides: dict[str, Any] = {}
@@ -368,7 +284,7 @@ class BuildManagerWindow(QMainWindow):
         self.destroyed.connect(self._on_destroyed_cleanup)
 
         self.setWindowTitle(f"PrintShop Build Manager - {self.project_root.name}")
-        self.resize(920, 720)
+        self.resize(1120, 740)
 
         self._init_ui()
         self._setup_logging()
@@ -438,62 +354,111 @@ class BuildManagerWindow(QMainWindow):
         top_bar.addWidget(self.btn_open_settings)
         layout.addLayout(top_bar)
 
-        targets_group = QGroupBox("빌드 대상 선택")
-        targets_hbox = QHBoxLayout(targets_group)
-        targets_hbox.setContentsMargins(8, 6, 8, 6)
-        targets_hbox.setSpacing(6)
+        # 빌드 대상 선택 그룹박스
+        self.targets_group = QGroupBox("빌드 대상 선택")
+        targets_group_layout = QHBoxLayout(self.targets_group)
+        targets_group_layout.setContentsMargins(10, 8, 10, 8)
+        targets_group_layout.setSpacing(12)
 
-        self.chk_all_targets = SingleLineFitCheckBox("All", base_pt=10.0, min_pt=7.5)
+        self.chk_all_targets = QCheckBox("All")
+        self.chk_all_targets.setToolTip("전체 빌드 대상 선택 / 해제")
         self.chk_all_targets.setTristate(True)
         self.chk_all_targets.clicked.connect(self._on_all_targets_clicked)
-        targets_hbox.addWidget(self.chk_all_targets, stretch=0)
+        targets_group_layout.addWidget(self.chk_all_targets, stretch=0)
 
         self.targets_row_layout = QHBoxLayout()
         self.targets_row_layout.setContentsMargins(0, 0, 0, 0)
-        self.targets_row_layout.setSpacing(6)
-        targets_hbox.addLayout(self.targets_row_layout, stretch=1)
+        self.targets_row_layout.setSpacing(12)
+        targets_group_layout.addLayout(self.targets_row_layout, stretch=1)
 
-        self.chk_installer_target = SingleLineFitCheckBox("인스톨러", base_pt=10.0, min_pt=7.5)
+        self.chk_installer_target = QCheckBox("인스톨러")
+        self.chk_installer_target.setToolTip("인스톨러 빌드 포함 여부")
         self.chk_installer_target.stateChanged.connect(self._on_installer_target_changed)
-        targets_hbox.addWidget(self.chk_installer_target, stretch=0)
+        targets_group_layout.addWidget(self.chk_installer_target, stretch=0)
 
-        layout.addWidget(targets_group)
+        layout.addWidget(self.targets_group)
 
-        opts_group = QGroupBox("빌드 옵션")
-        opts_layout = QGridLayout(opts_group)
+        # 빌드 옵션: 그룹 1, 그룹 2, 그룹 3 한 줄 배치
+        opts_row = QHBoxLayout()
+        opts_row.setContentsMargins(0, 0, 0, 0)
+        opts_row.setSpacing(8)
+
+        # 그룹 1: 배포 / 버전
+        group1 = QGroupBox("배포 / 버전")
+        g1_layout = QHBoxLayout(group1)
+        g1_layout.setContentsMargins(8, 6, 8, 6)
+        g1_layout.setSpacing(6)
 
         self.combo_mode = QComboBox()
         self.combo_mode.addItems(["production", "development"])
+        self.combo_mode.setToolTip("배포 모드 (production / development)")
+        self.combo_mode.currentIndexChanged.connect(self._on_main_mode_changed)
 
         self.combo_bump = QComboBox()
         self.combo_bump.addItem("변경 없음 (none)", userData=None)
         self.combo_bump.addItem("patch", userData="patch")
         self.combo_bump.addItem("minor", userData="minor")
         self.combo_bump.addItem("major", userData="major")
+        self.combo_bump.setToolTip("버전 증가 단위 (none / patch / minor / major)")
+        self.combo_bump.currentIndexChanged.connect(self._on_main_bump_changed)
 
-        self.chk_skip_installer = QCheckBox("인스톨러 건너뜀 (--skip-installer)")
+        g1_layout.addWidget(QLabel("배포 모드"))
+        g1_layout.addWidget(self.combo_mode)
+        g1_layout.addWidget(QLabel("버전 증가"))
+        g1_layout.addWidget(self.combo_bump)
+
+        # 그룹 2: 인스톨러 옵션
+        group2 = QGroupBox("인스톨러 옵션")
+        g2_layout = QHBoxLayout(group2)
+        g2_layout.setContentsMargins(8, 6, 8, 6)
+        g2_layout.setSpacing(10)
+
+        self.chk_skip_installer = QCheckBox("skip")
+        self.chk_skip_installer.setToolTip("인스톨러 건너뜀 (--skip-installer)")
         self.chk_skip_installer.stateChanged.connect(self._on_skip_installer_changed)
-        self.chk_installer_only = QCheckBox("인스톨러만 생성 (--installer-only)")
-        self.chk_clean_build = QCheckBox("전체 빌드 폴더 정리 (--clean)")
-        self.chk_clean_work = QCheckBox("work 폴더 정리 (--clean-work)")
-        self.chk_clean_dist = QCheckBox("dist 폴더 정리 (--clean-dist)")
-        self.chk_clean_spec = QCheckBox(".spec 파일 정리 (--clean-spec)")
 
-        opts_layout.addWidget(QLabel("배포 모드"), 0, 0)
-        opts_layout.addWidget(self.combo_mode, 0, 1)
-        opts_layout.addWidget(QLabel("버전 증가"), 0, 2)
-        opts_layout.addWidget(self.combo_bump, 0, 3)
+        self.chk_installer_only = QCheckBox("create")
+        self.chk_installer_only.setToolTip("인스톨러만 생성 (--installer-only)")
 
-        opts_layout.addWidget(self.chk_skip_installer, 1, 0, 1, 2)
-        opts_layout.addWidget(self.chk_installer_only, 1, 2, 1, 2)
-        opts_layout.addWidget(self.chk_clean_build, 2, 0)
-        opts_layout.addWidget(self.chk_clean_work, 2, 1)
-        opts_layout.addWidget(self.chk_clean_dist, 2, 2)
-        opts_layout.addWidget(self.chk_clean_spec, 2, 3)
+        g2_layout.addWidget(self.chk_skip_installer)
+        g2_layout.addWidget(self.chk_installer_only)
 
-        layout.addWidget(opts_group)
+        # 그룹 3: 정리 옵션
+        group3 = QGroupBox("정리 옵션")
+        g3_layout = QHBoxLayout(group3)
+        g3_layout.setContentsMargins(8, 6, 8, 6)
+        g3_layout.setSpacing(10)
 
-        run_row = QHBoxLayout()
+        self.chk_clean_build = QCheckBox("all")
+        self.chk_clean_build.setToolTip("전체 빌드 폴더 정리 (--clean)")
+
+        self.chk_clean_work = QCheckBox("work")
+        self.chk_clean_work.setToolTip("work 폴더 정리 (--clean-work)")
+
+        self.chk_clean_dist = QCheckBox("dist")
+        self.chk_clean_dist.setToolTip("dist 폴더 정리 (--clean-dist)")
+
+        self.chk_clean_spec = QCheckBox("spec")
+        self.chk_clean_spec.setToolTip(".spec 파일 정리 (--clean-spec)")
+
+        self._bind_clean_option_signals()
+
+        g3_layout.addWidget(self.chk_clean_build)
+        g3_layout.addWidget(self.chk_clean_work)
+        g3_layout.addWidget(self.chk_clean_dist)
+        g3_layout.addWidget(self.chk_clean_spec)
+
+        opts_row.addWidget(group1, stretch=0)
+        opts_row.addWidget(group2, stretch=0)
+        opts_row.addWidget(group3, stretch=1)
+        layout.addLayout(opts_row)
+
+        # 빌드 실행 및 진행 상태 그룹박스
+        progress_group = QGroupBox("빌드 실행 및 진행 상태")
+        run_row = QHBoxLayout(progress_group)
+        run_row.setContentsMargins(8, 6, 8, 6)
+        run_row.setSpacing(8)
+
         self.btn_start_build = QPushButton("빌드 실행")
         self.btn_start_build.clicked.connect(self._on_start_build)
 
@@ -505,16 +470,28 @@ class BuildManagerWindow(QMainWindow):
         self.btn_clear_log.clicked.connect(self._on_clear_log)
 
         self.lbl_progress_detail = QLabel("대기 중")
+        self.lbl_progress_detail.setMinimumWidth(110)
+        self.lbl_progress_detail.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.progress_bar.setMinimumWidth(280)
+        self.progress_bar.setMinimumHeight(24)
+        self.progress_bar.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
 
         run_row.addWidget(self.btn_start_build)
         run_row.addWidget(self.btn_cancel_build)
         run_row.addWidget(self.btn_clear_log)
         run_row.addWidget(self.lbl_progress_detail, stretch=1)
-        run_row.addWidget(self.progress_bar)
-        layout.addLayout(run_row)
+        run_row.addWidget(self.progress_bar, stretch=2)
+        layout.addWidget(progress_group)
 
         log_group = QGroupBox("빌드 로그")
         log_vbox = QVBoxLayout(log_group)
@@ -706,38 +683,6 @@ class BuildManagerWindow(QMainWindow):
         ver = self._resolve_target_version(key, spec)
         return f"{key}({ver})" if ver else key
 
-    def _layout_single_line_targets(self) -> None:
-        """한 줄 폭 안에 All, 대상 체크박스들, 인스톨러가 모두 들어가도록 폭과 글꼴을 배분합니다."""
-        if not hasattr(self, "targets_row_layout"):
-            return
-
-        container = self.targets_row_layout.parentWidget()
-        total_w = container.width() if container and container.width() > 0 else self.width() - 40
-        if total_w <= 0:
-            return
-
-        all_w = self.chk_all_targets.sizeHint().width()
-        inst_w = self.chk_installer_target.sizeHint().width()
-        fixed_gaps = self.targets_row_layout.spacing() * 2 + 12
-        avail_for_targets = max(60, total_w - all_w - inst_w - fixed_gaps)
-
-        target_list = list(self._target_checks.values())
-        count = len(target_list)
-        if count == 0:
-            return
-
-        inner_spacing = self.targets_row_layout.spacing() * max(0, count - 1)
-        per_slot = max(24, (avail_for_targets - inner_spacing) // count)
-
-        for chk in target_list:
-            chk.setMaximumWidth(per_slot)
-            chk.setMinimumWidth(0)
-            chk._refit_font()
-
-    def resizeEvent(self, event: QResizeEvent) -> None:
-        super().resizeEvent(event)
-        self._layout_single_line_targets()
-
     def _on_all_targets_clicked(self) -> None:
         if self.chk_all_targets.checkState() == Qt.CheckState.PartiallyChecked:
             self.chk_all_targets.blockSignals(True)
@@ -802,14 +747,15 @@ class BuildManagerWindow(QMainWindow):
         for key in keys:
             spec = BuildTargets.get_spec(key)
             label = self._format_target_label(key, spec)
-            chk = SingleLineFitCheckBox(label, base_pt=10.0, min_pt=7.5)
+            chk = QCheckBox(label)
+            chk.setToolTip(label)
             if has_previous:
                 chk.setChecked(key in previously_checked or not previously_checked)
             else:
                 chk.setChecked(True)
             chk.stateChanged.connect(lambda _state: self._sync_all_target_checkbox_state())
             self._target_checks[key] = chk
-            self.targets_row_layout.addWidget(chk, stretch=1)
+            self.targets_row_layout.addWidget(chk)
 
         if hasattr(self, "chk_installer_target"):
             self.chk_installer_target.blockSignals(True)
@@ -817,7 +763,6 @@ class BuildManagerWindow(QMainWindow):
             self.chk_installer_target.blockSignals(False)
 
         self._sync_all_target_checkbox_state()
-        self._layout_single_line_targets()
 
     def _set_all_targets_checked(self, checked: bool) -> None:
         for chk in self._target_checks.values():
@@ -886,12 +831,16 @@ class BuildManagerWindow(QMainWindow):
         if isinstance(mode, str):
             idx = self.combo_mode.findText(mode)
             if idx >= 0:
+                self.combo_mode.blockSignals(True)
                 self.combo_mode.setCurrentIndex(idx)
+                self.combo_mode.blockSignals(False)
 
         bump = state.get("bump_unit")
         bump_idx = self.combo_bump.findData(bump)
         if bump_idx >= 0:
+            self.combo_bump.blockSignals(True)
             self.combo_bump.setCurrentIndex(bump_idx)
+            self.combo_bump.blockSignals(False)
 
         skip_inst = bool(state.get("skip_installer", False))
         self.chk_skip_installer.blockSignals(True)
@@ -904,13 +853,23 @@ class BuildManagerWindow(QMainWindow):
             self.chk_installer_target.blockSignals(False)
 
         self.chk_installer_only.setChecked(bool(state.get("installer_only", False)))
+
+        clean_boxes = (
+            self.chk_clean_build,
+            self.chk_clean_work,
+            self.chk_clean_dist,
+            self.chk_clean_spec,
+        )
+        for box in clean_boxes:
+            box.blockSignals(True)
         self.chk_clean_build.setChecked(bool(state.get("clean_build", False)))
         self.chk_clean_work.setChecked(bool(state.get("clean_work_out", False)))
         self.chk_clean_dist.setChecked(bool(state.get("clean_dist_out", False)))
         self.chk_clean_spec.setChecked(bool(state.get("clean_spec", False)))
+        for box in clean_boxes:
+            box.blockSignals(False)
 
         self._sync_all_target_checkbox_state()
-        self._layout_single_line_targets()
 
     def _load_saved_state(self) -> None:
         state = load_manager_ui_state(self.state_path)
@@ -931,6 +890,87 @@ class BuildManagerWindow(QMainWindow):
     def _save_all_state(self) -> None:
         save_manager_ui_state(self.state_path, self._collect_ui_state())
 
+    def _get_checked_app_keys(self) -> list[str]:
+        return [key for key, chk in self._target_checks.items() if chk.isChecked()]
+
+    def _bind_clean_option_signals(self) -> None:
+        self.chk_clean_build.stateChanged.connect(self._on_main_clean_options_changed)
+        self.chk_clean_work.stateChanged.connect(self._on_main_clean_options_changed)
+        self.chk_clean_dist.stateChanged.connect(self._on_main_clean_options_changed)
+        self.chk_clean_spec.stateChanged.connect(self._on_main_clean_options_changed)
+
+    def _save_build_config_json_now(self) -> None:
+        """현재 dir_overrides 및 app_overrides를 self.config_path(build_dirs.json)에 즉시 저장."""
+        dcfg = BuildTargets.get_dir_config(self.project_root)
+        json_arg = str(self.config_path) if self.config_path.is_file() else None
+        inst_cfg = InstallerBuildConfig.resolve(
+            project_root=self.project_root,
+            json_path=json_arg,
+            code_overrides=self._installer_overrides or None,
+        )
+        if hasattr(BuildTargets, "save_config_json"):
+            try:
+                BuildTargets.save_config_json(
+                    self.config_path,
+                    dir_config=dcfg,
+                    app_overrides=self._app_overrides,
+                    installer_config=inst_cfg,
+                )
+                return
+            except TypeError:
+                pass
+
+        write_build_config_json(
+            self.config_path,
+            dir_config=dcfg,
+            app_overrides=self._app_overrides,
+            installer_config=inst_cfg,
+        )
+
+    def _on_main_clean_options_changed(self, _state: int) -> None:
+        """메인 앱의 정리 옵션 변경 시, 현재 선택된 개별 앱들의 설정을 갱신하고 build_dirs.json에 즉시 저장."""
+        selected_apps = self._get_checked_app_keys()
+        if not selected_apps:
+            return
+
+        clean_all = bool(self.chk_clean_build.isChecked())
+        clean_patch = {
+            "clean_work": clean_all or bool(self.chk_clean_work.isChecked()),
+            "clean_dist": clean_all or bool(self.chk_clean_dist.isChecked()),
+            "clean_spec": clean_all or bool(self.chk_clean_spec.isChecked()),
+        }
+
+        for key in selected_apps:
+            bucket = dict(self._app_overrides.get(key, {}))
+            bucket.update(clean_patch)
+            self._app_overrides[key] = bucket
+
+        BuildTargets.configure(
+            project_root=self.project_root,
+            code_overrides=self._dir_overrides or None,
+            app_overrides=self._app_overrides,
+        )
+
+        if self._build_target_window is not None and hasattr(
+            self._build_target_window, "apply_clean_options_to_targets"
+        ):
+            self._build_target_window.set_paths(self.project_root, self.config_path)
+            self._build_target_window.apply_clean_options_to_targets(
+                selected_apps,
+                clean_patch,
+                persist_json=True,
+                emit_signal=True,
+            )
+        else:
+            self._save_build_config_json_now()
+
+    def _resolve_app_clean_flag(self, target_key: str, field_name: str, fallback: bool) -> bool:
+        """개별 앱 설정을 최우선으로 읽고, 없을 때만 메인 앱 체크박스(fallback)를 사용."""
+        ov = self._app_overrides.get(target_key, {}) if isinstance(self._app_overrides, dict) else {}
+        if field_name in ov and isinstance(ov[field_name], bool):
+            return bool(ov[field_name])
+        return bool(fallback)
+
     def _resolve_app_bump_unit(self, target_key: str, default_bump: str | None) -> str | None:
         """개별 앱 설정(_app_overrides[target_key]['bump_unit'])에서 버전 증가 단위를 읽습니다."""
         ov = self._app_overrides.get(target_key, {}) if isinstance(self._app_overrides, dict) else {}
@@ -941,6 +981,55 @@ class BuildManagerWindow(QMainWindow):
             if s in ("patch", "minor", "major"):
                 return s
         return default_bump
+
+    def _resolve_app_mode(self, target_key: str, default_mode: str) -> str:
+        """개별 앱 설정(_app_overrides[target_key]['mode'])에서 배포 모드를 읽습니다."""
+        ov = self._app_overrides.get(target_key, {}) if isinstance(self._app_overrides, dict) else {}
+        raw_mode = ov.get("mode")
+        if isinstance(raw_mode, str) and raw_mode.strip():
+            return raw_mode.strip()
+        return default_mode
+
+    def _apply_patch_to_selected_apps(self, patch: dict[str, Any]) -> None:
+        selected_apps = self._get_checked_app_keys()
+        if not selected_apps or not patch:
+            return
+
+        for key in selected_apps:
+            bucket = dict(self._app_overrides.get(key, {}))
+            for k, v in patch.items():
+                if v is None:
+                    bucket.pop(k, None)
+                else:
+                    bucket[k] = v
+            self._app_overrides[key] = bucket
+
+        BuildTargets.configure(
+            project_root=self.project_root,
+            code_overrides=self._dir_overrides or None,
+            app_overrides=self._app_overrides,
+        )
+
+        if self._build_target_window is not None and hasattr(
+            self._build_target_window, "apply_app_fields_to_targets"
+        ):
+            self._build_target_window.set_paths(self.project_root, self.config_path)
+            self._build_target_window.apply_app_fields_to_targets(
+                selected_apps,
+                patch,
+                persist_json=True,
+                emit_signal=True,
+            )
+        else:
+            self._save_build_config_json_now()
+
+    def _on_main_mode_changed(self, _index: int) -> None:
+        mode = self._get_selected_mode()
+        self._apply_patch_to_selected_apps({"mode": mode})
+
+    def _on_main_bump_changed(self, _index: int) -> None:
+        bump = self._get_selected_bump()
+        self._apply_patch_to_selected_apps({"bump_unit": bump})
 
     def _on_start_build(self) -> None:
         if self._active_build_keys:
@@ -1000,12 +1089,49 @@ class BuildManagerWindow(QMainWindow):
                 if is_clean_job:
                     job_targets: list[str] = []
                     job_bump: str | None = None
+                    job_mode = mode
                 elif is_installer_job:
                     job_targets = list(app_keys)
                     job_bump = None
+                    job_mode = mode
                 else:
                     job_targets = parsed_apps[job_key]
                     job_bump = self._resolve_app_bump_unit(job_key, fallback_bump)
+                    job_mode = self._resolve_app_mode(job_key, mode)
+
+                app_clean_work = (
+                    False
+                    if is_clean_job
+                    else (
+                        self._resolve_app_clean_flag(
+                            job_key, "clean_work", bool(self.chk_clean_work.isChecked())
+                        )
+                        if kind == "app"
+                        else bool(self.chk_clean_work.isChecked())
+                    )
+                )
+                app_clean_dist = (
+                    False
+                    if is_clean_job
+                    else (
+                        self._resolve_app_clean_flag(
+                            job_key, "clean_dist", bool(self.chk_clean_dist.isChecked())
+                        )
+                        if kind == "app"
+                        else bool(self.chk_clean_dist.isChecked())
+                    )
+                )
+                app_clean_spec = (
+                    False
+                    if is_clean_job
+                    else (
+                        self._resolve_app_clean_flag(
+                            job_key, "clean_spec", bool(self.chk_clean_spec.isChecked())
+                        )
+                        if kind == "app"
+                        else bool(self.chk_clean_spec.isChecked())
+                    )
+                )
 
                 build_kwargs: dict[str, Any] = {
                     "project_root": str(self.project_root),
@@ -1013,13 +1139,13 @@ class BuildManagerWindow(QMainWindow):
                     "target_app": job_key if kind == "app" else None,
                     "targets": job_targets,
                     "bump_unit": job_bump,
-                    "mode": mode,
+                    "mode": job_mode,
                     "skip_installer": True if is_clean_job else (not is_installer_job),
                     "installer_only": is_installer_job,
                     "clean_build": is_clean_job,
-                    "clean_work_out": False if is_clean_job else bool(self.chk_clean_work.isChecked()),
-                    "clean_dist_out": False if is_clean_job else bool(self.chk_clean_dist.isChecked()),
-                    "clean_spec": False if is_clean_job else bool(self.chk_clean_spec.isChecked()),
+                    "clean_work_out": app_clean_work,
+                    "clean_dist_out": app_clean_dist,
+                    "clean_spec": app_clean_spec,
                     "progress_callback": None,
                     "timer": None,
                     "dir_config_json": cfg_file_str,
@@ -1030,12 +1156,12 @@ class BuildManagerWindow(QMainWindow):
                 }
 
                 task_key = f"BUILD_MGR_{base_ts}_{idx}_{job_key}"
-                task_name = f"Build({mode}:{job_key})"
+                task_name = f"Build({job_mode}:{job_key})"
 
                 logd(
                     f"[BuildManager] 작업 제출 (task_key={task_key}, job_type={kind}, "
                     f"target_app={build_kwargs['target_app']}, targets={job_targets}, "
-                    f"bump_unit={job_bump})"
+                    f"bump_unit={job_bump}, mode={job_mode})"
                 )
                 TaskManager().submit(
                     self._build_listener,
