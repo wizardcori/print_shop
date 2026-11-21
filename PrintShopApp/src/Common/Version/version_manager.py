@@ -2,6 +2,13 @@ import os
 import re
 import argparse
 
+import sys
+from pathlib import Path
+
+_SRC_DIR = Path(__file__).resolve().parents[2]  # .../src
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
+    
 try:
     from .exe_version_crypto import generate_win_version_info
 except ImportError:
@@ -97,12 +104,10 @@ class VersionManager:
         with open(self.py_path, "w", encoding="utf-8") as f:
             f.write(new_content)
 
-        # [신규 연동] 메인 앱의 경우 Windows 리소스 버전 파일(version_info.txt)도 함께 갱신
-        if self.app_name == "PrintShopApp":
-            try:
-                generate_win_version_info(ver, self.rc_path, self.app_name)
-            except Exception:
-                pass
+        try:
+            generate_win_version_info(ver, self.rc_path, self.app_name)
+        except Exception:
+            loge(f"error")
 
     def set_base_dir(self, base_dir: str):
         self.base_dir = base_dir

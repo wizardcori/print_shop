@@ -1,3 +1,3 @@
 # version.py
-VERSION = "1.2.69"
+VERSION = "1.2.75"
 NAME = "PrintShopUpdateService"

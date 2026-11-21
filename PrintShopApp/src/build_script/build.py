@@ -1,555 +1,868 @@
 """
-PrintShopApp Unified Build & Distribution Packaging Script (Object-Oriented with Result Tracking)
-===========================================================================================
-전체 빌드 파이프라인 단계별 요약:
-  [Step 1] UI 컴파일           : 프로젝트 내 모든 .ui 파일을 PySide6 파이썬 코드(ui_*.py)로 변환
-  [Step 2] 환경 검증 및 설정   : 가상환경(.venv) 확인, .env 파싱 및 빌드 설정 파일(build_config_gen.py) 생성
-  [Step 3] 버전 및 리소스 동기화: version.txt/version.py 갱신(--bump 지원) 및 Windows 리소스(version_info.txt) 생성
-  [Step 4-1] 메인 앱 빌드      : PyInstaller(.spec)로 메인 앱(PrintShopApp) 빌드 실행
-  [Step 4-2] 서브 앱 빌드      : UpdateService 서브 빌드 실행 (venv_python 전달)
-  [Step 4-3] 서브 앱 빌드      : UpdateManager 서브 빌드 실행 (venv_python 전달)
-  [Step 4-4] 서브 앱 빌드      : VersionViewer 서브 빌드 실행 (venv_python 전달)
-  [Step 5] EOF 버전 암호화/검증 : Fernet 암호화된 버전 정보를 PrintShopApp.exe 끝(EOF)에 삽입 및 Read-back 검증
-  [Step 6] 테스트 환경 동기화   : 기존 test/data를 보존하면서 최신 빌드 결과물만 test 폴더에 덮어쓰기
-  [Step 7] 업데이트 ZIP 생성    : GitHub Releases 배포용 update_v<버전>.zip 압축 패키지 생성
-  [Step 8] 설치 파일(Setup) 빌드: Inno Setup(ISCC.exe)을 이용해 최종 Windows 인스톨러(.exe) 생성
-
-사용 예시:
-  python build.py                  # 현재 버전으로 전체 빌드
-  python build.py --bump patch     # 패치 버전 1 증가(예: 1.2.0 -> 1.2.1) 후 빌드
-  python build.py --skip-installer # 인스톨러(.exe) 생성을 건너뛰고 포터블/ZIP까지만 빌드
+PrintShopApp 빌드 파이프라인 코어 모듈 (build.py)
+- BuildApp 파이프라인 실행, 단계 타이머, 공개키/암호화 모듈 리로드 및 대상 파싱 담당
 """
 
+from __future__ import annotations
+
+import importlib
 import os
-import sys
-import glob
 import shutil
-import zipfile
-import argparse
 import subprocess
+import sys
+import threading
+from pathlib import Path
+from typing import Any, Callable
 
-from Common.log import logd, loge
+from Common.log import set_file_tag
 
-# ==============================================================================
-# 0. 프로젝트 경로 초기화 및 내부 모듈 임포트
-# ==============================================================================
-build_script_dir = os.path.dirname(os.path.abspath(__file__))
-raw_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../")
-PROJECT_ROOT = os.path.normpath(raw_path)   # PrintShopApp
-SRC_DIR = os.path.join(PROJECT_ROOT, "src") # PrintShopApp/src
+set_file_tag("BUILD")
 
-if SRC_DIR not in sys.path:
-    sys.path.insert(0, SRC_DIR)
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
+CURRENT_DIR = Path(__file__).resolve().parent
+SRC_DIR = CURRENT_DIR.parent
+PROJECT_ROOT = SRC_DIR.parent
 
-from Common.Version.version_manager import VersionManager
-from src.Common.Version.exe_version_crypto import (
-    generate_win_version_info, 
-    encrypt_and_append_version, 
-    extract_version_from_exe
+for p in (str(PROJECT_ROOT), str(SRC_DIR), str(CURRENT_DIR)):
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+from artifact_signing import inject_and_verify_exe  # noqa: E402
+from build_targets import (  # noqa: E402
+    AppTargetSpec,
+    BuildDirConfig,
+    BuildTargets,
+    TARGET_SPECS,
+    TEST_DIR_NAME,
+    get_build_target_helpers,
+    get_target_spec,
 )
+from Common.log import logd, loge  # noqa: E402
+from Common.step_timer import BuildStepTimer  # noqa: E402
+from env_ui_helper import (  # noqa: E402
+    convert_ui_files,
+    resolve_built_exe_path,
+    resolve_python_executable,
+)
+from packaging_service import PackagingService  # noqa: E402
+from spec_builder import SpecAndPyInstallerBuilder  # noqa: E402
+from target_config_io import InstallerBuildConfig, normalize_bump_unit  # noqa: E402
+from version_service import VersionService  # noqa: E402
+
+try:
+    from Common.prio_worker_queue import CancelToken, kill_process_tree  # noqa: E402
+except Exception:
+    try:
+        from prio_worker_queue import CancelToken, kill_process_tree  # type: ignore  # noqa: E402
+    except Exception:
+        CancelToken = Any  # type: ignore
+
+        def kill_process_tree(proc: subprocess.Popen[Any]) -> None:  # type: ignore[misc]
+            if proc.poll() is None:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+
+
+class PrintShopBuildStepTimer(BuildStepTimer):
+    """PrintShopApp 빌드 파이프라인 단계를 등록하는 BuildStepTimer 하위 클래스."""
+
+    def __init__(self):
+        super().__init__()
+        self.register_steps(
+            [
+                ("step1_ui", 0.05),
+                ("step2_env", 0.04),
+                ("step3_pubkey", 0.03),
+                ("step4_version", 0.08),
+                ("step5_build", 0.47),
+                ("step6_eof_crypto", 0.10),
+                ("step7_test_sync", 0.05),
+                ("step8_release", 0.08),
+                ("step9_installer", 0.10),
+            ]
+        )
+
+
+def reload_pubkey_and_crypto_modules() -> dict[str, list[str]]:
+    """갱신된 exe_version_public_key 및 crypto 모듈을 안전하게 리로드합니다."""
+    pubkey_candidates = (
+        "Common.Version.exe_version_public_key",
+        "exe_version_public_key",
+    )
+    crypto_candidates = (
+        "Common.Version.exe_version_crypto",
+        "exe_version_crypto",
+    )
+
+    reloaded: dict[str, list[str]] = {"pubkey": [], "crypto": []}
+
+    for mod_name in pubkey_candidates:
+        mod = sys.modules.get(mod_name)
+        if mod is not None:
+            importlib.reload(mod)
+            reloaded["pubkey"].append(mod_name)
+
+    for mod_name in crypto_candidates:
+        mod = sys.modules.get(mod_name)
+        if mod is not None:
+            importlib.reload(mod)
+            reloaded["crypto"].append(mod_name)
+
+    return reloaded
+
+
+def parse_targets(raw_targets: list[str] | str | None) -> list[str]:
+    """번호('1'~'5') 또는 대상 이름('App', 'main_app' 등)을 정규화된 target 목록으로 변환."""
+    return BuildTargets.parse_targets(raw_targets)
 
 
 class BuildApp:
-    def __init__(self):
+    def __init__(
+        self,
+        project_root: str = str(PROJECT_ROOT),
+        targets: list[str] | None = None,
+        bump_unit: str | None = None,
+        bump_units: dict[str, str | None] | None = None,
+        mode: str = "production",
+        skip_installer: bool = False,
+        installer_only: bool = False,
+        installer_targets: list[str] | str | None = None,
+        clean_build: bool = False,
+        clean_work_out: bool = False,
+        clean_dist_out: bool = False,
+        clean_spec: bool = False,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
+        timer: BuildStepTimer | None = None,
+        dir_config_json: str | None = None,
+        app_config_json: str | None = None,
+        installer_config_json: str | None = None,
+        dir_overrides: dict[str, Any] | None = None,
+        cli_dir_overrides: dict[str, Any] | None = None,
+        app_overrides: dict[str, dict[str, Any]] | None = None,
+        cli_app_overrides: dict[str, dict[str, Any]] | None = None,
+        installer_overrides: dict[str, Any] | None = None,
+        cli_installer_overrides: dict[str, Any] | None = None,
+        cancel_event: threading.Event | None = None,
+        cancel_token: Any | None = None,
+    ):
+        self.project_root = os.path.abspath(project_root)
+        self.src_dir = os.path.join(self.project_root, "src")
+        self.cancel_token = cancel_token
+        self.cancel_event: threading.Event | None = (
+            getattr(cancel_token, "event", None) if cancel_token is not None else cancel_event
+        )
 
-        self.build_script_dir = build_script_dir
+        # 1. CLI -> 2. 환경변수 -> 3. JSON -> 4. 코드 우선순위로 디렉터리 및 앱별 설정 반영
+        self.dir_config: BuildDirConfig = BuildTargets.configure(
+            project_root=self.project_root,
+            json_path=dir_config_json,
+            app_config_json=app_config_json,
+            cli_overrides=cli_dir_overrides,
+            code_overrides=dir_overrides,
+            app_overrides=app_overrides,
+            cli_app_overrides=cli_app_overrides,
+        )
+        self.target_helpers: dict[str, Any] = get_build_target_helpers(self.project_root)
 
-        self.project_root = PROJECT_ROOT
-        
-        self.dist_dir = os.path.join(self.project_root, "dist")
-        
-        # 💡 가상환경 및 주요 실행 파일 경로를 클래스 속성으로 깔끔하게 정의
-        self.venv_dir = os.path.join(self.project_root, ".venv")
-        self.venv_python = os.path.join(self.venv_dir, "Scripts", "python.exe")
-        self.venv_pyinstaller = os.path.join(self.venv_dir, "Scripts", "pyinstaller.exe")
-        
-        # 단계별 성공/실패 및 결과를 기록할 딕셔너리 변수
-        self.results = {}
+        merged_cli_installer: dict[str, Any] = dict(cli_installer_overrides or {})
+        if installer_targets is not None and "targets" not in merged_cli_installer:
+            merged_cli_installer["targets"] = installer_targets
+        if installer_only and "installer_only" not in merged_cli_installer:
+            merged_cli_installer["installer_only"] = True
+        if skip_installer and "skip_installer" not in merged_cli_installer:
+            merged_cli_installer["skip_installer"] = True
 
-    def _record_result(self, step_name: str, status: str, message: str):
-        """단계별 결과를 기록합니다. (status: SUCCESS, FAILED, SKIPPED)"""
-        self.results[step_name] = {
-            "status": status,
-            "message": message
-        }
+        self.installer_config: InstallerBuildConfig = InstallerBuildConfig.resolve(
+            project_root=self.project_root,
+            json_path=dir_config_json,
+            installer_config_json=installer_config_json,
+            code_overrides=installer_overrides,
+            cli_overrides=merged_cli_installer,
+        )
 
-    def print_summary(self):
-        """마지막에 단계별 실행 결과를 요약 출력합니다."""
-        logd("\n" + "=" * 65)
-        logd("  📋 Build Pipeline Execution Summary")
-        logd("=" * 65)
-        for step, info in self.results.items():
-            if info["status"] == "SUCCESS":
-                icon = "✅"
-            elif info["status"] == "SKIPPED":
-                icon = "⏭️"
-            else:
-                icon = "❌"
-            logd(f"  {icon} [{step}] - {info['status']}")
-            logd(f"     └─ {info['message']}")
-        logd("=" * 65)
+        self.targets = targets or BuildTargets.ordered_keys()
+        self.bump_unit = normalize_bump_unit(bump_unit)
+        self.bump_units: dict[str, str | None] = self._init_bump_units(bump_units)
+        self.mode = mode or "production"
+        self.skip_installer = bool(self.installer_config.skip_installer or skip_installer)
+        self.installer_only = bool(self.installer_config.installer_only or installer_only)
+        self.clean_build = clean_build
+        self.clean_work_out = clean_work_out
+        self.clean_dist_out = clean_dist_out
+        self.clean_spec = clean_spec
+        self.progress_callback = progress_callback
+        self.timer: BuildStepTimer = timer or PrintShopBuildStepTimer()
+        self.results: list[dict] = []
+        self.public_key_status: dict[str, Any] = {}
 
-    def parse_env_file(self, filepath: str) -> dict:
-        """지정된 .env 설정 파일을 읽어 대문자 키-값 딕셔너리로 반환합니다."""
-        env_vars = {}
-        if not os.path.exists(filepath):
-            return env_vars
+        self.version_service = VersionService(
+            project_root=self.project_root,
+            target_helpers=self.target_helpers,
+        )
+        self.spec_builder = SpecAndPyInstallerBuilder(
+            project_root=self.project_root,
+            src_dir=self.src_dir,
+            dir_config=self.dir_config,
+            version_service=self.version_service,
+            clean_work_out=self.clean_work_out,
+            clean_dist_out=self.clean_dist_out,
+            clean_spec=self.clean_spec,
+            cancel_event=self.cancel_event,
+            cancel_token=self.cancel_token,
+        )
+        self.packaging_service = PackagingService(
+            project_root=self.project_root,
+            dir_config=self.dir_config,
+            version_service=self.version_service,
+            mode=self.mode,
+            cancel_event=self.cancel_event,
+            cancel_token=self.cancel_token,
+        )
 
-        with open(filepath, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, val = line.split("=", 1)
-                env_vars[key.strip().upper()] = val.strip().strip('"').strip("'")
-        return env_vars
+    def _init_bump_units(self, explicit_bump_units: dict[str, str | None] | None) -> dict[str, str | None]:
+        resolved: dict[str, str | None] = {}
+        app_overrides_map = BuildTargets.get_app_overrides()
+        for app_key, ov in app_overrides_map.items():
+            if isinstance(ov, dict) and "bump_unit" in ov:
+                resolved[app_key] = normalize_bump_unit(ov.get("bump_unit"))
+        if explicit_bump_units:
+            for app_key, unit in explicit_bump_units.items():
+                resolved[str(app_key)] = normalize_bump_unit(unit)
+        return resolved
 
-    def str_to_bool(self, val: str) -> bool:
-        """문자열 불리언 표현('true', '1', 'yes', 'on')을 실제 bool 타입으로 변환합니다."""
-        return str(val).strip().lower() in ("1", "true", "yes", "on")
+    def _resolve_target_bump_unit(self, target_key: str) -> str | None:
+        if target_key in self.bump_units:
+            return normalize_bump_unit(self.bump_units[target_key])
+        return self.bump_unit
 
-    def ensure_venv(self) -> str:
-        """가상환경(.venv) 존재 여부를 확인하고, 없으면 setup.bat을 실행해 구축합니다."""
-        if not os.path.exists(self.venv_python):
-            logd("  • 가상환경(.venv)이 감지되지 않았습니다. setup.bat을 실행합니다...")
-            setup_bat = os.path.join(self.project_root, "setup.bat")
-            if os.path.exists(setup_bat):
-                subprocess.run([setup_bat, "nopause"], check=True)
-            else:
-                raise FileNotFoundError(f"setup.bat 파일을 찾을 수 없습니다: {setup_bat}")
+    def _is_cancelled(self) -> bool:
+        if self.cancel_token is not None and getattr(self.cancel_token, "is_set", False):
+            return True
+        if self.cancel_event is not None and self.cancel_event.is_set():
+            return True
+        return False
 
-        if not os.path.exists(self.venv_python):
-            raise RuntimeError(f"가상환경 파이썬 경로를 찾을 수 없습니다: {self.venv_python}")
-        
-        return self.venv_python
+    def _check_cancelled(self, reason: str = "사용자에 의해 빌드가 취소되었습니다.") -> None:
+        if self._is_cancelled():
+            raise InterruptedError(reason)
 
-    def find_iscc(self) -> str | None:
-        """시스템에 설치된 Inno Setup 컴파일러(ISCC.exe) 경로를 탐색하거나 자동 설치합니다."""
-        iscc_path = shutil.which("iscc")
-        if iscc_path:
-            return iscc_path
+    def _emit_progress(self, payload: dict[str, Any]) -> None:
+        if self._is_cancelled():
+            return
+        if callable(self.progress_callback):
+            try:
+                self.progress_callback(payload)
+            except Exception:
+                pass
 
-        candidates = [
-            os.path.join(os.environ.get("ProgramFiles(x86)", ""), "Inno Setup 6", "ISCC.exe"),
-            os.path.join(os.environ.get("ProgramFiles", ""), "Inno Setup 6", "ISCC.exe"),
-            os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Inno Setup 6", "ISCC.exe"),
-        ]
-        for path in candidates:
-            if path and os.path.exists(path):
-                return path
+    def _begin_step(self, step_key: str, detail: str = "") -> float:
+        self._check_cancelled()
+        rec = self.timer.start_step(step_key)
+        payload = self.timer.build_progress_payload(
+            step_key=step_key,
+            phase="start",
+            detail=detail or step_key,
+            phase_ratio=0.15,
+            is_final=False,
+        )
+        self._emit_progress(payload)
+        return float(rec.get("start_ts") or 0.0)
 
-        logd("  • Inno Setup 컴파일러가 감지되지 않았습니다. winget을 통해 자동 설치를 시도합니다...")
-        if shutil.which("winget"):
-            res = subprocess.run(
-                [
-                    "winget", "install", "--id", "JRSoftware.InnoSetup",
-                    "--exact", "--silent", "--accept-source-agreements", "--accept-package-agreements"
-                ]
-            )
-            if res.returncode == 0:
-                for path in candidates:
-                    if path and os.path.exists(path):
-                        return path
-        return None
+    def _end_step(
+        self,
+        step_key: str,
+        detail: str = "",
+        is_final: bool = False,
+        force_percent: int | None = None,
+    ) -> float:
+        rec = self.timer.end_step(step_key)
+        payload = self.timer.build_progress_payload(
+            step_key=step_key,
+            phase="end",
+            detail=detail or f"{step_key} 완료",
+            phase_ratio=1.0,
+            is_final=is_final,
+            force_percent=force_percent,
+        )
+        self._emit_progress(payload)
+        return float(rec.get("elapsed") or 0.0)
 
-    # ==========================================================================
-    # 파이프라인 단계별 실행 메서드 영역 (Step 1 ~ Step 8)
-    # ==========================================================================
+    def _record_result(self, step: str, status: str, detail: str, step_key: str | None = None):
+        timing = self.timer.get_step_timing(step_key) if step_key else {}
+        self.results.append(
+            {
+                "step": step,
+                "status": status,
+                "detail": detail,
+                "start_time": timing.get("start_str", "-"),
+                "end_time": timing.get("end_str", "-"),
+                "elapsed": timing.get("elapsed", 0.0),
+            }
+        )
 
-    def step1_convert_ui_files(self):
-        """[Step 1] 프로젝트 내의 모든 .ui 파일을 검색하여 ui_*.py 파이썬 모듈로 컴파일합니다."""
-        step_name = "Step 1: UI Compile"
-        logd(f"\n[{step_name}] 디렉토리 내 .ui 파일 검색 및 Python UI 모듈 변환 시작...")
-        
+    def _run_cmd(
+        self,
+        cmd: list[str],
+        cwd: str | None = None,
+        check: bool = True,
+        timeout: int | None = 600,
+    ) -> subprocess.CompletedProcess:
+        self._check_cancelled("명령 실행 전 빌드가 취소되었습니다.")
+        work_dir = cwd or self.project_root
+        logd(f"  $ {' '.join(cmd)} (cwd={work_dir})")
+
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"
+
+        proc = subprocess.Popen(
+            cmd,
+            cwd=work_dir,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+        )
+
+        # 취소 요청 시 외부 프로세스 트리를 즉시 종료할 수 있도록 CancelToken 훅 등록
+        if self.cancel_token is not None and hasattr(self.cancel_token, "on_cancel"):
+            self.cancel_token.on_cancel(lambda p=proc: kill_process_tree(p))
+
+        captured_lines: list[str] = []
         try:
-            ui_files = glob.glob("**/*.ui", recursive=True)
-            if not ui_files:
-                msg = "변환할 .ui 파일이 없습니다."
-                logd(f"  ℹ️ {msg}")
-                self._record_result(step_name, "SUCCESS", msg)
-                return
+            assert proc.stdout is not None
+            for line in iter(proc.stdout.readline, ""):
+                if self._is_cancelled():
+                    kill_process_tree(proc)
+                    raise InterruptedError("외부 명령 실행 중 빌드가 취소되었습니다.")
+                stripped = line.rstrip("\r\n")
+                if stripped:
+                    captured_lines.append(stripped)
+                    logd(f"    {stripped}")
 
-            venv_bin_dir = os.path.dirname(sys.executable)
-            uic_executable = os.path.join(venv_bin_dir, "pyside6-uic.exe" if os.name == 'nt' else "pyside6-uic")
+            returncode = proc.wait(timeout=timeout)
+            if self._is_cancelled():
+                kill_process_tree(proc)
+                raise InterruptedError("외부 명령 종료 중 빌드가 취소되었습니다.")
+        except subprocess.TimeoutExpired:
+            kill_process_tree(proc)
+            proc.wait()
+            raise RuntimeError(f"명령 시간 초과({timeout}s): {' '.join(cmd)}")
+        finally:
+            if self.cancel_token is not None and hasattr(self.cancel_token, "clear_callbacks"):
+                self.cancel_token.clear_callbacks()
+            if proc.poll() is None:
+                kill_process_tree(proc)
+            if proc.stdout:
+                proc.stdout.close()
 
-            for ui_path in ui_files:
-                if any(excluded in ui_path for excluded in ("build", "dist", ".venv", "venv")):
-                    continue
-                    
-                dir_name = os.path.dirname(ui_path)
-                base_name = os.path.splitext(os.path.basename(ui_path))[0]
-                py_output_path = os.path.join(dir_name, f"ui_{base_name}.py")
-                
-                logd(f"  • 변환 중: {ui_path} ➔ {py_output_path}")
-                if os.path.exists(uic_executable):
-                    subprocess.run([uic_executable, ui_path, "-o", py_output_path], check=True)
-                else:
-                    subprocess.run([sys.executable, "-m", "PySide6.uic", ui_path, "-o", py_output_path], check=True)
-            
-            msg = f"총 {len(ui_files)}개 관련 파일 처리 완료"
-            logd(f"  ✅ {msg}")
-            self._record_result(step_name, "SUCCESS", msg)
+        joined_out = "\n".join(captured_lines)
+        if check and returncode != 0:
+            raise RuntimeError(f"명령 실패(exit={returncode}): {' '.join(cmd)}")
+
+        return subprocess.CompletedProcess(cmd, returncode, stdout=joined_out, stderr="")
+
+    def _iter_selected_specs(self) -> list[AppTargetSpec]:
+        """선택된 대상 순서대로 메인 앱과 서브 앱을 구분 없이 동일한 AppTargetSpec 목록으로 반환."""
+        spec_by_key = {spec.key: spec for spec in TARGET_SPECS}
+        ordered: list[AppTargetSpec] = []
+        for target_key in self.targets:
+            spec = spec_by_key.get(target_key) or get_target_spec(target_key)
+            if spec and spec not in ordered:
+                ordered.append(spec)
+        return ordered
+
+    def get_installer_specs_sorted(self) -> list[AppTargetSpec]:
+        """인스톨러 대상 목록을 ID(order) 오름차순으로 정렬하여 반환."""
+        raw_targets = self.installer_config.targets
+        if raw_targets is None:
+            keys = list(self.targets)
+        elif len(raw_targets) == 0:
+            return []
+        else:
+            keys = BuildTargets.parse_targets(raw_targets)
+
+        spec_by_key = {spec.key: spec for spec in TARGET_SPECS}
+        matched: list[AppTargetSpec] = []
+        seen_keys: set[str] = set()
+        for key in keys:
+            spec = spec_by_key.get(key) or get_target_spec(key)
+            if spec and spec.key not in seen_keys:
+                seen_keys.add(spec.key)
+                matched.append(spec)
+
+        return sorted(
+            matched,
+            key=lambda s: (int(s.order) if str(s.order).isdigit() else 999999, s.key),
+        )
+
+    def get_installer_combo_tag(self, specs: list[AppTargetSpec] | None = None) -> str:
+        """ID 낮은 순 정렬 기준 조합 식별자(예: 1_2_3_4_5, 1_2, 3_4_5, 1_5, 1, 1_3_5) 생성."""
+        ordered_specs = specs if specs is not None else self.get_installer_specs_sorted()
+        if not ordered_specs:
+            return "none"
+        return "_".join(str(spec.order) for spec in ordered_specs)
+
+    def get_installer_artifact_name(
+        self,
+        main_app_version: str,
+        specs: list[AppTargetSpec] | None = None,
+    ) -> str:
+        """조합 식별자 및 버전을 반영한 인스톨러 파일명(확장자 제외) 반환."""
+        ordered_specs = specs if specs is not None else self.get_installer_specs_sorted()
+        combo_tag = self.get_installer_combo_tag(ordered_specs)
+        base_name = self.installer_config.name or f"{BuildTargets.PREFIX}Setup"
+        if combo_tag == "1_2_3_4_5":
+            return f"{base_name}_v{main_app_version}"
+        return f"{base_name}_{combo_tag}_v{main_app_version}"
+
+    def _sync_single_target_to_test(self, spec: AppTargetSpec) -> Path | None:
+        """단일 앱 산출물을 <project_root>/test/<대상폴더>로 동기화."""
+        resolved_exe = resolve_built_exe_path(
+            project_root=self.project_root,
+            target_key=spec.key,
+            default_exe_name=spec.exe_name,
+        )
+        if not resolved_exe or not os.path.isfile(resolved_exe):
+            logd(f"  • [{spec.label}] test 동기화 대상 EXE 미존재 (건너뜀): {spec.exe_name}")
+            return None
+
+        test_app_dir = Path(BuildTargets.get_test_dir(spec.key, self.project_root, create=True))
+        BuildTargets.validate_app_artifact_layout(
+            self.project_root,
+            TEST_DIR_NAME,
+            spec.key,
+            test_app_dir,
+        )
+        dest_exe = test_app_dir / Path(resolved_exe).name
+        shutil.copy2(resolved_exe, dest_exe)
+        logd(f"  • [{spec.label}] test 동기화 완료: {dest_exe}")
+        return dest_exe
+
+    def step1_convert_ui_files(self, py_exe: str | None = None):
+        """[Step 1] Qt Designer .ui 파일을 .py로 변환."""
+        step_key = "step1_ui"
+        step_name = "Step 1: UI Conversion"
+        self._begin_step(step_key, detail="UI 변환 확인")
+        logd(f"[{step_name}] .ui 파일 변환 확인 중...")
+        try:
+            self._check_cancelled()
+            resolved_py = py_exe or resolve_python_executable(self.project_root)
+            converted, total_ui = convert_ui_files(
+                project_root=self.project_root,
+                src_dir=self.src_dir,
+                py_exe=resolved_py,
+                run_cmd_fn=self._run_cmd,
+            )
+            msg = f"UI check complete (converted={converted}, total_ui={total_ui})"
+            self._end_step(step_key, detail=msg)
+            self._record_result(step_name, "SUCCESS", msg, step_key=step_key)
         except Exception as e:
-            msg = f"오류 발생: {e}"
-            logd(f"  ❌ {msg}")
-            self._record_result(step_name, "FAILED", msg)
+            msg = f"실패: {e}"
+            self._end_step(step_key, detail=msg)
+            self._record_result(step_name, "FAILED", msg, step_key=step_key)
             raise
 
     def step2_setup_environment_and_config(self) -> tuple[str, str]:
-        """[Step 2] 가상환경을 검증하고 .env 설정을 파싱한 뒤 빌드 설정 스크립트를 실행합니다."""
-        step_name = "Step 2: Environment & Config"
-        logd(f"\n[{step_name}] 가상환경 검증 및 빌드 환경 설정 로드...")
+        """[Step 2] 빌드 환경, 앱별 디렉터리 및 모드 확인."""
+        step_key = "step2_env"
+        step_name = "Step 2: Environment & Mode"
+        self._begin_step(step_key, detail="환경 및 모드 설정")
+        logd(f"[{step_name}] 빌드 환경 및 모드 설정...")
         try:
-            venv_python = self.ensure_venv()
+            self._check_cancelled()
+            py_exe = resolve_python_executable(self.project_root)
+            os.environ["BUILD_MODE"] = self.mode
 
-            buildtime_env = self.parse_env_file(os.path.join(self.project_root, ".env.feature.buildtime"))
-            dot_env = self.parse_env_file(os.path.join(self.project_root, ".env"))
+            if self.clean_build:
+                removed = BuildTargets.clean_output_dirs(self.project_root, include_test=True)
+                for target_dir in removed:
+                    logd(f"  • 기존 디렉터리 정리: {target_dir}")
 
-            use_printer_watch = self.str_to_bool(buildtime_env.get("USE_PRINTER_WATCH", "false"))
-            use_build_time_test = self.str_to_bool(buildtime_env.get("USE_BUILD_TIME_TEST", "false"))
-            mode = "development" if dot_env.get("MODE", "production").lower() == "development" else "production"
-
-            logd(f"  • BUILD MODE           : {mode}")
-            logd(f"  • USE_PRINTER_WATCH    : {str(use_printer_watch).lower()}")
-            logd(f"  • USE_BUILD_TIME_TEST  : {str(use_build_time_test).lower()}")
-
-            subprocess.run([venv_python, os.path.join(self.build_script_dir, "build_config_gen.py")], check=True)
-            msg = f"Mode: {mode}, Venv verified"
-            self._record_result(step_name, "SUCCESS", msg)
-            return venv_python, mode
-        except Exception as e:
-            msg = f"실패: {e}"
-            self._record_result(step_name, "FAILED", msg)
-            raise
-
-    def step3_sync_version_and_resources(self, bump_unit: str | None) -> str:
-        """[Step 3] 버전을 증가 및 동기화하고 Windows 실행 파일 리소스(version_info.txt)를 생성합니다."""
-        step_name = "Step 3: Version & Resources"
-        logd(f"\n[{step_name}] 버전 동기화 및 Windows 리소스 파일 생성...")
-        try:
-            vm = VersionManager(base_dir=self.project_root, app_name="PrintShopApp")
-            
-            if bump_unit:
-                app_version = vm.bump_version(bump_unit)
-                logd(f"  • 버전 증가 완료 ({bump_unit}): v{app_version}")
-            else:
-                app_version = vm.get_current_version()
-                logd(f"  • 현재 버전 유지: v{app_version}")
-
-            rc_file = os.path.join(self.project_root, "version_info.txt")
-            generate_win_version_info(app_version, output_path=rc_file, app_name="PrintShopApp")
-            logd(f"  • 리소스 파일 생성 완료: {rc_file}")
-
-            msg = f"Version v{app_version} synchronized"
-            self._record_result(step_name, "SUCCESS", msg)
-            return app_version
-        except Exception as e:
-            msg = f"실패: {e}"
-            self._record_result(step_name, "FAILED", msg)
-            raise
-
-    def step4_1_build_main_app(self, venv_python: str):
-        """[Step 4-1] PyInstaller(.spec)를 이용해 메인 애플리케이션(PrintShopApp)을 빌드합니다."""
-        step_name = "Step 4-1: Build Main App"
-        logd(f"\n[{step_name}] 메인 애플리케이션(PrintShopApp) PyInstaller 패키지 빌드...")
-        try:
-            subprocess.run([self.venv_python, "-m", "pip", "install", "pyinstaller"], stdout=subprocess.DEVNULL, check=True)
-
-            spec_file = "PrintShopApp.spec"
-            if not os.path.exists(spec_file):
-                logd("  • PrintShopApp.spec 파일이 없어 자동 생성합니다...")
-                subprocess.run([
-                    self.venv_pyinstaller,
-                    "--onefile",
-                    "--noconsole",
-                    "--name", "PrintShopApp",
-                    os.path.join("src", "main_app.py")
-                ], check=True)
-
-            logd("  • 메인 애플리케이션(PrintShopApp.spec) 빌드 실행 중...")
-            target_dist_dir = os.path.join(self.dist_dir, "PrintShopApp")
-            target_work_dir = os.path.join(self.project_root, "build", "PrintShopApp")
-
-            pyinstaller_cmd = [
-                self.venv_pyinstaller,
-                "PrintShopApp.spec",
-                "--noconfirm",
-                "--distpath", target_dist_dir,
-                "--workpath", target_work_dir,                
-                "--log-level=DEBUG",
-            ]
-            subprocess.run(pyinstaller_cmd, check=True)
-
-            msg = "Main application built successfully"
-            self._record_result(step_name, "SUCCESS", msg)
-        except Exception as e:
-            msg = f"실패: {e}"
-            self._record_result(step_name, "FAILED", msg)
-            raise
-
-    def step4_2_build_sub_app(self, venv_python: str):
-        """[Step 4-2] UpdateServiceBuilder를 호출하여 venv_python을 사용해 서브 앱을 빌드합니다."""
-        step_name = "Step 4-2: Build Sub App (UpdateService)"
-        logd(f"\n[{step_name}] 서브 모듈(UpdateService) 빌드 실행 (Venv Python: {venv_python})...")
-        try:
-            from src.build_script.build_update_service import UpdateServiceBuilder
-
-            # venv_python을 전달하여 서브 빌더 초기화 (서브 빌더 클래스 생성자에 python_path 인자 추가 필요)
-            sub_builder = UpdateServiceBuilder(python_path=venv_python)
-            sub_result = sub_builder.run()
-
-            for sub_step_name, info in sub_result["steps"].items():
-                self._record_result(f"  └─ {sub_step_name}", info["status"], info["message"])
-
-            if not sub_result["success"]:
-                raise RuntimeError("UpdateService 서브 빌드 단계 중 실패가 발생했습니다.")
-
-            msg = f"Sub application v{sub_result['version']} built successfully"
-            self._record_result(step_name, "SUCCESS", msg)
-        except Exception as e:
-            msg = f"실패: {e}"
-            self._record_result(step_name, "FAILED", msg)
-            raise
-
-    def step4_3_build_sub_app(self, venv_python: str):
-        """[Step 4-3] UpdateManagerBuilder를 호출하여 venv_python을 사용해 서브 앱을 빌드합니다."""
-        step_name = "Step 4-3: Build Sub App (UpdateManager)"
-        logd(f"\n[{step_name}] 서브 모듈(UpdateManager) 빌드 실행 (Venv Python: {venv_python})...")
-        try:
-            from src.build_script.build_update_manager import UpdateManagerBuilder
-
-            sub_builder = UpdateManagerBuilder(python_path=venv_python)
-            sub_result = sub_builder.run()
-
-            for sub_step_name, info in sub_result["steps"].items():
-                self._record_result(f"  └─ {sub_step_name}", info["status"], info["message"])
-
-            if not sub_result["success"]:
-                raise RuntimeError("UpdateManager 서브 빌드 단계 중 실패가 발생했습니다.")
-
-            msg = f"Sub application v{sub_result['version']} built successfully"
-            self._record_result(step_name, "SUCCESS", msg)
-        except Exception as e:
-            msg = f"실패: {e}"
-            self._record_result(step_name, "FAILED", msg)
-            raise
-
-    def step4_4_build_sub_app(self, venv_python: str):
-        """[Step 4-4] VersionViewerBuilder를 호출하여 venv_python을 사용해 서브 앱을 빌드합니다."""
-        step_name = "Step 4-4: Build Sub App (VersionViewer)"
-        logd(f"\n[{step_name}] 서브 모듈(VersionViewer) 빌드 실행 (Venv Python: {venv_python})...")
-        try:
-            from src.build_script.build_version_viewer import VersionViewerBuilder
-
-            sub_builder = VersionViewerBuilder(python_path=venv_python)
-            sub_result = sub_builder.run()
-
-            for sub_step_name, info in sub_result["steps"].items():
-                self._record_result(f"  └─ {sub_step_name}", info["status"], info["message"])
-
-            if not sub_result["success"]:
-                raise RuntimeError("VersionViewer 서브 빌드 단계 중 실패가 발생했습니다.")
-
-            msg = f"Sub application v{sub_result['version']} built successfully"
-            self._record_result(step_name, "SUCCESS", msg)
-        except Exception as e:
-            msg = f"실패: {e}"
-            self._record_result(step_name, "FAILED", msg)
-            raise
-
-    def step5_inject_eof_encryption(self, app_version: str, mode: str):
-        """[Step 5] dist/PrintShopApp 폴더 내부의 실행 파일에 EOF 버전 암호화를 주입하고 검증합니다."""
-        step_name = "Step 5: EOF Encryption & Verify"
-        logd(f"\n[{step_name}] 실행 파일 EOF 버전 암호화 주입 및 검증...")
-        try:
-            app_folder = os.path.join(self.dist_dir, "PrintShopApp")
-            exe_path = os.path.join(app_folder, "PrintShopApp.exe")
-            expected_payload = f"v{app_version}-{mode}"
-
-            if not os.path.exists(exe_path):
-                raise FileNotFoundError(f"암호화 대상 실행 파일을 찾을 수 없습니다: {exe_path}")
-
-            encrypt_and_append_version(exe_path, expected_payload)
-            logd(f"  • EOF 암호화 페이로드 삽입 완료: {expected_payload}")
-
-            read_payload = extract_version_from_exe(exe_path)
-            if read_payload == expected_payload:
-                logd(f"  ✅ EOF 버전 검증 성공: 일치함 ({read_payload})")
-            else:
-                raise ValueError(f"예상값('{expected_payload}')과 읽어온 값('{read_payload}')이 일치하지 않습니다.")
-
-            msg = f"Encrypted & Verified ({expected_payload})"
-            self._record_result(step_name, "SUCCESS", msg)
-        except Exception as e:
-            msg = f"실패: {e}"
-            self._record_result(step_name, "FAILED", msg)
-            raise
-
-    def step6_sync_test_environment(self):
-        """[Step 6] 기존 test/data 폴더를 보존한 채 최신 빌드 결과물만 test 폴더에 덮어씁니다."""
-        step_name = "Step 6: Sync Test Environment"
-        logd(f"\n[{step_name}] 내부 테스트 환경('test') 동기화...")
-        try:
-            test_dir = os.path.join(self.project_root, "test")
-            os.makedirs(test_dir, exist_ok=True)
-            os.makedirs(os.path.join(test_dir, "data"), exist_ok=True)
-
-            for item in os.listdir(self.dist_dir):
-                if item.lower() == "data":
-                    continue
-
-                src_path = os.path.join(self.dist_dir, item)
-                dst_path = os.path.join(test_dir, item)
-
-                if os.path.isdir(src_path):
-                    shutil.copytree(src_path, dst_path, dirs_exist_ok=True)
-                else:
-                    shutil.copy2(src_path, dst_path)
-
-            msg = "Test directory synchronized (data preserved)"
-            logd(f"  ✅ '{test_dir}' 폴더 내 실행 파일 최신화 완료")
-            self._record_result(step_name, "SUCCESS", msg)
-        except Exception as e:
-            msg = f"실패: {e}"
-            self._record_result(step_name, "FAILED", msg)
-            raise
-
-    def step7_create_update_zip(self, app_version: str) -> str:
-        """[Step 7] GitHub Releases 업로드용 update_v<버전>.zip 압축 패키지를 생성합니다."""
-        step_name = "Step 7: Create Update ZIP"
-        logd(f"\n[{step_name}] GitHub Releases용 자동 업데이트 패키지(.zip) 생성...")
-        try:
-            releases_dir = os.path.join(self.project_root, "releases")
-            os.makedirs(releases_dir, exist_ok=True)
-            
-            zip_filename = f"update_v{app_version}.zip"
-            zip_output_path = os.path.join(releases_dir, zip_filename)
-
-            if os.path.exists(zip_output_path):
-                os.remove(zip_output_path)
-
-            with zipfile.ZipFile(zip_output_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-                for root, _, files in os.walk(self.dist_dir):
-                    for file in files:
-                        full_path = os.path.join(root, file)
-                        rel_path = os.path.relpath(full_path, self.dist_dir)
-                        zf.write(full_path, rel_path)
-
-            msg = f"Created {zip_filename}"
-            logd(f"  ✅ 업데이트 패키지 생성 완료: releases\\{zip_filename}")
-            self._record_result(step_name, "SUCCESS", msg)
-            return zip_output_path
-        except Exception as e:
-            msg = f"실패: {e}"
-            self._record_result(step_name, "FAILED", msg)
-            raise
-
-    def step8_create_windows_installer(self, mode: str, skip_installer: bool):
-        """[Step 8] Inno Setup(ISCC.exe)을 사용하여 최종 Windows 인스톨러(.exe)를 생성합니다."""
-        step_name = "Step 8: Windows Installer"
-        logd(f"\n[{step_name}] Inno Setup Windows 설치 프로그램(.exe) 컴파일...")
-        
-        if skip_installer:
-            msg = "Skipped by option (--skip-installer)"
-            logd(f"  ℹ️ {msg}")
-            self._record_result(step_name, "SKIPPED", msg)
-            return
-
-        try:
-            iscc_exe = self.find_iscc()
-            if not iscc_exe:
-                msg = "ISCC.exe not found. Installer generation skipped."
-                logd(f"  ⚠️ {msg}")
-                self._record_result(step_name, "SKIPPED", msg)
-                return
-
-            installer_dir = os.path.join(self.project_root, "installer")
-            os.makedirs(installer_dir, exist_ok=True)
-
-            setup_name = "PrintShopAppDev_Setup" if mode == "development" else "PrintShopApp_Setup"
-            setup_output = os.path.join(installer_dir, f"{setup_name}.exe")
-            if os.path.exists(setup_output):
-                os.remove(setup_output)
-
-            updater_version_file = os.path.join(self.project_root, "src", "UpdateService", "version.txt")
-            updater_version = "1.2.0"
-            if os.path.exists(updater_version_file):
-                with open(updater_version_file, "r", encoding="utf-8") as f:
-                    updater_version = f.read().strip()
-
-            include_iss_path = os.path.join(self.project_root, "version_include.iss")
-            with open(include_iss_path, "w", encoding="utf-8") as f:
-                f.write(f'#define UpdaterVersion "{updater_version}"\n')
-            logd(f"  • 버전 헤더 생성 완료: {include_iss_path} (Updater v{updater_version})")
-
-            iss_script = os.path.join(self.project_root, "installer.iss")
-            subprocess.run(
-                [
-                    iscc_exe,
-                    f"/DSourceDir={self.project_root}",
-                    f"/DOutputBaseFilename={setup_name}",
-                    iss_script
-                ],
-                check=True
+            BuildTargets.ensure_all_app_dirs(self.project_root, targets=self.targets)
+            msg = (
+                f"mode={self.mode}, python={py_exe}, "
+                f"dirs=(work={self.dir_config.work_dir_name}, dist={self.dir_config.dist_dir_name}, "
+                f"release={self.dir_config.release_dir_name}, "
+                f"install={self.dir_config.install_dir_name}, test={TEST_DIR_NAME})"
             )
-            msg = f"Created {setup_name}.exe"
-            logd(f"  ✅ 최종 설치 파일 생성 완료: installer\\{setup_name}.exe")
-            self._record_result(step_name, "SUCCESS", msg)
+            logd(f"  • {msg}")
+            self._end_step(step_key, detail=msg)
+            self._record_result(step_name, "SUCCESS", msg, step_key=step_key)
+            return py_exe, self.mode
         except Exception as e:
             msg = f"실패: {e}"
-            self._record_result(step_name, "FAILED", msg)
+            self._end_step(step_key, detail=msg)
+            self._record_result(step_name, "FAILED", msg, step_key=step_key)
             raise
 
-    def run(self, bump_unit: str | None, skip_installer: bool):
-        """전체 빌드 파이프라인 오케스트레이션을 실행하고 최종 결과를 요약합니다."""
-        logd("=" * 65)
-        logd("  🚀 Starting PrintShopApp Distribution Build Pipeline (BuildApp)")
-        logd("=" * 65)
+    def step3_prepare_public_key_module(self) -> dict[str, Any]:
+        """[Step 3] generate_public_key_module에 생성/로딩/샘플재검증을 위임하여 실행."""
+        step_key = "step3_pubkey"
+        step_name = "Step 3: Public Key Module"
+        self._begin_step(step_key, detail="공개키 모듈 생성 및 샘플 재검증")
+        logd(f"[{step_name}] 공개키 모듈 생성, 변수 로딩 및 샘플 재검증 시작...")
+
+        gen_script = os.path.join(self.project_root, "src", "Common", "Version", "generate_public_key_module.py")
+        if not os.path.isfile(gen_script):
+            gen_script = os.path.join(CURRENT_DIR, "generate_public_key_module.py")
 
         try:
-            self.step1_convert_ui_files()
-            venv_python, mode = self.step2_setup_environment_and_config()
-            app_version = self.step3_sync_version_and_resources(bump_unit)
-            
-            # 메인 앱 및 서브 앱 빌드 함수 호출 (venv_python 전달)
-            self.step4_1_build_main_app(venv_python)
-            self.step4_2_build_sub_app(venv_python)
-            self.step4_3_build_sub_app(venv_python)
-            self.step4_4_build_sub_app(venv_python)
-            
-            self.step5_inject_eof_encryption(app_version, mode)
-            self.step6_sync_test_environment()
-            self.step7_create_update_zip(app_version)
-            self.step8_create_windows_installer(mode, skip_installer)
+            self._check_cancelled()
+            if not os.path.isfile(gen_script):
+                raise FileNotFoundError(f"generate_public_key_module.py를 찾을 수 없습니다: {gen_script}")
 
-            logd("\n" + "=" * 65)
-            logd(f"  🎉 모든 빌드 및 패키징 파이프라인이 성공적으로 완료되었습니다! (v{app_version})")
-            logd("=" * 65)
+            gen_dir = str(Path(gen_script).resolve().parent)
+            if gen_dir not in sys.path:
+                sys.path.insert(0, gen_dir)
 
+            import generate_public_key_module as pub_gen_mod  # type: ignore
+
+            pub_gen_mod = importlib.reload(pub_gen_mod)
+            info = pub_gen_mod.generate_and_verify_public_key_module(
+                project_root=self.project_root,
+                reverify_attempts=2,
+            )
+            self.public_key_status = info
+
+            logd(
+                f"  • [step3] 생성={info['generated']} | 파일존재={info['file_exists']} | "
+                f"변수({info['var_name']})로딩={info['loaded_to_var']} | path={info['py_path']}"
+            )
+            for item in info.get("attempts", []):
+                logd(
+                    f"  • [step3] 샘플 재검증 #{item['attempt']}: "
+                    f"{'성공' if item['ok'] else '실패'} ({item['reason']})"
+                )
+
+            if info.get("error") or not info.get("sample_verified"):
+                raise RuntimeError(info.get("error") or info.get("last_reason") or "공개키 모듈 검증 실패")
+
+            self._check_cancelled()
+            reloaded_mods = reload_pubkey_and_crypto_modules()
+            logd(f"  • [step3] 모듈 리로드 완료: {reloaded_mods}")
+
+            msg = f"Public key module verified ({Path(info['py_path']).name})"
+            self._end_step(step_key, detail=msg)
+            self._record_result(step_name, "SUCCESS", msg, step_key=step_key)
+            return info
+
+        except Exception as exc:
+            loge(f"  ❌ [step3] 실패: {exc}")
+            msg = f"실패: {exc}"
+            self._end_step(step_key, detail=msg)
+            self._record_result(step_name, "FAILED", msg, step_key=step_key)
+            raise
+
+    def step4_sync_version_and_resources(self) -> tuple[dict[str, str], dict[str, str]]:
+        """[Step 4] 선택된 앱별 개별 version.txt 조회/증가 및 앱별 version_info.txt 생성."""
+        step_key = "step4_version"
+        step_name = "Step 4: Version & Resources"
+        self._begin_step(step_key, detail="앱별 버전 및 리소스 생성")
+        logd(f"[{step_name}] 앱별 개별 version.txt 확인/증가 및 리소스 생성...")
+        try:
+            self._check_cancelled()
+            per_target_units = {t: self._resolve_target_bump_unit(t) for t in self.targets}
+            distinct_units = {u for u in per_target_units.values() if u is not None}
+
+            if len(distinct_units) <= 1:
+                uniform_unit = next(iter(distinct_units)) if distinct_units else None
+                target_versions, previous_versions = self.version_service.sync_targets(
+                    targets=self.targets,
+                    bump_unit=uniform_unit,
+                )
+            else:
+                target_versions = {}
+                previous_versions = {}
+                for target_key in self.targets:
+                    self._check_cancelled(f"대상({target_key}) 버전 동기화 중 취소되었습니다.")
+                    t_ver, p_ver = self.version_service.sync_targets(
+                        targets=[target_key],
+                        bump_unit=per_target_units.get(target_key),
+                    )
+                    target_versions.update(t_ver)
+                    previous_versions.update(p_ver)
+
+            summary_str = ", ".join(
+                f"{k}=v{v}(bump={per_target_units.get(k) or 'none'})"
+                for k, v in target_versions.items()
+            )
+            msg = f"Per-app versions ready ({summary_str})"
+            self._end_step(step_key, detail=msg)
+            self._record_result(step_name, "SUCCESS", msg, step_key=step_key)
+            return target_versions, previous_versions
         except Exception as e:
-            logd(f"\n[FAILED] 빌드 프로세스 중 예외가 발생했습니다: {e}")
-            
-        finally:
-            self.print_summary()
+            msg = f"실패: {e}"
+            self._end_step(step_key, detail=msg)
+            self._record_result(step_name, "FAILED", msg, step_key=step_key)
+            raise
 
+    def step5_build_targets(self, py_exe: str, target_versions: dict[str, str]):
+        """[Step 5] 메인 앱 및 서브 앱 구분 없이 동일한 PyInstaller 빌드 실행."""
+        step_key = "step5_build"
+        step_name = "Step 5: Build Targets"
+        self._begin_step(step_key, detail="PyInstaller 빌드")
+        logd(f"[{step_name}] 대상 빌드 실행: {self.targets}")
+        try:
+            selected_specs = self._iter_selected_specs()
+            built: list[str] = []
+            total_targets = max(1, len(selected_specs))
 
-def main():
-    parser = argparse.ArgumentParser(description="PrintShopApp Unified Build and Distribution Packaging Script")
-    parser.add_argument(
-        "--bump", choices=["major", "minor", "patch"], default=None,
-        help="빌드 전 자동으로 증가시킬 버전 단위 (생략 시 현재 버전 유지)"
-    )
-    parser.add_argument(
-        "--skip-installer", action="store_true",
-        help="Inno Setup(.exe 인스톨러) 생성 단계를 건너뜁니다"
-    )
-    args = parser.parse_args()
+            for idx, spec_obj in enumerate(selected_specs):
+                self._check_cancelled(f"대상({spec_obj.label}) 빌드 전 취소되었습니다.")
+                sub_ratio = (idx + 0.2) / total_targets
+                self._emit_progress(
+                    self.timer.build_progress_payload(
+                        step_key=step_key,
+                        phase="running",
+                        detail=f"빌드 중: {spec_obj.label}",
+                        phase_ratio=sub_ratio,
+                        is_final=False,
+                    )
+                )
+                if self.spec_builder.build_target(spec_obj.key, py_exe, self._run_cmd):
+                    built.append(spec_obj.key)
 
-    builder = BuildApp()
-    builder.run(bump_unit=args.bump, skip_installer=args.skip_installer)
+            self._check_cancelled()
+            ver_summary = ", ".join(
+                f"{k}=v{self.version_service.get_target_version(k, target_versions)}" for k in built
+            )
+            msg = f"Built targets={built} ({ver_summary})"
+            self._end_step(step_key, detail=msg)
+            self._record_result(step_name, "SUCCESS", msg, step_key=step_key)
+        except Exception as e:
+            msg = f"실패: {e}"
+            self._end_step(step_key, detail=msg)
+            self._record_result(step_name, "FAILED", msg, step_key=step_key)
+            raise
 
+    def step6_inject_eof_encryption(self, target_versions: dict[str, str], mode: str):
+        """[Step 6] 메인 앱 및 서브 앱 동일하게 EXE 메타데이터 서명/검증 + Authenticode + SHA-256 생성."""
+        step_key = "step6_eof_crypto"
+        step_name = "Step 6: EOF Sign, Authenticode & Verify"
+        self._begin_step(step_key, detail="메타데이터 서명/Authenticode/검증")
+        logd(f"[{step_name}] EXE 메타데이터 전자서명, Authenticode 서명 및 검증...")
+        try:
+            selected_specs = self._iter_selected_specs()
+            injected_count = 0
 
-if __name__ == "__main__":
-    main()
+            for spec_obj in selected_specs:
+                self._check_cancelled()
+                app_ver = self.version_service.get_target_version(spec_obj.key, target_versions)
+                resolved_exe = resolve_built_exe_path(
+                    project_root=self.project_root,
+                    target_key=spec_obj.key,
+                    default_exe_name=spec_obj.exe_name,
+                )
+                if resolved_exe and os.path.isfile(resolved_exe):
+                    BuildTargets.validate_app_artifact_layout(
+                        self.project_root,
+                        self.dir_config.dist_dir_name,
+                        spec_obj.key,
+                        resolved_exe,
+                    )
+                    inject_and_verify_exe(
+                        exe_path=resolved_exe,
+                        app_label=spec_obj.label,
+                        app_version=app_ver,
+                        mode=mode,
+                        cwd=self.project_root,
+                        reload_fn=reload_pubkey_and_crypto_modules,
+                    )
+                    injected_count += 1
+                else:
+                    expected_fallback = os.path.join(
+                        BuildTargets.get_dist_dir(spec_obj.key, self.project_root),
+                        spec_obj.exe_name,
+                    )
+                    logd(f"  • [{spec_obj.label}] EXE 미존재 (건너뜀): {expected_fallback}")
+
+            msg = f"EOF signed, Authenticode & verified ({injected_count} target(s))"
+            self._end_step(step_key, detail=msg)
+            self._record_result(step_name, "SUCCESS", msg, step_key=step_key)
+        except Exception as e:
+            msg = f"실패: {e}"
+            self._end_step(step_key, detail=msg)
+            self._record_result(step_name, "FAILED", msg, step_key=step_key)
+            raise
+
+    def step7_sync_to_test_folder(self) -> list[str]:
+        """[Step 7] copy_to_test 정책이 활성화된 앱 산출물을 test 폴더로 동기화."""
+        step_key = "step7_test_sync"
+        step_name = "Step 7: Sync to Test Folder"
+        self._begin_step(step_key, detail="테스트 폴더 동기화")
+        logd(f"[{step_name}] copy_to_test 정책 기준 테스트 폴더 동기화...")
+        try:
+            synced: list[str] = []
+            for spec_obj in self._iter_selected_specs():
+                self._check_cancelled()
+                if not spec_obj.copy_to_test:
+                    logd(f"  • [{spec_obj.label}] copy_to_test=False (건너뜀)")
+                    continue
+                copied = self._sync_single_target_to_test(spec_obj)
+                if copied is not None:
+                    synced.append(str(copied))
+
+            msg = f"Synced {len(synced)} target(s) to {TEST_DIR_NAME}/"
+            self._end_step(step_key, detail=msg)
+            self._record_result(step_name, "SUCCESS", msg, step_key=step_key)
+            return synced
+        except Exception as e:
+            msg = f"실패: {e}"
+            self._end_step(step_key, detail=msg)
+            self._record_result(step_name, "FAILED", msg, step_key=step_key)
+            raise
+
+    def step8_create_release_artifacts(self, target_versions: dict[str, str]) -> list[str]:
+        """[Step 8] 메인 앱 및 서브 앱 동일하게 개별 버전 기준 릴리스 아카이브 및 SHA-256 생성."""
+        step_key = "step8_release"
+        step_name = "Step 8: Release Package"
+        self._begin_step(step_key, detail="앱별 릴리스 패키지 생성")
+        logd(f"[{step_name}] 앱별 개별 버전 릴리스 패키지 생성...")
+        try:
+            self._check_cancelled()
+            dist_root = BuildTargets.get_dist_root(self.project_root)
+            if not os.path.isdir(dist_root):
+                msg = f"{self.dir_config.dist_dir_name} 디렉터리가 없어 릴리스 생성을 건너뜀"
+                logd(f"  • {msg}")
+                self._end_step(step_key, detail=msg)
+                self._record_result(step_name, "SKIPPED", msg, step_key=step_key)
+                return []
+
+            created_releases = self.packaging_service.create_update_zips(
+                specs=self._iter_selected_specs(),
+                target_versions=target_versions,
+            )
+            if not created_releases:
+                msg = "생성된 앱별 릴리스 파일이 없음"
+                self._end_step(step_key, detail=msg)
+                self._record_result(step_name, "SKIPPED", msg, step_key=step_key)
+                return []
+
+            names = ", ".join(os.path.basename(p) for p in created_releases)
+            msg = f"Created {len(created_releases)} release artifact(s): {names}"
+            self._end_step(step_key, detail=msg)
+            self._record_result(step_name, "SUCCESS", msg, step_key=step_key)
+            return created_releases
+        except Exception as e:
+            msg = f"실패: {e}"
+            self._end_step(step_key, detail=msg)
+            self._record_result(step_name, "FAILED", msg, step_key=step_key)
+            raise
+
+    def step9_create_windows_installer(
+        self,
+        py_exe: str,
+        main_app_version: str,
+        is_final: bool = True,
+    ) -> str | None:
+        """[Step 9] 선택된 인스톨러 조합(ID 오름차순) 기준 Windows 인스톨러 생성 및 서명/검증."""
+        step_key = "step9_installer"
+        step_name = "Step 9: Windows Installer"
+        if self.skip_installer:
+            msg = "skip_installer=True 로 인스톨러 생성 건너뜀"
+            logd(f"[{step_name}] {msg}")
+            self._begin_step(step_key, detail=msg)
+            self._end_step(step_key, detail=msg, is_final=is_final)
+            self._record_result(step_name, "SKIPPED", msg, step_key=step_key)
+            return None
+
+        installer_specs = self.get_installer_specs_sorted()
+        combo_tag = self.get_installer_combo_tag(installer_specs)
+        artifact_name = self.get_installer_artifact_name(main_app_version, installer_specs)
+        ordered_labels = [s.label for s in installer_specs]
+
+        self._begin_step(step_key, detail=f"Windows 인스톨러 생성 ({combo_tag})")
+        logd(
+            f"\n[{step_name}] Windows 인스톨러 생성 "
+            f"(combo={combo_tag}, targets={ordered_labels}, artifact={artifact_name}, v{main_app_version})..."
+        )
+        try:
+            self._check_cancelled()
+            create_fn = getattr(self.packaging_service, "create_windows_installer")
+            try:
+                latest_installer, msg = create_fn(
+                    main_app_version=main_app_version,
+                    run_cmd_fn=self._run_cmd,
+                    installer_specs=installer_specs,
+                    combo_tag=combo_tag,
+                    artifact_name=artifact_name,
+                    installer_config=self.installer_config,
+                )
+            except TypeError:
+                latest_installer, msg = create_fn(
+                    main_app_version=main_app_version,
+                    run_cmd_fn=self._run_cmd,
+                )
+
+            self._check_cancelled()
+            full_msg = f"{msg} [combo={combo_tag}, name={artifact_name}]"
+            self._end_step(step_key, detail=full_msg, is_final=is_final)
+            self._record_result(step_name, "SUCCESS", full_msg, step_key=step_key)
+            return latest_installer
+        except Exception as e:
+            msg = f"실패: {e}"
+            self._end_step(step_key, detail=msg, is_final=is_final)
+            self._record_result(step_name, "FAILED", msg, step_key=step_key)
+            raise
+
+    def run(self) -> bool:
+        previous_versions: dict[str, str] = {}
+        self.timer.reset()
+
+        try:
+            self._check_cancelled("빌드 시작 전 취소되었습니다.")
+
+            if self.installer_only:
+                logd("=== [--installer-only] 인스톨러 단독 생성 모드 시작 ===")
+                py_exe = resolve_python_executable(self.project_root)
+                installer_specs = self.get_installer_specs_sorted()
+                version_source_key = (
+                    self.installer_config.version_source_id
+                    or (installer_specs[0].key if installer_specs else TARGET_SPECS[0].key)
+                )
+                version_map = self.version_service.sync_targets(
+                    targets=[s.key for s in installer_specs] or self.targets,
+                    bump_unit=None,
+                )[0]
+                main_app_version = (
+                    version_map.get(version_source_key)
+                    or self.version_service.get_main_app_version(version_map)
+                )
+                self.step9_create_windows_installer(py_exe, main_app_version, is_final=True)
+                self._check_cancelled()
+                return True
+
+            self.step1_convert_ui_files()
+            py_exe, mode = self.step2_setup_environment_and_config()
+            self.step3_prepare_public_key_module()
+            target_versions, previous_versions = self.step4_sync_version_and_resources()
+            main_app_version = self.version_service.get_main_app_version(target_versions)
+
+            self.step5_build_targets(py_exe, target_versions)
+            self.step6_inject_eof_encryption(target_versions, mode)
+            self.step7_sync_to_test_folder()
+            self.step8_create_release_artifacts(target_versions)
+            self.step9_create_windows_installer(py_exe, main_app_version, is_final=True)
+
+            self._check_cancelled()
+            logd("\n=== 전체 빌드 파이프라인 성공 완료 ===")
+            return True
+        except InterruptedError as ie:
+            logd(f"[CANCELLED] 빌드 프로세스 취소됨: {ie}")
+            if previous_versions:
+                self.version_service.rollback(previous_versions)
+            return False
+        except Exception as e:
+            if self._is_cancelled():
+                logd(f"[CANCELLED] 취소 처리 중 예외 발생: {e}")
+                if previous_versions:
+                    self.version_service.rollback(previous_versions)
+                return False
+            loge(f"\n[FAILED] 빌드 프로세스 중 예외 발생: {e}")
+            if previous_versions:
+                self.version_service.rollback(previous_versions)
+            return False

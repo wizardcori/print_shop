@@ -95,6 +95,9 @@ class CmdId(IntEnum):
     FAIL = 10
     SET_RESTART_FUNCTION = 11
     GET_RESTART_FUNCTION = 12  # 메인 프로그램 자동 재실행(launch_main_app) 설정 상태 조회
+    SET_GITHUB_CONFIG = 13
+    GET_GITHUB_CONFIG = 14
+    GITHUB_TEST = 15
 
 
 class Cmd:
@@ -114,6 +117,9 @@ class Cmd:
     FAIL = int(CmdId.FAIL)
     SET_RESTART_FUNCTION = int(CmdId.SET_RESTART_FUNCTION)
     GET_RESTART_FUNCTION = int(CmdId.GET_RESTART_FUNCTION)
+    SET_GITHUB_CONFIG = int(CmdId.SET_GITHUB_CONFIG)
+    GET_GITHUB_CONFIG = int(CmdId.GET_GITHUB_CONFIG)
+    GITHUB_TEST = int(CmdId.GITHUB_TEST)
 
     # 요청 전용 상수 (+0)
     REQ_HEARTBEAT = HEARTBEAT + REQ_OFFSET
@@ -126,6 +132,9 @@ class Cmd:
     REQ_ROLLBACK = ROLLBACK + REQ_OFFSET
     REQ_SET_RESTART_FUNCTION = SET_RESTART_FUNCTION + REQ_OFFSET
     REQ_GET_RESTART_FUNCTION = GET_RESTART_FUNCTION + REQ_OFFSET
+    REQ_SET_GITHUB_CONFIG = SET_GITHUB_CONFIG + REQ_OFFSET
+    REQ_GET_GITHUB_CONFIG = GET_GITHUB_CONFIG + REQ_OFFSET
+    REQ_GITHUB_TEST = GITHUB_TEST + REQ_OFFSET
 
     # 응답 전용 상수 (+10000)
     RES_HEARTBEAT = HEARTBEAT + RES_OFFSET
@@ -140,6 +149,9 @@ class Cmd:
     RES_FAIL = FAIL + RES_OFFSET
     RES_SET_RESTART_FUNCTION = SET_RESTART_FUNCTION + RES_OFFSET
     RES_GET_RESTART_FUNCTION = GET_RESTART_FUNCTION + RES_OFFSET
+    RES_SET_GITHUB_CONFIG = SET_GITHUB_CONFIG + RES_OFFSET
+    RES_GET_GITHUB_CONFIG = GET_GITHUB_CONFIG + RES_OFFSET
+    RES_GITHUB_TEST = GITHUB_TEST + RES_OFFSET
 
     STR_UNKNOWN = "UNKNOWN"
     STR_HEARTBEAT = "HEARTBEAT"
@@ -153,7 +165,10 @@ class Cmd:
     STR_OK = "OK"
     STR_FAIL = "FAIL"
     STR_SET_RESTART_FUNCTION = "SET_RESTART_FUNCTION"
-    STR_GET_RESTART_FUNCTION = "STR_GET_RESTART_FUNCTION"
+    STR_GET_RESTART_FUNCTION = "GET_RESTART_FUNCTION"
+    STR_SET_GITHUB_CONFIG = "SET_GITHUB_CONFIG"
+    STR_GET_GITHUB_CONFIG = "GET_GITHUB_CONFIG"
+    STR_GITHUB_TEST = "GITHUB_TEST"
 
     _BASE_STR_MAP = {
         int(CmdId.UNKNOWN): STR_UNKNOWN,
@@ -168,7 +183,10 @@ class Cmd:
         int(CmdId.OK): STR_OK,
         int(CmdId.FAIL): STR_FAIL,
         int(CmdId.SET_RESTART_FUNCTION): STR_SET_RESTART_FUNCTION,
-        int(CmdId.GET_RESTART_FUNCTION): "GET_RESTART_FUNCTION",
+        int(CmdId.GET_RESTART_FUNCTION): STR_GET_RESTART_FUNCTION,
+        int(CmdId.SET_GITHUB_CONFIG): STR_SET_GITHUB_CONFIG,
+        int(CmdId.GET_GITHUB_CONFIG): STR_GET_GITHUB_CONFIG,
+        int(CmdId.GITHUB_TEST): STR_GITHUB_TEST,
     }
     _NUM_MAP = {v: k for k, v in _BASE_STR_MAP.items()}
 
@@ -332,6 +350,9 @@ COMMAND_COOLDOWN_MAP = {
     Cmd.GET_HEARTBEAT: 5.0,
     Cmd.SET_RESTART_FUNCTION: 2.0,
     Cmd.GET_RESTART_FUNCTION: 2.0,
+    Cmd.SET_GITHUB_CONFIG: 2.0,
+    Cmd.GET_GITHUB_CONFIG: 2.0,
+    Cmd.GITHUB_TEST: 5.0,
 }
 
 HEARTBEAT_INTERVAL_SEC = 10.0
@@ -439,8 +460,8 @@ _SRC_SUBCLASS_MAP: dict[int, type[ProtocolPacket]] = {
 }
 
 
-# =================================================ن=============================
-# 6. 패킷 빌더 클래스 구현 (GET_RESTART_FUNCTION 추가)
+# ==============================================================================
+# 6. 패킷 빌더 클래스 구현
 # ==============================================================================
 class PacketBuilder:
     DST: ClassVar[int] = Dst.UNKNOWN
@@ -496,8 +517,18 @@ class UpdateClientToUpdateServicePacketBuilder(PacketBuilder):
         )
 
     def req_get_restart_function(self) -> UpdateClientPacket:
-        """메인 프로그램 자동 재실행(launch_main_app) 설정 상태 조회 요청 추가"""
         return UpdateClientPacket(dst=self.DST, cmd=Cmd.REQ_GET_RESTART_FUNCTION)
+
+    def req_set_github_config(self, repo_url: str, json_url: str) -> UpdateClientPacket:
+        body = json.dumps({"repo_url": repo_url, "json_url": json_url}, ensure_ascii=False)
+        return UpdateClientPacket(dst=self.DST, cmd=Cmd.REQ_SET_GITHUB_CONFIG, payload=body)
+
+    def req_get_github_config(self) -> UpdateClientPacket:
+        return UpdateClientPacket(dst=self.DST, cmd=Cmd.REQ_GET_GITHUB_CONFIG)
+
+    def req_github_test(self, repo_url: str = "", json_url: str = "") -> UpdateClientPacket:
+        body = json.dumps({"repo_url": repo_url, "json_url": json_url}, ensure_ascii=False)
+        return UpdateClientPacket(dst=self.DST, cmd=Cmd.REQ_GITHUB_TEST, payload=body)
 
 
 class UpdateServiceToUpdateClientPacketBuilder(PacketBuilder):
@@ -525,25 +556,31 @@ def parse_bool_payload(payload: str) -> bool:
     raise ValueError(f"유효하지 않은 boolean payload입니다: {payload}")
 
 
-def parse_client_request(raw_data: bytes | str, expected_dst: int = Dst.UPDATE_SERVICE) -> Tuple[bool, Optional[UpdateClientPacket], str]:
+def parse_client_request(
+    raw_data: bytes | str,
+    expected_dst: int = Dst.UPDATE_SERVICE,
+) -> Tuple[bool, Optional[UpdateClientPacket], int]:
     try:
         pkt = UpdateClientPacket.decode(raw_data)
     except ValueError:
-        return False, None, ResponseCode.to_str(ResponseCode.INVALID_PACKET)
+        return False, None, ResponseCode.INVALID_PACKET
 
     if pkt.dst != int(expected_dst) or pkt.is_response:
-        return False, pkt, ResponseCode.to_str(ResponseCode.INVALID_DIRECTION)
+        return False, pkt, ResponseCode.INVALID_DIRECTION
 
-    return True, pkt, ""
+    return True, pkt, ResponseCode.UNKNOWN
 
 
-def parse_server_response(raw_data: bytes | str, expected_dst: int = Dst.UPDATE_CLIENT) -> Tuple[bool, Optional[UpdateServicePacket], str]:
+def parse_server_response(
+    raw_data: bytes | str,
+    expected_dst: int = Dst.UPDATE_CLIENT,
+) -> Tuple[bool, Optional[UpdateServicePacket], int]:
     try:
         pkt = UpdateServicePacket.decode(raw_data)
     except ValueError:
-        return False, None, ResponseCode.to_str(ResponseCode.INVALID_PACKET)
+        return False, None, ResponseCode.INVALID_PACKET
 
     if pkt.dst != int(expected_dst) or not pkt.is_response:
-        return False, pkt, ResponseCode.to_str(ResponseCode.INVALID_DIRECTION)
+        return False, pkt, ResponseCode.INVALID_DIRECTION
 
-    return True, pkt, ""
+    return True, pkt, ResponseCode.UNKNOWN

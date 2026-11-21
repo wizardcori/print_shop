@@ -1,0 +1,19 @@
+{
+  "project_root": "C:\\1print_shop\\PrintShopApp",
+  "config_path": "C:\\1print_shop\\PrintShopApp\\build_dirs.json",
+  "selected_targets": [
+    "PrintShopApp",
+    "UpdateService",
+    "UpdateManager",
+    "VersionViewer",
+    "BuildManagerApp"
+  ],
+  "mode": "production",
+  "bump_unit": null,
+  "skip_installer": false,
+  "installer_only": false,
+  "clean_build": false,
+  "clean_work_out": false,
+  "clean_dist_out": false,
+  "clean_spec": false
+}

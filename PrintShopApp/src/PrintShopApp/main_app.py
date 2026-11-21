@@ -1,8 +1,30 @@
+import sys
+from pathlib import Path
+
 # main.py 등 최초 진입점에서 딱 한 번 실행
 from Common.log import setup_global_log, logd, LogManagerRegistry, FileTagManager  # 또는 dlog
 setup_global_log()
 
 from Common.log import set_file_tag; set_file_tag("SYSTEM")
+
+def find_dir_parent_direction(start_file: str, target_dir_name: str = "src") -> Path | None:
+    current = Path(start_file).resolve().parent
+    for parent in [current, *current.parents]:
+        candidate = parent / target_dir_name
+        if candidate.is_dir():
+            return candidate
+    return None
+
+SRC_DIR = find_dir_parent_direction(__file__, "src")
+if SRC_DIR and str(SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(SRC_DIR))
+
+#PROJECT_ROOT = SRC_DIR.parent
+PROJECT_ROOT = find_dir_parent_direction(SRC_DIR, "PrintShopApp")
+if PROJECT_ROOT and str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+
 
 from Common.Version.version_tab  import VersionTab
 from redis_server.redis_session_manager import redis_session_manager

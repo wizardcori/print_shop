@@ -1,0 +1,337 @@
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+from Common.log import set_file_tag
+
+set_file_tag("BUILD_SUB")
+
+CURRENT_DIR = Path(__file__).resolve().parent
+SRC_DIR = CURRENT_DIR.parent
+PROJECT_ROOT = SRC_DIR.parent
+
+for p in (str(PROJECT_ROOT), str(SRC_DIR), str(CURRENT_DIR)):
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+from artifact_signing import inject_and_verify_exe  # noqa: E402
+from build_targets import BuildTargets, get_target_spec  # noqa: E402
+from Common.log import logd, loge  # noqa: E402
+from Common.Version.exe_version_crypto import generate_win_version_info  # noqa: E402
+from env_ui_helper import (  # noqa: E402
+    convert_ui_files,
+    resolve_built_exe_path,
+    resolve_python_executable,
+)
+from spec_builder import SpecAndPyInstallerBuilder  # noqa: E402
+from version_service import VersionService  # noqa: E402
+
+
+class BaseSubBuilder:
+    """서브 애플리케이션 빌드 파이프라인 부모 클래스 (공용 빌드 모듈 위임)."""
+
+    def __init__(
+        self,
+        source_dir: str,
+        app_name: str,
+        exe_name: str,
+        spec_name: str,
+        sub_folder_name: str,
+        python_path: str | None = None,
+        dist_to_main_folder: bool = False,
+        bump_unit: str | None = "patch",
+        mode: str = "production",
+    ):
+        self.source_dir = os.path.abspath(source_dir)
+        self.project_root = os.path.abspath(os.path.join(self.source_dir, "..", ".."))
+        self.src_dir = os.path.join(self.project_root, "src")
+
+        self.dir_config = BuildTargets.configure(project_root=self.project_root)
+        self.target_helpers = BuildTargets.get_helpers(self.project_root) if hasattr(BuildTargets, "get_helpers") else {}
+
+        self.python_path = python_path or resolve_python_executable(self.project_root)
+        self.app_name = app_name
+        self.exe_name = exe_name
+        self.spec_name = spec_name
+        self.sub_folder_name = sub_folder_name
+        self.bump_unit = bump_unit
+        self.mode = mode or "production"
+
+        self.version_dir = os.path.abspath(os.path.join(self.src_dir, "Common", "Version"))
+        self.crypto_script_path = os.path.join(self.version_dir, "exe_version_crypto.py")
+        self.version_manager_path = os.path.join(self.version_dir, "version_manager.py")
+
+        self.pyinst_path = self._get_pyinstaller_path()
+        self.work_dir = os.path.join(self.project_root, self.dir_config.work_dir_name, self.sub_folder_name)
+
+        if dist_to_main_folder:
+            main_key = VersionService.resolve_main_target_key()
+            self.dist_dir = BuildTargets.get_dist_dir(main_key, self.project_root)
+        else:
+            self.dist_dir = os.path.join(self.project_root, self.dir_config.dist_dir_name, self.sub_folder_name)
+
+        self.test_dir = os.path.join(self.project_root, "test", self.sub_folder_name)
+        self.version_file = os.path.join(self.source_dir, "version.txt")
+
+        self.version_service = VersionService(
+            project_root=self.project_root,
+            target_helpers=self.target_helpers,
+        )
+        self.spec_builder = SpecAndPyInstallerBuilder(
+            project_root=self.project_root,
+            src_dir=self.src_dir,
+            dir_config=self.dir_config,
+            version_service=self.version_service,
+        )
+
+        self.version = "0.0.0"
+        self.results: dict[str, dict[str, str]] = {}
+        self._previous_versions: dict[str, str] = {}
+
+    def _get_pyinstaller_path(self) -> str:
+        """가상환경 내 PyInstaller 실행 파일 경로를 반환합니다."""
+        venv_pyinst = os.path.join(self.project_root, ".venv", "Scripts", "pyinstaller.exe")
+        return venv_pyinst if os.path.exists(venv_pyinst) else "pyinstaller"
+
+    def _record_result(self, step_name: str, status: str, message: str) -> None:
+        self.results[step_name] = {"status": status, "message": message}
+
+    def _run_cmd(self, cmd: list[str], cwd: str | None = None, check: bool = True) -> subprocess.CompletedProcess:
+        work_dir = cwd or self.source_dir
+        logd(f"  $ {' '.join(cmd)} (cwd={work_dir})")
+        return subprocess.run(cmd, cwd=work_dir, check=check)
+
+    def _resolve_target_key(self) -> str:
+        spec = get_target_spec(self.app_name) or get_target_spec(self.sub_folder_name)
+        return spec.key if spec else self.sub_folder_name
+
+    def print_summary(self) -> None:
+        logd("\n" + "-" * 65)
+        logd(f"  📋 {self.sub_folder_name} Sub-Build Execution Summary")
+        logd("-" * 65)
+        for step, info in self.results.items():
+            icon = (
+                "✅"
+                if info["status"] == "SUCCESS"
+                else ("⏭️" if info["status"] == "SKIPPED" else "❌")
+            )
+            logd(f"  {icon} [{step}] - {info['status']}")
+            logd(f"     └─ {info['message']}")
+        logd("-" * 65)
+
+    def step1_convert_ui_files(self) -> None:
+        step_name = "Sub-Step 1: UI Compile"
+        logd(f"🔍 [{step_name}] ({self.sub_folder_name}) .ui 파일 검색 및 변환 시작...")
+        try:
+            converted, total_ui = convert_ui_files(
+                project_root=self.project_root,
+                src_dir=self.source_dir,
+                py_exe=self.python_path,
+                run_cmd_fn=self._run_cmd,
+            )
+            if total_ui == 0:
+                msg = "변환할 .ui 파일이 없습니다."
+                logd(f"  ℹ️ {msg}\n")
+            else:
+                msg = f"UI 파일 확인/변환 완료 (converted={converted}, total_ui={total_ui})"
+                logd(f"  ✅ {msg}\n")
+            self._record_result(step_name, "SUCCESS", msg)
+        except Exception as e:
+            msg = f"오류 발생: {e}"
+            loge(f"  ❌ {msg}")
+            self._record_result(step_name, "FAILED", msg)
+            raise
+
+    def step2_bump_version(self) -> str:
+        step_name = "Sub-Step 2: Bump Version"
+        logd("========================================================")
+        logd(f" [{step_name}] {self.sub_folder_name} 버전 처리 중...")
+        logd("========================================================")
+        try:
+            cur_ver = self.version_service.read_version(self.version_file)
+            if self.bump_unit:
+                self._previous_versions[self.version_file] = cur_ver
+                next_ver = self.version_service.bump_version_str(cur_ver, self.bump_unit)
+                self.version = self.version_service.write_version(self.version_file, next_ver)
+                msg = f"버전 증가 ({self.bump_unit}): v{cur_ver} -> v{self.version}"
+            else:
+                self.version = self.version_service.write_version(self.version_file, cur_ver)
+                msg = f"현재 버전 유지: v{self.version}"
+
+            logd(f"  ✅ {msg}\n")
+            self._record_result(step_name, "SUCCESS", msg)
+            return self.version
+        except Exception as e:
+            msg = f"실패: {e}"
+            loge(f"  ❌ {msg}")
+            self._record_result(step_name, "FAILED", msg)
+            raise
+
+    def step3_generate_rc(self) -> None:
+        step_name = "Sub-Step 3: Generate RC"
+        logd("========================================================")
+        logd(f" [{step_name}] PyInstaller용 버전 리소스 생성 중...")
+        logd("========================================================")
+        try:
+            ver_str = self.version if self.version != "0.0.0" else self.version_service.read_version(self.version_file)
+            rc_path = os.path.join(self.source_dir, "version_info.txt")
+            generate_win_version_info(ver_str, output_path=rc_path, app_name=self.app_name)
+            msg = f"version_info.txt 생성 완료 (v{ver_str})"
+            logd(f"  ✅ {msg}\n")
+            self._record_result(step_name, "SUCCESS", msg)
+        except Exception as e:
+            msg = f"실패: {e}"
+            loge(f"  ❌ {msg}")
+            self._record_result(step_name, "FAILED", msg)
+            raise
+
+    def step4_build_executable(self) -> None:
+        step_name = "Sub-Step 4: PyInstaller Build"
+        logd("========================================================")
+        logd(f" [{step_name}] {self.spec_name} 빌드 중...")
+        logd("========================================================")
+        try:
+            os.makedirs(self.work_dir, exist_ok=True)
+            os.makedirs(self.dist_dir, exist_ok=True)
+
+            target_key = self._resolve_target_key()
+            spec_obj = get_target_spec(target_key)
+
+            spec_path = os.path.join(self.source_dir, self.spec_name) if not os.path.isabs(self.spec_name) else self.spec_name
+            if not os.path.isfile(spec_path):
+                spec_path = self.spec_builder.find_spec_file(target_key) or ""
+
+            if not spec_path or not os.path.isfile(spec_path):
+                logd(f"  ℹ️ '{self.spec_name}' 파일이 없어 기본 spec을 생성합니다...")
+                entry_script = self.spec_builder.find_entry_script(spec_obj, target_key)
+                if not entry_script:
+                    py_files = [
+                        f
+                        for f in os.listdir(self.source_dir)
+                        if f.endswith(".py") and not f.startswith("ui_")
+                    ]
+                    if not py_files:
+                        raise FileNotFoundError("빌드할 진입점 파이썬 파일을 찾을 수 없습니다.")
+                    entry_script = os.path.join(self.source_dir, py_files[0])
+
+                spec_path = self.spec_builder.generate_default_spec_file(
+                    target_key=target_key,
+                    spec_obj=spec_obj,
+                    entry_script=entry_script,
+                    work_out=self.work_dir,
+                )
+
+            self._run_cmd(
+                [
+                    self.python_path,
+                    "-m",
+                    "PyInstaller",
+                    spec_path,
+                    "--noconfirm",
+                    "--clean",
+                    "--distpath",
+                    self.dist_dir,
+                    "--workpath",
+                    self.work_dir,
+                ],
+                cwd=self.project_root,
+            )
+
+            msg = f"{self.exe_name} 빌드 완료"
+            logd(f"  ✅ {msg}\n")
+            self._record_result(step_name, "SUCCESS", msg)
+        except Exception as e:
+            msg = f"실패: {e}"
+            loge(f"  ❌ {msg}")
+            self._record_result(step_name, "FAILED", msg)
+            raise
+
+    def step5_inject_eof_encryption(self) -> None:
+        step_name = "Sub-Step 5: EOF Encryption"
+        logd("========================================================")
+        logd(f" [{step_name}] EXE 파일 EOF 암호화/서명 및 검증 중...")
+        logd("========================================================")
+        try:
+            target_key = self._resolve_target_key()
+            target_exe_path = os.path.join(self.dist_dir, self.exe_name)
+            if not os.path.isfile(target_exe_path):
+                resolved = resolve_built_exe_path(self.project_root, target_key, self.exe_name)
+                if resolved:
+                    target_exe_path = resolved
+
+            if not os.path.isfile(target_exe_path):
+                raise FileNotFoundError(f"빌드된 실행 파일을 찾을 수 없습니다: {target_exe_path}")
+
+            ver_str = self.version if self.version != "0.0.0" else self.version_service.read_version(self.version_file)
+            inject_and_verify_exe(
+                exe_path=target_exe_path,
+                app_label=self.app_name,
+                app_version=ver_str,
+                mode=self.mode,
+                cwd=self.project_root,
+            )
+            msg = f"EOF 암호화 및 서명 검증 완료 (v{ver_str})"
+            logd(f"  ✅ {msg}\n")
+            self._record_result(step_name, "SUCCESS", msg)
+        except Exception as e:
+            msg = f"실패: {e}"
+            loge(f"  ❌ {msg}")
+            self._record_result(step_name, "FAILED", msg)
+            raise
+
+    def step6_sync_test_environment(self) -> None:
+        step_name = "Sub-Step 6: Sync Test Env"
+        logd("========================================================")
+        logd(f" [{step_name}] 테스트 환경({self.test_dir}) 동기화 중...")
+        logd("========================================================")
+        try:
+            os.makedirs(self.test_dir, exist_ok=True)
+            src_exe = os.path.join(self.dist_dir, self.exe_name)
+            dst_exe = os.path.join(self.test_dir, self.exe_name)
+            shutil.copy2(src_exe, dst_exe)
+
+            msg = f"동기화 완료 ({self.test_dir})"
+            logd(f"  ✅ {msg}\n")
+            self._record_result(step_name, "SUCCESS", msg)
+        except Exception as e:
+            msg = f"실패: {e}"
+            loge(f"  ❌ {msg}")
+            self._record_result(step_name, "FAILED", msg)
+            raise
+
+    def run(self) -> dict[str, Any]:
+        original_cwd = os.getcwd()
+        os.chdir(self.source_dir)
+        overall_success = False
+        self._previous_versions.clear()
+
+        try:
+            self.step1_convert_ui_files()
+            self.step2_bump_version()
+            self.step3_generate_rc()
+            self.step4_build_executable()
+            self.step5_inject_eof_encryption()
+            self.step6_sync_test_environment()
+
+            overall_success = True
+            logd("========================================================")
+            logd(f" 🎉 {self.sub_folder_name} 빌드 및 패키징 완료! (v{self.version})")
+            logd("========================================================")
+        except Exception as e:
+            loge(f"\n❌ [FAILED] {self.sub_folder_name} 빌드 중 오류 발생: {e}")
+            if self._previous_versions:
+                self.version_service.rollback(self._previous_versions)
+        finally:
+            os.chdir(original_cwd)
+            self.print_summary()
+
+        return {
+            "success": overall_success,
+            "version": self.version,
+            "steps": self.results,
+        }

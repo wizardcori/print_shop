@@ -15,7 +15,11 @@ BUILD_USE_BUILD_TIME_TEST = {build_time_test}
 """
 
     # 루트 디렉토리에 바로 생성
-    output_path = 'src/build_config_generated.py'
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))   # .../src/build_script
+    src_dir = os.path.dirname(script_dir)                     # .../src
+    output_path = os.path.join(src_dir, "build_config_generated.py")
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(content)
     print(f"[SUCCESS] Generated {output_path}")

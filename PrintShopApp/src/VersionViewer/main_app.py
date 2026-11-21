@@ -1,6 +1,6 @@
 import sys
 from PySide6.QtWidgets import QApplication
-from version_window import VersionViewerWindow
+from VersionViewer.version_viewer import VersionViewerWindow
 
 
 def main():

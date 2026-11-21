@@ -1,41 +1,253 @@
-import os
-import sys
-import json
-import time
-import getpass
 import argparse
-from cryptography.fernet import Fernet, InvalidToken
-from dotenv import load_dotenv
-from Common.log import logd, loge
+import hashlib
+import json
+import os
+import re
+import shutil
+import struct
+import subprocess
+import sys
+from typing import Any
 
-# .env 파일 로드 (프로젝트 루트 경로에 .env가 위치할 경우)
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+    Ed25519PublicKey,
+)
+from dotenv import load_dotenv
+
+from Common.log import set_file_tag, logd, loge ;set_file_tag("CRYPTO")
+
+try:
+    from .exe_version_public_key import EmbeddedPublicKey, EMBEDDED_PUBLIC_KEY_PEM
+except ImportError:
+    try:
+        from exe_version_public_key import EmbeddedPublicKey, EMBEDDED_PUBLIC_KEY_PEM
+    except ImportError:
+        EmbeddedPublicKey = None
+        EMBEDDED_PUBLIC_KEY_PEM = ""
+
+try:
+    from .exe_version_desc_v1 import (
+        ALL_META_KEYS_V1,
+        DESCRIPTOR_VERSION as DESCRIPTOR_VERSION_V1,
+        SIGN_MAGIC,
+        SIGN_TRAILER_SIZE_V1,
+        _SIGN_TRAILER_STRUCT_V1,
+        _canonical_json_bytes,
+        build_v1_payload,
+        get_v1_block_size,
+        sign_and_inject_v1,
+        strip_v1_eof_metadata,
+        verify_and_read_v1,
+    )
+    from .exe_version_desc_v2 import (
+        ALL_META_KEYS_V2,
+        DESCRIPTOR_VERSION as DESCRIPTOR_VERSION_V2,
+        SIGN_TRAILER_SIZE_V2,
+        _SIGN_TRAILER_STRUCT_V2,
+        build_v2_payload,
+        format_host_with_cpuid,
+        get_cpuid,
+        get_v2_block_size,
+        parse_host_and_cpuid,
+        sign_and_inject_v2,
+        strip_v2_eof_metadata,
+        verify_and_read_v2,
+    )
+except ImportError:
+    from exe_version_desc_v1 import (
+        ALL_META_KEYS_V1,
+        DESCRIPTOR_VERSION as DESCRIPTOR_VERSION_V1,
+        SIGN_MAGIC,
+        SIGN_TRAILER_SIZE_V1,
+        _SIGN_TRAILER_STRUCT_V1,
+        _canonical_json_bytes,
+        build_v1_payload,
+        get_v1_block_size,
+        sign_and_inject_v1,
+        strip_v1_eof_metadata,
+        verify_and_read_v1,
+    )
+    from exe_version_desc_v2 import (
+        ALL_META_KEYS_V2,
+        DESCRIPTOR_VERSION as DESCRIPTOR_VERSION_V2,
+        SIGN_TRAILER_SIZE_V2,
+        _SIGN_TRAILER_STRUCT_V2,
+        build_v2_payload,
+        format_host_with_cpuid,
+        get_cpuid,
+        get_v2_block_size,
+        parse_host_and_cpuid,
+        sign_and_inject_v2,
+        strip_v2_eof_metadata,
+        verify_and_read_v2,
+    )
+
+DESCRIPTOR_VERSION = DESCRIPTOR_VERSION_V2
+_SIGN_TRAILER_STRUCT = _SIGN_TRAILER_STRUCT_V2
+SIGN_TRAILER_SIZE = SIGN_TRAILER_SIZE_V2
+ALL_META_KEYS = ALL_META_KEYS_V2
+
 load_dotenv()
 
-# 1. 메인 키와 디폴트(백업) 키를 환경 변수 또는 직접 선언에서 불러오기
-env_key = os.getenv("EXE_VERSION_SECRET_KEY", "")
-env_key_def = os.getenv("EXE_VERSION_SECRET_KEY_DEF", "")
+DEFAULT_PUBLIC_KEY_PEM = """-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAExamplePublicKeyReplaceBeforeProduction1234567890=
+-----END PUBLIC KEY-----"""
 
-def parse_key(k_str: str) -> bytes:
-    """문자열 형태의 키를 안전한 bytes 타입으로 변환"""
-    if not k_str:
-        return b''
-    if k_str.startswith("b'") and k_str.endswith("'"):
-        return k_str[2:-1].encode("utf-8")
-    return k_str.encode("utf-8")
+DEFAULT_COMPANY_NAME = "PrintShop"
+DEFAULT_LEGAL_COPYRIGHT = f"Copyright (C) {DEFAULT_COMPANY_NAME}"
+VERSION_TRANSLATION = "VarFileInfo([VarStruct(u'Translation', [1033, 1200])])"
 
-if not env_key_def:
-    env_key_def = "b'A1b2C3d4E5f6G7h8I9J0K1L2M3N4O5P6Q7R8S9T0U1V='"
+VERSION_STRING_STRUCT_SPECS: tuple[tuple[str, str], ...] = (
+    ("CompanyName", "{company_name}"),
+    ("FileDescription", "{app_name} Executable"),
+    ("FileVersion", "{dotted}"),
+    ("InternalName", "{app_name}"),
+    ("LegalCopyright", "{copyright}"),
+    ("OriginalFilename", "{app_name}.exe"),
+    ("ProductName", "{app_name}"),
+    ("ProductVersion", "{version_str}"),
+)
 
-# 사용할 두 개의 키 리스트 정의 (순서대로 시도: 메인 키 -> 디폴트 키)
-EXE_VERSION_SECRET_KEYS = [parse_key(env_key), parse_key(env_key_def)]
+
+def _get_embedded_public_key_pem() -> str:
+    if EmbeddedPublicKey is not None:
+        cls_pem = getattr(EmbeddedPublicKey, "EMBEDDED_PUBLIC_KEY_PEM", "") or ""
+        if cls_pem.strip():
+            return cls_pem.strip()
+    return (EMBEDDED_PUBLIC_KEY_PEM or "").strip()
+
+def load_private_key_from_env(
+    env_var: str = "EXE_VERSION_PRIVATE_KEY_PEM",
+    file_env_var: str = "EXE_VERSION_PRIVATE_KEY_PATH",
+    fallback_paths: tuple[str, ...] = (),
+) -> Ed25519PrivateKey:
+    """환경변수(PEM 문자열) 또는 개인키 파일에서 서명용 Ed25519 개인키를 로드합니다."""
+    raw_pem = os.getenv(env_var, "").strip()
+    pem_source = ""
+
+    if raw_pem:
+        pem_source = raw_pem
+    else:
+        key_file_path = os.getenv(file_env_var, "").strip()
+        candidate_paths = [p for p in (key_file_path, *fallback_paths) if p]
+        for path in candidate_paths:
+            if os.path.isfile(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    pem_source = f.read().strip()
+                if pem_source:
+                    break
+
+    if not pem_source:
+        raise RuntimeError(
+            f"서명용 개인키 환경변수 '{env_var}'가 비어 있고, 개인키 파일('{file_env_var}')도 찾지 못했습니다."
+        )
+
+    normalized = (
+        pem_source.replace("\\r\\n", "\n")
+        .replace("\\n", "\n")
+        .replace("\r\n", "\n")
+        .strip()
+    )
+    begin_idx = normalized.find("-----BEGIN ")
+    if begin_idx > 0:
+        normalized = normalized[begin_idx:]
+
+    key = serialization.load_pem_private_key(normalized.encode("utf-8"), password=None)
+    if not isinstance(key, Ed25519PrivateKey):
+        raise TypeError("Ed25519 개인키 형식만 지원합니다.")
+    return key
+
+def load_public_key(public_key_pem: str | bytes | None = None) -> Ed25519PublicKey:
+    """앱 및 외부 검증기에서 서명 검증용 Ed25519 공개키(PEM)를 로드합니다."""
+    env_pub = os.getenv("EXE_VERSION_PUBLIC_KEY_PEM", "").strip()
+    embedded_pub = _get_embedded_public_key_pem()
+
+    if public_key_pem is not None:
+        source = public_key_pem
+    elif env_pub:
+        source = env_pub
+    elif embedded_pub:
+        source = embedded_pub
+    else:
+        source = DEFAULT_PUBLIC_KEY_PEM
+
+    if isinstance(source, str):
+        pem_bytes = source.replace("\\\\n", "\\n").encode("utf-8")
+    else:
+        pem_bytes = source
+
+    key = serialization.load_pem_public_key(pem_bytes)
+    if not isinstance(key, Ed25519PublicKey):
+        raise TypeError("Ed25519 공개키 형식만 지원합니다.")
+    return key
 
 
-def generate_win_version_info(version_str: str, output_path: str = "version_info.txt", app_name: str = "PrintShopApp"):
+def compute_sha256_hex(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def compute_file_sha256(file_path: str) -> str:
+    digest = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def write_sha256_sidecar(target_file: str) -> str:
+    """<파일명>.sha256 체크섬 파일을 생성하고 SHA-256 16진수 문자열을 반환합니다."""
+    sha_hex = compute_file_sha256(target_file)
+    sha_path = f"{target_file}.sha256"
+    with open(sha_path, "w", encoding="utf-8") as f:
+        f.write(f"{sha_hex}  {os.path.basename(target_file)}\\n")
+    return sha_hex
+
+
+def _parse_ver_tuple(version_str: str) -> tuple[int, int, int, int]:
+    """버전 문자열에서 정수 4-튜플을 안전하게 추출합니다."""
+    clean = (version_str or "1.0.0").strip().lstrip("vV").split("-")[0]
+    nums = [int(m) for m in re.findall(r"\\d+", clean)]
+    while len(nums) < 4:
+        nums.append(0)
+    return tuple(nums[:4])
+
+def _build_string_structs(
+    version_str: str,
+    dotted: str,
+    app_name: str,
+    company_name: str = DEFAULT_COMPANY_NAME,
+) -> str:
+    context = {
+        "app_name": app_name,
+        "company_name": company_name,
+        "dotted": dotted,
+        "version_str": version_str,
+        "copyright": f"Copyright (C) {company_name}",
+    }
+    lines: list[str] = []
+    for key, tmpl in VERSION_STRING_STRUCT_SPECS:
+        val = tmpl.format(**context)
+        lines.append(f"          StringStruct(u'{key}', u'{val}'),")
+    return "\n".join(lines)
+
+
+def generate_win_version_info(
+    version_str: str,
+    output_path: str = "version_info.txt",
+    app_name: str = "PrintShopApp",
+    company_name: str = DEFAULT_COMPANY_NAME,
+):
     """SemVer(예: 1.2.0)를 파싱하여 PyInstaller용 Windows 리소스(version_info.txt) 동적 생성"""
-    parts = [int(p) for p in version_str.split(".")]
-    while len(parts) < 4:
-        parts.append(0)
-    ver_tuple = tuple(parts[:4])
+    ver_tuple = _parse_ver_tuple(version_str)
+    dotted = ".".join(str(n) for n in ver_tuple)
+    string_structs_block = _build_string_structs(
+        version_str=version_str,
+        dotted=dotted,
+        app_name=app_name,
+        company_name=company_name,
+    )
 
     content = f"""# UTF-8
 VSVersionInfo(
@@ -48,193 +260,394 @@ VSVersionInfo(
     fileType=0x1,
     subtype=0x0,
     date=(0, 0)
-    ),
+  ),
   kids=[
     StringFileInfo(
       [
-      StringTable(
-        '040904B0',
-        [StringStruct('CompanyName', 'PrintShop'),
-         StringStruct('FileDescription', '{app_name} Executable'),
-         StringStruct('FileVersion', '{version_str}'),
-         StringStruct('InternalName', '{app_name}'),
-         StringStruct('OriginalFilename', '{app_name}.exe'),
-         StringStruct('ProductName', '{app_name}'),
-         StringStruct('ProductVersion', '{version_str}')])
-      ]),
-    VarFileInfo([VarStruct('Translation', [1033, 1200])])
+        StringTable(
+          u'040904B0',
+          [
+{string_structs_block}
+          ]
+        )
+      ]
+    ),
+    {VERSION_TRANSLATION}
   ]
 )
 """
+    parent_dir = os.path.dirname(os.path.abspath(output_path))
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(content)
+    return output_path
 
 
-def create_metadata_footer(user_name: str = None) -> bytes:
-    """언제(타임스탬프), 누가(계정명) 마킹했는지 정보를 담은 정확히 64바이트 고정 크기 바이트 생성"""
-    if not user_name:
-        try:
-            user_name = getpass.getuser()  # 현재 윈도우 시스템 계정명 탐색
-        except Exception:
-            user_name = "Unknown"
-            
-    # UTC 기준 연월일시분초 (YYYYMMDDHHMMSS)
-    timestamp = time.strftime("%Y%m%d%H%M%S", time.gmtime())
-    
-    meta = {
-        "time": timestamp,
-        "who": user_name
-    }
-    
-    # JSON 문자열 변환 후 바이트 인코딩
-    meta_bytes = json.dumps(meta, ensure_ascii=False).encode("utf-8")
-    
-    # 정확히 64바이트로 패딩 또는 잘라내기
-    if len(meta_bytes) < 64:
-        meta_bytes = meta_bytes.ljust(64, b'\x00')  # 남는 공간은 널(\x00) 바이트로 채움
-    else:
-        meta_bytes = meta_bytes[:64]
-        
-    return meta_bytes
-
-
-def read_metadata_footer(exe_path: str) -> dict:
-    """파일 맨 마지막 64바이트에서 마킹 정보(누가, 언제)를 읽어 파싱"""
-    if not os.path.exists(exe_path):
-        return {}
+def get_git_info(cwd: str = None) -> dict:
+    """Git Commit 해시(단축), Commit 메시지, 작업트리 dirty 여부를 조회합니다."""
     try:
-        with open(exe_path, "rb") as f:
-            f.seek(-64, os.SEEK_END)
-            footer_bytes = f.read(64)
-            cleaned = footer_bytes.rstrip(b'\x00').decode("utf-8")
-            return json.loads(cleaned)
-    except Exception:
-        return {}
+        from .exe_version_desc_v1 import _get_git_info as _v1_git_info
+    except ImportError:
+        from exe_version_desc_v1 import _get_git_info as _v1_git_info
+    return _v1_git_info(cwd=cwd)
 
 
-def encrypt_and_append_version(exe_path: str, version_str: str, user_name: str = None):
-    """빌드된 .exe 파일의 끝(EOF)에 [암호화된 버전 토큰] + [64바이트 메타데이터 푸터] 순서로 마킹"""
+def build_all_items_payload(
+    version_str: str,
+    user_name: str = None,
+    app_name: str = "PrintShopApp",
+    git_commit: str = None,
+    git_message: str = None,
+    mode: str = "production",
+    host_name: str = None,
+    dirty: bool | str | None = None,
+    build_id: str = None,
+    cwd: str = None,
+) -> dict:
+    """DESCRIPTOR_VERSION = 1 페이로드 딕셔너리를 생성합니다."""
+    return build_v1_payload(
+        version_str=version_str,
+        user_name=user_name,
+        app_name=app_name,
+        git_commit=git_commit,
+        git_message=git_message,
+        mode=mode,
+        host_name=host_name,
+        dirty=dirty,
+        build_id=build_id,
+        cwd=cwd,
+    )
+
+
+def _detect_eof_descriptor_version(exe_path: str) -> int | None:
+    """파일 끝 트레일러에서 magic과 desc_ver(1 또는 2)를 확인합니다."""
+    if not os.path.isfile(exe_path):
+        return None
+    file_size = os.path.getsize(exe_path)
+    if file_size < SIGN_TRAILER_SIZE_V1:
+        return None
+
+    with open(exe_path, "rb") as f:
+        f.seek(-SIGN_TRAILER_SIZE_V1, os.SEEK_END)
+        trailer_raw = f.read(SIGN_TRAILER_SIZE_V1)
+        magic, desc_ver, _payload_len, _sig_len, _reserved = _SIGN_TRAILER_STRUCT_V1.unpack(trailer_raw)
+        if magic != SIGN_MAGIC:
+            return None
+        return desc_ver
+
+
+def strip_existing_eof_metadata(exe_path: str) -> int:
+    """EXE 끝에 이미 주입된 SIGVER3! 블록(v1 또는 v2)을 제거하고 제거된 바이트 수를 반환합니다."""
+    desc_ver = _detect_eof_descriptor_version(exe_path)
+    if desc_ver == DESCRIPTOR_VERSION_V2:
+        return strip_v2_eof_metadata(exe_path)
+    if desc_ver == DESCRIPTOR_VERSION_V1:
+        return strip_v1_eof_metadata(exe_path)
+    return 0
+
+
+def sign_exe_authenticode(exe_path: str, cwd: str | None = None) -> bool:
+    """
+    signtool.exe를 이용해 EXE 코드 서명(Authenticode)을 적용합니다.
+    CODESIGN_PFX_PATH가 설정되지 않으면 서명을 건너뛰고 False를 반환합니다.
+    """
+    if not exe_path or not os.path.isfile(exe_path):
+        raise FileNotFoundError(f"서명할 EXE 파일이 없습니다: {exe_path}")
+
+    pfx_path = os.getenv("CODESIGN_PFX_PATH", "").strip()
+    if not pfx_path:
+        logd(f"⚠️ [Authenticode 생략] CODESIGN_PFX_PATH 미설정: {exe_path}")
+        return False
+
+    pfx_password = os.getenv("CODESIGN_PFX_PASSWORD", "").strip()
+    timestamp_url = os.getenv("CODESIGN_TIMESTAMP_URL", "http://timestamp.digicert.com").strip()
+
+    signtool = shutil.which("signtool") or shutil.which("signtool.exe")
+    if not signtool:
+        raise RuntimeError("signtool.exe를 찾을 수 없습니다. Windows SDK 설치 경로를 확인하세요.")
+
+    cmd = [signtool, "sign", "/fd", "SHA256", "/f", pfx_path]
+    if pfx_password:
+        cmd.extend(["/p", pfx_password])
+    if timestamp_url:
+        cmd.extend(["/tr", timestamp_url, "/td", "SHA256"])
+    cmd.append(exe_path)
+
+    res = subprocess.run(
+        cmd,
+        cwd=cwd or os.path.dirname(os.path.abspath(exe_path)),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if res.returncode != 0:
+        raise RuntimeError(f"Authenticode 서명 실패(exit={res.returncode}): {res.stdout or res.stderr}")
+
+    logd(f"🔏 [Authenticode 완료] {os.path.basename(exe_path)}")
+    return True
+
+
+def sign_and_inject_metadata_to_exe(
+    exe_path: str,
+    version_str: str,
+    user_name: str = None,
+    app_name: str = None,
+    git_commit: str = None,
+    git_message: str = None,
+    mode: str = "production",
+    host_name: str = None,
+    cpuid: str = None,
+    dirty: bool | str | None = None,
+    build_id: str = None,
+    cwd: str = None,
+    private_key: Ed25519PrivateKey | None = None,
+    authenticode: bool = False,
+    write_sha256: bool = False,
+    descriptor_version: int = DESCRIPTOR_VERSION_V1,
+) -> dict:
+    """
+    메타데이터 payload + payload_sha256 + Ed25519 서명을 EXE 끝에 주입합니다.
+    descriptor_version=1은 exe_version_desc_v1, descriptor_version=2는 exe_version_desc_v2로 위임합니다.
+    """
     if not os.path.exists(exe_path):
         raise FileNotFoundError(f"대상 실행 파일을 찾을 수 없습니다: {exe_path}")
 
-    # 💡 암호화할 때는 첫 번째 유효한 키(메인 키 또는 디폴트 키)를 사용
-    active_key = None
-    for k in EXE_VERSION_SECRET_KEYS:
-        if k:
-            active_key = k
-            break
-            
-    if not active_key:
-        raise ValueError("사용 가능한 유효한 대칭키가 없습니다.")
+    removed_prev = strip_existing_eof_metadata(exe_path)
+    if removed_prev > 0:
+        logd(f"♻️ [기존 EOF 블록 제거] {removed_prev}B 제거 후 재주입합니다: {exe_path}")
 
-    cipher = Fernet(active_key)
-    encrypted_data = cipher.encrypt(version_str.encode("utf-8"))
-    
-    # 64바이트 마킹 푸터 생성
-    metadata_footer = create_metadata_footer(user_name)
+    priv_key = private_key or load_private_key_from_env()
+    resolved_app = app_name or os.path.splitext(os.path.basename(exe_path))[0]
+    ver_int = int(descriptor_version)
 
-    with open(exe_path, "ab") as f:
-        f.write(encrypted_data)   # 1. 암호화된 버전 토큰 주입
-        f.write(metadata_footer)  # 2. 파일 맨 끝에 64바이트 메타데이터 주입
-        
-    print(f"[SUCCESS] '{version_str}' 토큰 및 64바이트 마킹 정보가 {exe_path} 끝에 기록되었습니다.")
+    if ver_int == DESCRIPTOR_VERSION_V2:
+        result = sign_and_inject_v2(
+            exe_path=exe_path,
+            version_str=version_str,
+            private_key=priv_key,
+            user_name=user_name,
+            app_name=resolved_app,
+            git_commit=git_commit,
+            git_message=git_message,
+            mode=mode,
+            host_name=host_name,
+            cpuid=cpuid,
+            dirty=dirty,
+            build_id=build_id,
+            cwd=cwd,
+        )
+    elif ver_int == DESCRIPTOR_VERSION_V1:
+        result = sign_and_inject_v1(
+            exe_path=exe_path,
+            version_str=version_str,
+            private_key=priv_key,
+            user_name=user_name,
+            app_name=resolved_app,
+            git_commit=git_commit,
+            git_message=git_message,
+            mode=mode,
+            host_name=host_name,
+            dirty=dirty,
+            build_id=build_id,
+            cwd=cwd,
+        )
+    else:
+        raise ValueError(f"지원하지 않는 descriptor_version입니다: {descriptor_version}")
+
+    if authenticode:
+        sign_exe_authenticode(exe_path, cwd=cwd)
+
+    exe_sha256 = write_sha256_sidecar(exe_path) if write_sha256 else compute_file_sha256(exe_path)
+    result["exe_sha256"] = exe_sha256
+    result["file_size_bytes"] = os.path.getsize(exe_path)
+
+    signed_payload = result["items"]
+    total_injected = result["sizes"]["total_injected_bytes"]
+    logd(
+        f"[SIGNED METADATA INJECTED v{ver_int}] exe={os.path.abspath(exe_path)} | "
+        f"version={signed_payload['version']} | host={signed_payload['host']} | "
+        f"payload_sha256={signed_payload['payload_sha256'][:12]}... | "
+        f"injected={total_injected}B | exe_sha256={exe_sha256[:12]}..."
+    )
+    return result
 
 
-def extract_version_from_exe(exe_path: str) -> str:
-    """지정된 .exe 파일 끝(EOF)에서 암호화된 버전 토큰을 순차적인 키로 복호화 시도"""
+def verify_and_read_exe_metadata(
+    exe_path: str,
+    public_key_pem: str | bytes | None = None,
+) -> dict:
+    """
+    EXE 파일 끝에서 서명된 메타데이터(v1 또는 v2)를 읽고,
+    Ed25519 전자서명 및 payload_sha256 무결성을 검증합니다.
+    """
     if not os.path.exists(exe_path):
-        return "파일 없음"
+        return {"verified": False, "error": "파일 없음"}
+
+    file_size = os.path.getsize(exe_path)
+    if file_size < SIGN_TRAILER_SIZE_V1:
+        return {"verified": False, "error": "파일 크기 부족"}
+
+    desc_ver = _detect_eof_descriptor_version(exe_path)
+    if desc_ver not in (DESCRIPTOR_VERSION_V1, DESCRIPTOR_VERSION_V2):
+        return {"verified": False, "error": "유효한 SIGVER3! 트레일러를 찾을 수 없습니다."}
 
     try:
-        with open(exe_path, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            file_size = f.tell()
-            if file_size < 64:
-                return "파일 크기 부족 (메타데이터 없음)"
+        pub_key = load_public_key(public_key_pem)
+    except Exception as exc:
+        return {"verified": False, "error": f"공개키 로드/검증 오류: {exc}"}
 
-            read_size = min(320, file_size)
-            f.seek(-read_size, os.SEEK_END)
-            tail_data = f.read(read_size)
+    if desc_ver == DESCRIPTOR_VERSION_V2:
+        return verify_and_read_v2(exe_path=exe_path, public_key=pub_key)
+    return verify_and_read_v1(exe_path=exe_path, public_key=pub_key)
 
-            search_area = tail_data[:-64]
-            start_idx = search_area.find(b'gAAAAA')
-            if start_idx == -1:
-                return "미적용 (EOF 토큰 없음)"
 
-            encrypted_token = search_area[start_idx:]
-            
-            # 💡 등록된 키들을 순서대로 복호화 시도 (메인 키 실패 시 def 키로 시도)
-            version_str = None
-            for key in EXE_VERSION_SECRET_KEYS:
-                if not key:
-                    continue
-                try:
-                    cipher = Fernet(key)
-                    version_str = cipher.decrypt(encrypted_token).decode("utf-8")
-                    break  # 복호화 성공 시 루프 탈출
-                except InvalidToken:
-                    continue  # 현재 키로 실패하면 다음 키 시도
-                except Exception:
-                    continue
+def extract_version_from_exe(exe_path: str) -> str | None:
+    """EXE에서 서명/해시를 검증한 뒤 version 문자열을 반환합니다. 실패 시 None."""
+    result = verify_and_read_exe_metadata(exe_path)
+    if not result.get("verified"):
+        loge(f"EXE 버전 추출/검증 실패 ({exe_path}): {result.get('error')}", tag="EXE_SIGN")
+        return None
 
-            if not version_str:
-                return "복호화 오류 (유효한 키 없음)"
-            
-            # 64바이트 마킹 정보(누가, 언제) 확인
-            meta = read_metadata_footer(exe_path)
-            if meta:
-                logd(f"   📌 [마킹 이력] 일시: {meta.get('time')} | 작업자/PC: {meta.get('who')}")
-                
-            return version_str
-    except Exception as e:
-        return f"복호화 오류 ({e})"
+    items = result["items"]
+    ver = items.get("version")
+    return str(ver) if ver is not None else None
 
 
 def get_runtime_decrypted_version(fallback_version: str = "1.2.0") -> str:
-    """실행 중인 프로세스(.exe) 자신의 암호화된 버전을 반환 (개발 모드 시 fallback 반환)"""
-    if not getattr(sys, 'frozen', False):
+    """실행 중인 프로세스(.exe) 자신의 서명된 버전을 검증하여 반환합니다."""
+    if not getattr(sys, "frozen", False):
         return f"{fallback_version} (Dev Mode)"
-    return extract_version_from_exe(sys.executable)
+    extracted = extract_version_from_exe(sys.executable)
+    return extracted if extracted else f"{fallback_version} (Verify Fallback)"
+
+
+def read_bundled_version_txt(default_version: str = "1.2.0") -> str:
+    """개발 환경 또는 빌드된 EXE(.exe) 내부/인접 경로에서 version.txt를 읽어 반환합니다."""
+    candidate_paths: list[str] = []
+
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            candidate_paths.append(os.path.join(meipass, "version.txt"))
+        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+        candidate_paths.append(os.path.join(exe_dir, "version.txt"))
+        candidate_paths.append(os.path.join(os.path.dirname(exe_dir), "version.txt"))
+    else:
+        cur = os.path.abspath(os.path.dirname(__file__))
+        for _ in range(6):
+            candidate_paths.append(os.path.join(cur, "version.txt"))
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                break
+            cur = parent
+
+    for p in candidate_paths:
+        if p and os.path.isfile(p):
+            try:
+                with open(p, "r", encoding="utf-8-sig") as f:
+                    ver = f.read().strip()
+                if ver:
+                    return ver
+            except Exception:
+                pass
+
+    return default_version
+
+
+def encrypt_all_items_to_exe(exe_path: str, version_str: str, **kwargs) -> dict:
+    return sign_and_inject_metadata_to_exe(exe_path=exe_path, version_str=version_str, **kwargs)
+
+
+def encrypt_and_append_version(exe_path: str, version_str: str, **kwargs) -> dict:
+    return sign_and_inject_metadata_to_exe(exe_path=exe_path, version_str=version_str, **kwargs)
+
+
+def decrypt_all_items_from_exe(exe_path: str) -> dict:
+    return verify_and_read_exe_metadata(exe_path=exe_path)
+
+
+def _parse_cli_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="EXE EOF 메타데이터 전자서명(SIGVER3! / Ed25519 / SHA-256 / Authenticode) 및 검증 CLI"
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    p_sign = subparsers.add_parser("sign", help="EXE 파일 끝에 서명된 메타데이터 주입")
+    p_sign.add_argument("exe_path", help="대상 .exe 경로")
+    p_sign.add_argument("--version", required=True, help="버전 문자열 (예: v1.2.0-production)")
+    p_sign.add_argument("--app", default="PrintShopApp", help="앱 이름")
+    p_sign.add_argument("--mode", default="production", help="빌드 모드")
+    p_sign.add_argument("--desc-ver", type=int, default=DESCRIPTOR_VERSION_V1, choices=[1, 2], help="디스크립터 버전 (1 또는 2)")
+    p_sign.add_argument("--cwd", default=None, help="Git 메타데이터 수집 기준 디렉터리")
+    p_sign.add_argument("--authenticode", action="store_true", help="Authenticode 코드 서명 적용")
+    p_sign.add_argument("--sha256", action="store_true", help=".sha256 체크섬 파일 생성")
+
+    p_verify = subparsers.add_parser("verify", help="EXE 서명/해시 검증 및 전체 메타데이터 출력")
+    p_verify.add_argument("exe_path", help="대상 .exe 경로")
+
+    p_ver = subparsers.add_parser("version", help="서명 검증 후 버전 문자열 출력")
+    p_ver.add_argument("exe_path", help="대상 .exe 경로")
+
+    p_self = subparsers.add_parser("self", help="현재 실행 중인 프로세스(.exe)의 서명 검증 및 버전 출력")
+
+    return parser.parse_args(argv)
+
+
+def _cli_main(argv: list[str] | None = None) -> int:
+    args = _parse_cli_args(argv)
+
+    if args.command == "sign":
+        res = sign_and_inject_metadata_to_exe(
+            exe_path=args.exe_path,
+            version_str=args.version,
+            app_name=args.app,
+            mode=args.mode,
+            cwd=args.cwd,
+            authenticode=args.authenticode,
+            write_sha256=args.sha256,
+            descriptor_version=args.desc_ver,
+        )
+        logd(json.dumps(res, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "verify":
+        res = verify_and_read_exe_metadata(args.exe_path)
+        if os.path.isfile(args.exe_path):
+            res["exe_sha256"] = compute_file_sha256(args.exe_path)
+        logd(json.dumps(res, ensure_ascii=False, indent=2))
+        return 0 if res.get("verified") else 1
+
+    if args.command == "version":
+        ver = extract_version_from_exe(args.exe_path)
+        if ver is None:
+            loge("버전 추출/검증 실패")
+            return 1
+        logd(ver)
+        return 0
+
+    if args.command == "self":
+        ver = get_runtime_decrypted_version(fallback_version=read_bundled_version_txt())
+        logd(ver)
+        return 0
+
+    loge(f"알 수 없는 명령: {args.command}")
+    return 1
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="PrintShopApp EXE 버전 리소스 생성 및 EOF 암호화/메타데이터 마킹 CLI")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    sys.exit(_cli_main())
 
-    # 1. 리소스 파일 생성 서브커맨드
-    p_gen = subparsers.add_parser("gen-rc", help="version.txt 기반 version_info.txt 생성")
-    p_gen.add_argument("--version-file", default="version.txt")
-    p_gen.add_argument("--out", default="version_info.txt")
-    p_gen.add_argument("--name", default="PrintShopApp")
+# '''
 
-    # 2. EXE 끝 암호화 주입 서브커맨드 (64바이트 마킹 포함)
-    p_inject = subparsers.add_parser("inject", help="EXE 파일 끝에 버전 문자열 암호화 및 64바이트 마킹 삽입")
-    p_inject.add_argument("--exe", required=True, help="대상 .exe 경로")
-    p_inject.add_argument("--version-file", default="version.txt")
-    p_inject.add_argument("--mode", default="production")
-    p_inject.add_argument("--who", default=None, help="마킹 작업자명 (미입력 시 현재 윈도우 계정 자동 입력)")
+# with open("exe_version_desc_v1.py", "w", encoding="utf-8") as f:
+#     f.write(v1_code.lstrip("\n"))
 
-    # 3. EXE 끝 복호화 추출 서브커맨드 (마킹 정보 확인 포함)
-    p_extract = subparsers.add_parser("extract", help="EXE 파일 끝에서 암호화된 버전 및 마킹 정보 추출")
-    p_extract.add_argument("exe_path", help="대상 .exe 경로")
+# with open("exe_version_desc_v2.py", "w", encoding="utf-8") as f:
+#     f.write(v2_code.lstrip("\n"))
 
-    args = parser.parse_args()
+# with open("exe_version_crypto_2.py", "w", encoding="utf-8") as f:
+#     f.write(dispatcher_code.lstrip("\n"))
 
-    if args.command == "gen-rc":
-        with open(args.version_file, "r", encoding="utf-8") as f:
-            ver = f.read().strip()
-        generate_win_version_info(ver, args.out, args.name)
-        print(f"[INFO] {args.out} 생성 완료 (v{ver})")
-
-    elif args.command == "inject":
-        with open(args.version_file, "r", encoding="utf-8") as f:
-            ver = f.read().strip()
-        payload = f"v{ver}-{args.mode}"
-        encrypt_and_append_version(args.exe, payload, user_name=args.who)
-
-    elif args.command == "extract":
-        extracted = extract_version_from_exe(args.exe_path)
-        print("=" * 50)
-        print(f"📁 대상 파일: {os.path.basename(args.exe_path)}")
-        print(f"🔍 추출된 버전: {extracted}")
-        print("=" * 50)
+# print("Generated exe_version_desc_v1.py, exe_version_desc_v2.py, exe_version_crypto_2.py")

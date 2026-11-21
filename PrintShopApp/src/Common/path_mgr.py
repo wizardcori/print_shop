@@ -13,6 +13,9 @@ class PathMgr:
     CUSTOM_DATA_DIR = None
     FROZEN_EXE_MODE = False
 
+    SRC_DIR = ""
+    PROJECT_ROOT = ""
+
     # 클래스 변수 선언
     APPLICATION_DIR = ""
     PROGRAM_DATA_DIR = ""
@@ -44,10 +47,29 @@ class PathMgr:
         return None
 
     @classmethod
-    def refresh_paths(cls, user_data_dir=None):
+    def refresh_paths(cls, user_data_dir=None, project_root: str | None = None):
         """
         명령줄 인자나 환경에 따라 모든 경로 클래스 변수들을 다시 계산합니다.
         """
+
+        if project_root:
+            root_path = os.path.abspath(project_root)
+            src_path = os.path.join(root_path, "src")
+        else:
+            # path_mgr.py 위치 기준으로 프로젝트 루트/src 추론 (필요에 맞게 단계 조정)
+            here = os.path.abspath(os.path.dirname(__file__))
+            if cls.FROZEN_EXE_MODE:
+                root_path = os.path.dirname(sys.executable)
+                src_path = os.path.join(root_path, "src")
+            else:
+                # 예: src/<패키지>/path_mgr.py 구조인 경우
+                src_path = os.path.abspath(os.path.join(here, ".."))
+                root_path = os.path.abspath(os.path.join(src_path, ".."))
+
+        cls.SRC_DIR = src_path
+        cls.PROJECT_ROOT = root_path
+
+
         if user_data_dir:
             cls.CUSTOM_DATA_DIR = user_data_dir
         else:
