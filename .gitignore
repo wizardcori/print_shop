@@ -159,5 +159,6 @@ releases/
 *.zip
 *.log
 *.ini
+*.bak
 
 exe_version_public_key.py
