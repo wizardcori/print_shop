@@ -23,7 +23,7 @@ VSVersionInfo(
           StringStruct(u'LegalCopyright', u'Copyright (C) PrintShop'),
           StringStruct(u'OriginalFilename', u'PrintShopBuildManagerApp.exe'),
           StringStruct(u'ProductName', u'PrintShopBuildManagerApp'),
-          StringStruct(u'ProductVersion', u'1.2.5'),
+          StringStruct(u'ProductVersion', u'1.2.12'),
           ]
         )
       ]

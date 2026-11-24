@@ -1,0 +1,33 @@
+# UTF-8
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(0, 0, 0, 0),
+    prodvers=(0, 0, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo(
+      [
+        StringTable(
+          u'040904B0',
+          [
+          StringStruct(u'CompanyName', u'PrintShop'),
+          StringStruct(u'FileDescription', u'PrintShopApp Executable'),
+          StringStruct(u'FileVersion', u'0.0.0.0'),
+          StringStruct(u'InternalName', u'PrintShopApp'),
+          StringStruct(u'LegalCopyright', u'Copyright (C) PrintShop'),
+          StringStruct(u'OriginalFilename', u'PrintShopApp.exe'),
+          StringStruct(u'ProductName', u'PrintShopApp'),
+          StringStruct(u'ProductVersion', u'1.2.0'),
+          ]
+        )
+      ]
+    ),
+    VarFileInfo([VarStruct(u'Translation', [1033, 1200])])
+  ]
+)

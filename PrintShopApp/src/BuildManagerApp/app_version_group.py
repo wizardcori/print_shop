@@ -453,6 +453,19 @@ class AppTargetCardWidget(QGroupBox):
             self.chk_bump.blockSignals(False)
 
     def set_prev_meta(self, result: dict[str, Any] | None):
+        source_label = ""
+        if isinstance(result, dict):
+            source_label = str(
+                result.get("_source_label")
+                or (result.get("items") or {}).get("source")
+                or ""
+            ).strip()
+
+        if hasattr(self, "prev_box") and hasattr(self.prev_box, "setTitle"):
+            self.prev_box.setTitle(
+                f"이전버전 ({source_label})" if source_label else "이전버전 (EXE)"
+            )
+
         self.prev_box.update_from_decrypt_result(result, empty_msg="이전 EXE 없음")
 
     def set_next_meta(self, result: dict[str, Any] | None):

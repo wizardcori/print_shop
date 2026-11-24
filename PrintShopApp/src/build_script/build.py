@@ -26,8 +26,8 @@ for p in (str(PROJECT_ROOT), str(SRC_DIR), str(CURRENT_DIR)):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from artifact_signing import inject_and_verify_exe  # noqa: E402
-from build_targets import (  # noqa: E402
+from build_script.artifact_signing import inject_and_verify_exe  # noqa: E402
+from build_script.build_targets import (  # noqa: E402
     AppTargetSpec,
     BuildDirConfig,
     BuildTargets,
@@ -38,15 +38,15 @@ from build_targets import (  # noqa: E402
 )
 from Common.log import logd, loge  # noqa: E402
 from Common.step_timer import BuildStepTimer  # noqa: E402
-from env_ui_helper import (  # noqa: E402
+from build_script.env_ui_helper import (  # noqa: E402
     convert_ui_files,
     resolve_built_exe_path,
     resolve_python_executable,
 )
-from packaging_service import PackagingService  # noqa: E402
-from spec_builder import SpecAndPyInstallerBuilder  # noqa: E402
-from target_config_io import InstallerBuildConfig, normalize_bump_unit  # noqa: E402
-from version_service import VersionService  # noqa: E402
+from build_script.packaging_service import PackagingService  # noqa: E402
+from build_script.spec_builder import SpecAndPyInstallerBuilder  # noqa: E402
+from build_script.target_config_io import InstallerBuildConfig, normalize_bump_unit  # noqa: E402
+from build_script.version_service import VersionService  # noqa: E402
 
 try:
     from Common.prio_worker_queue import CancelToken, kill_process_tree  # noqa: E402

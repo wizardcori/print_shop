@@ -25,16 +25,14 @@ C:/1print_shop/PrintShopApp/
 import os
 import sys
 import re
-import json
-import base64
 import zipfile
 import shutil
 from packaging import version
 
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QLabel, 
-    QLineEdit, QPushButton, QMessageBox, QTableWidget, QTableWidgetItem, 
-    QHeaderView, QFileDialog, QInputDialog, QProgressBar, QTabWidget, 
+    QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, QLabel,
+    QLineEdit, QPushButton, QMessageBox, QTableWidget, QTableWidgetItem,
+    QHeaderView, QFileDialog, QInputDialog, QProgressBar, QTabWidget,
     QWidget, QTextEdit
 )
 from PySide6.QtCore import Qt, Slot
@@ -61,79 +59,83 @@ from github_update_sync_manager import GitHubUpdateSyncManager, LocalVersionMap,
 from UpdateManager.update_manager_settings_dialog import UpdateManagerSettingsDialog
 from Common.Version.exe_version_crypto import extract_version_from_exe, encrypt_and_append_version
 
-from Common.prio_worker_queue import TaskManager, TaskPriority
+from Common.prio_worker_queue import TaskListenerBase, TaskManager, TaskPriority
+
+
+class UpdateManagerTaskListener(TaskListenerBase):
+    """UpdateManagerWindow 전용 작업 이벤트 리스너."""
+
+    def __init__(self, window: "UpdateManagerWindow") -> None:
+        super().__init__(owner_widget=window)
+        self._window = window
+
+    def on_task_progress(self, task_key: str, task_name: str, percent: int, message: str) -> None:
+        self._window.on_task_progress(task_name, percent, message)
+
+    def on_task_finished(self, task_key: str, task_name: str, status: str, data) -> None:
+        self._window.on_task_finished(task_name, status, data)
 
 
 class UpdateManagerWindow(QMainWindow):
     """메인 윈도우 UI (QMainWindow 기반 및 우선순위 큐 시스템 연동)"""
+
     def __init__(self, config_manager: GitHubConfigManager, parent=None):
         super().__init__(parent)
-        
+
         self.window_id = "GITHUB_SETTINGS_WIN"
         self.config_manager = config_manager
         self.setWindowTitle("GitHub 및 업데이트 시스템 통합 매니저 (Priority Queue)")
         self.resize(900, 700)
 
+        self._task_listener = UpdateManagerTaskListener(self)
+        self.destroyed.connect(lambda *_: TaskManager().on_window_closing(self._task_listener))
+
         worker = TaskManager().get_worker()
-        worker.task_progress.connect(self._handle_global_progress)
-        worker.task_finished.connect(self._handle_global_finished)
         worker.queue_updated.connect(self._handle_global_queue)
         worker.current_task_changed.connect(self._handle_global_current)
 
         self.last_selected_dir = os.getcwd()
-        logd("GitHubSettingsDialog 메인 윈도우 초기화 시작")
-        
+        logd("UpdateManagerWindow 메인 윈도우 초기화 시작")
+
         self.current_sync_data = []
         self.cached_remote_sha = None
         self.active_task_keys = []
         self._batch_progress_map = {}
-        
+
         # 데이터 클래스 기반 맵 객체 캐시 초기화
         self.cached_local_version_map = {}
-        
+
         self.upload_progress_dialog = UploadProgressDialog(self)
         self.upload_progress_dialog.cancel_all_signal.connect(self.on_cancel_all)
         self.upload_progress_dialog.cancel_item_signal.connect(self.on_cancel_item)
-        
+
         container = QWidget(self)
         main_layout = QVBoxLayout(container)
-        
+
         self.tabs = QTabWidget(self)
         main_layout.addWidget(self.tabs)
-        
+
         self.tab_sync = QWidget()
         self.init_sync_tab(self.tab_sync)
         self.tabs.addTab(self.tab_sync, "🚀 버전 싱크 및 배포 관리")
-        
+
         self.tab_remote_json = QWidget()
         self.init_remote_json_tab(self.tab_remote_json)
         self.tabs.addTab(self.tab_remote_json, "🔍 원격 version.json 검증/수정")
 
         self.setCentralWidget(container)
 
-    @Slot(str, str, int, str)
-    def _handle_global_progress(self, owner_id, task_name, percent, message):
-        if owner_id == self.window_id: 
-            self.on_task_progress(task_name, percent, message)
-
-    @Slot(str, str, tuple)
-    def _handle_global_finished(self, owner_id, task_name, response):
-        if owner_id == self.window_id:
-            status, data = response
-            self.on_task_finished(task_name, status, data)
-
     @Slot(list)
-    def _handle_global_queue(self, task_names): 
+    def _handle_global_queue(self, task_names):
         self.on_queue_updated(task_names)
 
-    @Slot(str, str)
-    def _handle_global_current(self, owner_id, task_name):
-        if owner_id == self.window_id or owner_id == "": 
-            self.on_current_task_changed(owner_id, task_name)
+    @Slot(str)
+    def _handle_global_current(self, task_name):
+        self.on_current_task_changed(self.window_id, task_name)
 
     def init_sync_tab(self, tab: QWidget):
         layout = QVBoxLayout(tab)
-        
+
         top_bar_layout = QHBoxLayout()
         top_bar_layout.addWidget(QLabel("<b>[PrintShop 업데이트 관리자 - 우선순위 큐 시스템]</b>"))
         top_bar_layout.addStretch()
@@ -142,18 +144,18 @@ class UpdateManagerWindow(QMainWindow):
         self.btn_open_github.setStyleSheet("font-weight: bold; color: #569CD6; background-color: #2D2D2D;")
         self.btn_open_github.clicked.connect(self.open_github_repo_in_browser)
         top_bar_layout.addWidget(self.btn_open_github)
-        
+
         self.btn_open_settings = QPushButton("⚙️ 환경 및 로그 설정...", self)
         self.btn_open_settings.setStyleSheet("font-weight: bold; color: #D7BA7D; background-color: #2D2D2D;")
         self.btn_open_settings.clicked.connect(self.open_settings_dialog)
         top_bar_layout.addWidget(self.btn_open_settings)
         layout.addLayout(top_bar_layout)
-        
+
         self.progress_bar = QProgressBar(self)
         self.progress_bar.setRange(0, 0)
         self.progress_bar.hide()
         layout.addWidget(self.progress_bar)
-        
+
         file_action_layout = QHBoxLayout()
         self.btn_add_update_file = QPushButton("📁 신규 업데이트 파일(.zip/.exe) 선택 및 큐 등록 (업로드)", self)
         self.btn_add_update_file.setStyleSheet("font-weight: bold; color: #DCDCAA; background-color: #2D2D2D;")
@@ -165,34 +167,34 @@ class UpdateManagerWindow(QMainWindow):
         self.btn_inject_version_upload = QPushButton("✏️ 신규 업데이트 버전 주입 & 업로드", self)
         self.btn_inject_version_upload.setStyleSheet("background-color: #388A34; font-weight: bold; color: white;")
         self.btn_inject_version_upload.clicked.connect(self.handle_inject_version_and_upload)
-        inject_layout.addWidget(self.btn_inject_version_upload)        
+        inject_layout.addWidget(self.btn_inject_version_upload)
 
         self.btn_force_inject = QPushButton("⚡ 버전 강제주입", self)
         self.btn_force_inject.setStyleSheet("background-color: #C586C0; font-weight: bold; color: white;")
         self.btn_force_inject.clicked.connect(self.handle_force_inject_queue)
         inject_layout.addWidget(self.btn_force_inject)
-        
+
         layout.addLayout(inject_layout)
-        
+
         sync_action_layout = QHBoxLayout()
         self.btn_upload_selected = QPushButton("🚀 선택 버전을 큐에 담아 원격 업로드", self)
         self.btn_upload_selected.setStyleSheet("font-weight: bold; color: #4EC9B0; background-color: #1E1E1E;")
         self.btn_upload_selected.clicked.connect(self.upload_selected_versions)
         sync_action_layout.addWidget(self.btn_upload_selected)
-        
+
         self.btn_open_upload_dlg = QPushButton("📊 진행 상태 창 열기", self)
         self.btn_open_upload_dlg.setStyleSheet("font-weight: bold; color: #D7BA7D; background-color: #1E1E1E;")
         self.btn_open_upload_dlg.clicked.connect(self.upload_progress_dialog.show)
         sync_action_layout.addWidget(self.btn_open_upload_dlg)
-        
+
         self.btn_download_selected = QPushButton("⬇️ 선택 버전을 큐에 담아 로컬 다운로드", self)
         self.btn_download_selected.setStyleSheet("font-weight: bold; color: #569CD6; background-color: #1E1E1E;")
         self.btn_download_selected.clicked.connect(self.download_selected_versions)
         sync_action_layout.addWidget(self.btn_download_selected)
         layout.addLayout(sync_action_layout)
-        
+
         btn_layout = QHBoxLayout()
-        
+
         self.btn_check_local_versions = QPushButton("🔍 로컬버전 체크", self)
         self.btn_check_local_versions.setStyleSheet("font-weight: bold; color: #4EC9B0; background-color: #2D2D2D;")
         self.btn_check_local_versions.clicked.connect(self.handle_local_version_check)
@@ -203,55 +205,55 @@ class UpdateManagerWindow(QMainWindow):
         self.btn_sync_check.setStyleSheet("font-weight: bold; color: #569CD6; background-color: #2D2D2D;")
         self.btn_sync_check.clicked.connect(self.handle_remote_version_check)
         btn_layout.addWidget(self.btn_sync_check)
-        layout.addLayout(btn_layout)
 
         self.btn_auto_sync_json = QPushButton("🔄 원격 version.json 자동 정렬", self)
         self.btn_auto_sync_json.setStyleSheet("font-weight: bold; color: #4EC9B0;")
         self.btn_auto_sync_json.clicked.connect(self.auto_sync_remote_json_action)
-        btn_layout.addWidget(self.btn_auto_sync_json)        
+        btn_layout.addWidget(self.btn_auto_sync_json)
+
+        layout.addLayout(btn_layout)
 
         self.table = QTableWidget(self)
-        self.table.setColumnCount(7)  # 컬럼 수 7개로 확장
+        self.table.setColumnCount(7)
         self.table.setHorizontalHeaderLabels([
             "순서", "선택", "Local 버전", "싱크 상태", "로컬/GitHub 유무", "GitHub 버전", "원격 릴리스 관리"
         ])
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive) # Local 버전
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive) # 싱크 상태
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)     # 로컬/GitHub 유무
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Interactive) # GitHub 버전 (새로 추가)
-        header.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents) # 원격 릴리스 관리
-        
-        
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
+
         self.table.cellDoubleClicked.connect(self.on_table_cell_double_clicked)
         layout.addWidget(self.table)
 
     def init_remote_json_tab(self, tab: QWidget):
         layout = QVBoxLayout(tab)
         layout.addWidget(QLabel("<b>[원격 저장소 version.json 검증 및 수동 제어]</b>"))
-        
+
         self.txt_remote_content = QTextEdit(self)
         self.txt_remote_content.setPlaceholderText("상단의 [원격 조회 및 검증] 버튼을 누르면 내용이 표시됩니다.")
         layout.addWidget(self.txt_remote_content)
-        
+
         edit_form = QVBoxLayout()
         edit_form.addWidget(QLabel("강제 적용할 목표 버전 (예: 1.3.0):"))
         self.input_force_ver = QLineEdit(self)
         edit_form.addWidget(self.input_force_ver)
-        
+
         edit_form.addWidget(QLabel("강제 적용할 다운로드 URL (비워두면 자동 조합):"))
         self.input_force_url = QLineEdit(self)
         edit_form.addWidget(self.input_force_url)
         layout.addLayout(edit_form)
-        
+
         action_hbox = QHBoxLayout()
         self.btn_fetch_remote = QPushButton("📥 1) 원격 조회 및 검증", self)
         self.btn_fetch_remote.setStyleSheet("font-weight: bold; color: #569CD6;")
         self.btn_fetch_remote.clicked.connect(self.fetch_remote_json_action)
         action_hbox.addWidget(self.btn_fetch_remote)
-        
+
         self.btn_force_update = QPushButton("📤 2) 원격 version.json 강제 수정", self)
         self.btn_force_update.setStyleSheet("font-weight: bold; color: #D7BA7D;")
         self.btn_force_update.clicked.connect(self.force_update_remote_json_action)
@@ -262,11 +264,11 @@ class UpdateManagerWindow(QMainWindow):
         config = self.config_manager.load_config()
         owner = config.get("repo_owner", "").strip()
         repo = config.get("repo_name", "").strip()
-        
+
         if not owner or not repo:
             QMessageBox.warning(self, "경고", "환경 설정에 GitHub 소유자(Owner) 또는 리포지토리(Repo) 이름이 설정되어 있지 않습니다.")
             return
-            
+
         url = f"https://github.com/{owner}/{repo}"
         try:
             import webbrowser
@@ -285,7 +287,7 @@ class UpdateManagerWindow(QMainWindow):
             stat = self.current_sync_data[row]
             version_str = stat.get("version", "")
             local_path = stat.get("local_path")
-            
+
             if local_path and os.path.exists(local_path):
                 os.system(f'explorer /select,"{os.path.normpath(local_path)}"')
             else:
@@ -295,7 +297,7 @@ class UpdateManagerWindow(QMainWindow):
                     os.startfile(os.path.normpath(version_dir))
                 else:
                     QMessageBox.information(
-                        self, "알림", 
+                        self, "알림",
                         f"버전 v{version_str}의 로컬 파일이 존재하지 않습니다."
                     )
 
@@ -321,20 +323,18 @@ class UpdateManagerWindow(QMainWindow):
         self.upload_progress_dialog.update_item_progress(version_str, 0, "취소됨", f"⚠️ 버전 v{version_str} 작업이 취소되었습니다.")
 
     def delete_remote_release_action(self, version_str: str):
-        # 1. 현재 화면(또는 캐시)에서 해당 버전의 유무 상태(O/X) 정보 탐색
         target_stat = None
         for stat in self.current_sync_data:
             if stat.get("version") == version_str:
                 target_stat = stat
                 break
-        
+
         if not target_stat and hasattr(self, "cached_local_version_map"):
             for fname, info in self.cached_local_version_map.items():
                 if info.version == version_str or info.inner_version == version_str:
                     target_stat = info.to_dict()
                     break
 
-        # 2. 'O'로 존재하는 항목들만 골라내어 리스트로 구성
         existing_items = []
         if target_stat:
             if target_stat.get("has_release", False):
@@ -343,17 +343,16 @@ class UpdateManagerWindow(QMainWindow):
                 existing_items.append("ZIP 에셋")
             if target_stat.get("has_tag", False):
                 existing_items.append("Tag")
-        
+
         items_str = ", ".join(existing_items) if existing_items else "릴리스 및 태그"
 
-        # 3. 상세히 표시되는 삭제 확인 메시지 박스 호출
         reply = QMessageBox.question(
             self, "원격 릴리스 삭제 확인",
             f"GitHub에 있는 버전 v{version_str}의 다음 항목을 정말 삭제하시겠습니까?\n\n"
             f"📍 감지된 항목: [ {items_str} ]",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
-        
+
         if reply == QMessageBox.StandardButton.Yes:
             manager = self.get_sync_manager()
             success = manager.delete_github_release(version_str)
@@ -366,17 +365,24 @@ class UpdateManagerWindow(QMainWindow):
     def fetch_remote_json_action(self):
         manager = self.get_sync_manager()
         self.progress_bar.show()
-        
+
         task_key = f"{self.window_id}_FETCH_JSON_{int(os.times()[4]*1000)}"
         self.active_task_keys.append(task_key)
 
-        def task_func(progress_cb=None, cancel_event=None):
+        def task_func(progress_cb=None, cancel_event=None, cancel_token=None):
             if cancel_event and cancel_event.is_set():
                 raise InterruptedError("작업이 취소되었습니다.")
             content, sha = manager.fetch_remote_version_json_raw()
             return {"content": content, "sha": sha}
 
-        TaskManager().enqueue(TaskPriority.NORMAL, task_key, self.window_id, "원격 version.json 조회", task_func)
+        TaskManager().submit(
+            self._task_listener,
+            TaskPriority.NORMAL,
+            task_key,
+            "원격 version.json 조회",
+            task_func,
+            cancel_on_close=True,
+        )
 
     def force_update_remote_json_action(self):
         target_ver = self.input_force_ver.text().strip()
@@ -386,20 +392,27 @@ class UpdateManagerWindow(QMainWindow):
         if not self.cached_remote_sha:
             self.fetch_remote_json_action()
             return
-            
+
         manager = self.get_sync_manager()
         custom_url = self.input_force_url.text().strip() or None
         self.progress_bar.show()
-        
-        task_key = f"{self.window_id}_FORCE_JSON_{target_ver}"
+
+        task_key = f"{self.window_id}_FORCE_JSON_{target_ver}_{int(os.times()[4]*1000)}"
         self.active_task_keys.append(task_key)
 
-        def task_func(progress_cb=None, cancel_event=None):
+        def task_func(progress_cb=None, cancel_event=None, cancel_token=None):
             if cancel_event and cancel_event.is_set():
                 raise InterruptedError("작업이 취소되었습니다.")
             return manager.force_update_remote_json_manual(target_ver, self.cached_remote_sha, custom_url)
 
-        TaskManager().enqueue(TaskPriority.NORMAL, task_key, self.window_id, f"원격 version.json 강제 수정 (v{target_ver})", task_func)
+        TaskManager().submit(
+            self._task_listener,
+            TaskPriority.NORMAL,
+            task_key,
+            f"원격 version.json 강제 수정 (v{target_ver})",
+            task_func,
+            cancel_on_close=True,
+        )
 
     def auto_sync_remote_json_action(self):
         config = self.config_manager.load_config()
@@ -410,16 +423,23 @@ class UpdateManagerWindow(QMainWindow):
         manager = self.get_sync_manager()
         self.progress_bar.show()
         self.btn_auto_sync_json.setEnabled(False)
-        
-        task_key = f"{self.window_id}_AUTO_SYNC_JSON"
+
+        task_key = f"{self.window_id}_AUTO_SYNC_JSON_{int(os.times()[4]*1000)}"
         self.active_task_keys.append(task_key)
 
-        def task_func(progress_cb=None, cancel_event=None):
+        def task_func(progress_cb=None, cancel_event=None, cancel_token=None):
             if cancel_event and cancel_event.is_set():
                 raise InterruptedError("작업이 취소되었습니다.")
             return manager.auto_sync_remote_version_json()
 
-        TaskManager().enqueue(TaskPriority.NORMAL, task_key, self.window_id, "원격 version.json 자동 정렬", task_func)
+        TaskManager().submit(
+            self._task_listener,
+            TaskPriority.NORMAL,
+            task_key,
+            "원격 version.json 자동 정렬",
+            task_func,
+            cancel_on_close=True,
+        )
 
     # 1. [로컬 전용 영역] 로컬 영역만 스캔하여 LocalVersionMap 생성 및 갱신
     def handle_local_version_check(self):
@@ -436,7 +456,7 @@ class UpdateManagerWindow(QMainWindow):
         task_key = f"{self.window_id}_LOCAL_ONLY_CHECK_{int(os.times()[4]*1000)}"
         self.active_task_keys.append(task_key)
 
-        def task_func(progress_cb=None, cancel_event=None):
+        def task_func(progress_cb=None, cancel_event=None, cancel_token=None):
             if cancel_event and cancel_event.is_set():
                 raise InterruptedError("작업이 취소되었습니다.")
 
@@ -445,9 +465,8 @@ class UpdateManagerWindow(QMainWindow):
 
             version_map_mgr = LocalVersionMap(version_dir)
             local_map_result = version_map_mgr.scan_and_build()
-            
-            # 메인 윈도우 캐시에 LocalVersionMap 보관
-            self.cached_local_version_map = local_map_result  
+
+            self.cached_local_version_map = local_map_result
             local_check_results = [info.to_dict() for info in local_map_result.values()]
 
             if progress_cb:
@@ -455,7 +474,14 @@ class UpdateManagerWindow(QMainWindow):
 
             return local_check_results
 
-        TaskManager().enqueue(TaskPriority.HIGH, task_key, self.window_id, "로컬버전 체크", task_func)
+        TaskManager().submit(
+            self._task_listener,
+            TaskPriority.HIGH,
+            task_key,
+            "로컬버전 체크",
+            task_func,
+            cancel_on_close=True,
+        )
 
     # 2. [원격 전용 영역] GitHub 원격만 조회하여 LocalVersionMap 업데이트 및 갱신
     def handle_remote_version_check(self):
@@ -472,14 +498,13 @@ class UpdateManagerWindow(QMainWindow):
 
         sync_manager = self.get_sync_manager()
 
-        def task_func(progress_cb=None, cancel_event=None):
+        def task_func(progress_cb=None, cancel_event=None, cancel_token=None):
             if cancel_event and cancel_event.is_set():
                 raise InterruptedError("작업이 취소되었습니다.")
 
             if progress_cb:
                 progress_cb(20, "GitHub 원격 릴리스 및 태그 정보 조회 중...")
 
-            # 로컬 맵이 아직 없으면 먼저 빈 로컬 맵 생성
             if not hasattr(self, "cached_local_version_map") or not self.cached_local_version_map:
                 version_map_mgr = LocalVersionMap(config["version_dir"])
                 self.cached_local_version_map = version_map_mgr.scan_and_build()
@@ -487,7 +512,6 @@ class UpdateManagerWindow(QMainWindow):
             if progress_cb:
                 progress_cb(60, "LocalVersionMap에 원격 상태 업데이트 중...")
 
-            # 원격 정보만 맵에 반영
             updated_map = sync_manager.update_remote_status_to_map(self.cached_local_version_map)
             self.cached_local_version_map = updated_map
 
@@ -498,14 +522,21 @@ class UpdateManagerWindow(QMainWindow):
 
             return remote_check_results
 
-        TaskManager().enqueue(TaskPriority.HIGH, task_key, self.window_id, "원격버전 체크", task_func)
+        TaskManager().submit(
+            self._task_listener,
+            TaskPriority.HIGH,
+            task_key,
+            "원격버전 체크",
+            task_func,
+            cancel_on_close=True,
+        )
 
     def select_and_register_update_file(self):
         config = self.config_manager.load_config()
         version_dir = config["version_dir"]
 
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "신규 업데이트 파일 선택", self.last_selected_dir, 
+            self, "신규 업데이트 파일 선택", self.last_selected_dir,
             "업데이트 파일 (*.zip *.exe);;ZIP 파일 (*.zip);;실행 파일 (*.exe);;모든 파일 (*.*)"
         )
         if not file_path:
@@ -573,13 +604,13 @@ class UpdateManagerWindow(QMainWindow):
                 dest_path = os.path.join(version_dir, f"update_v{detected_version}.zip")
                 if os.path.abspath(target_file_for_register) != os.path.abspath(dest_path):
                     shutil.copy2(target_file_for_register, dest_path)
-                
+
                 item_info = {"version": detected_version, "local_path": dest_path, "name": os.path.basename(dest_path)}
                 self.upload_progress_dialog.init_tasks([item_info])
                 self._update_dialog_title_and_total("신규 업로드", [item_info])
                 self.upload_progress_dialog.show()
                 self.upload_progress_dialog.raise_()
-                
+
                 if config["github_token"]:
                     self.enqueue_upload_task(sync_manager, item_info)
                 else:
@@ -588,7 +619,6 @@ class UpdateManagerWindow(QMainWindow):
                 self.handle_remote_version_check()
             except Exception as e:
                 QMessageBox.critical(self, "오류", f"등록 중 예외 발생: {e}")
-
 
     def handle_inject_version_and_upload(self):
         config = self.config_manager.load_config()
@@ -599,15 +629,15 @@ class UpdateManagerWindow(QMainWindow):
         )
         if not file_path:
             return
-            
+
         self.last_selected_dir = os.path.dirname(file_path)
         version_str, ok = QInputDialog.getText(
             self, "버전 주입 및 업로드", "업로드할 버전을 입력하세요 (예: 1.2.1):", QLineEdit.Normal, "1.2.1"
         )
-        
+
         if not ok or not version_str.strip():
             return
-            
+
         version_str = version_str.strip().lstrip('v')
 
         reply = QMessageBox.question(
@@ -622,20 +652,19 @@ class UpdateManagerWindow(QMainWindow):
         try:
             os.makedirs(version_dir, exist_ok=True)
             dest_path = os.path.join(version_dir, f"update_v{version_str}.zip")
-            
+
             target_exe_path = None
-            
+
             # 1. 파일 형식별 버전 암호화 주입 수행
             if file_path.lower().endswith('.exe'):
                 import tempfile
                 with tempfile.TemporaryDirectory() as tmpdir:
                     temp_exe = os.path.join(tmpdir, os.path.basename(file_path))
                     shutil.copy2(file_path, temp_exe)
-                    
-                    # 실행파일에 버전 토큰 암호화 주입
+
                     encrypt_and_append_version(temp_exe, f"v{version_str}")
                     target_exe_path = temp_exe
-                    
+
                     with zipfile.ZipFile(dest_path, 'w', zipfile.ZIP_DEFLATED) as zf:
                         zf.write(temp_exe, arcname=os.path.basename(file_path))
             elif file_path.lower().endswith('.zip'):
@@ -643,7 +672,7 @@ class UpdateManagerWindow(QMainWindow):
                 with tempfile.TemporaryDirectory() as tmpdir:
                     with zipfile.ZipFile(file_path, 'r') as zf:
                         zf.extractall(tmpdir)
-                    
+
                     exe_found = None
                     for root, dirs, files in os.walk(tmpdir):
                         for f in files:
@@ -652,14 +681,14 @@ class UpdateManagerWindow(QMainWindow):
                                 break
                         if exe_found:
                             break
-                            
+
                     if exe_found:
                         encrypt_and_append_version(exe_found, f"v{version_str}")
                         target_exe_path = exe_found
                     else:
                         QMessageBox.warning(self, "경고", "ZIP 파일 내에 .exe 실행파일이 존재하지 않습니다.")
                         return
-                        
+
                     with zipfile.ZipFile(dest_path, 'w', zipfile.ZIP_DEFLATED) as zf:
                         for root, dirs, files in os.walk(tmpdir):
                             for f in files:
@@ -675,10 +704,10 @@ class UpdateManagerWindow(QMainWindow):
                 extracted_raw_ver = extract_version_from_exe(target_exe_path)
                 match = re.search(r"v?(\d+\.\d+\.\d+)", extracted_raw_ver)
                 extracted_ver = match.group(1) if match else ""
-                
+
                 if extracted_ver != version_str:
                     QMessageBox.critical(
-                        self, "검증 실패", 
+                        self, "검증 실패",
                         f"❌ 버전 주입 검증 실패!\n\n입력한 버전: v{version_str}\n추출된 버전: {extracted_raw_ver}\n\n주입된 토큰이 일치하지 않습니다."
                     )
                     return
@@ -742,14 +771,13 @@ class UpdateManagerWindow(QMainWindow):
         for item in task_items:
             self.enqueue_force_inject_task(sync_manager, item)
 
-
     def enqueue_force_inject_task(self, sync_manager, item):
         ver = item["version"]
         path = item["local_path"]
-        task_key = f"{self.window_id}_FORCE_INJECT_LOCAL_{ver}"
+        task_key = f"{self.window_id}_FORCE_INJECT_LOCAL_{ver}_{int(os.times()[4]*1000)}"
         self.active_task_keys.append(task_key)
 
-        def task_func(progress_cb=None, cancel_event=None):
+        def task_func(progress_cb=None, cancel_event=None, cancel_token=None):
             def report(pct, msg):
                 if progress_cb:
                     progress_cb(pct, msg)
@@ -769,7 +797,7 @@ class UpdateManagerWindow(QMainWindow):
                     extracted_dir = tempfile.mkdtemp()
                     with zipfile.ZipFile(path, 'r') as zf:
                         zf.extractall(extracted_dir)
-                    
+
                     for root, dirs, files in os.walk(extracted_dir):
                         for f in files:
                             if f.lower().endswith('.exe'):
@@ -783,8 +811,7 @@ class UpdateManagerWindow(QMainWindow):
 
                     report(50, f"v{ver} ZIP 내부 실행파일 버전 강제 주입 중...")
                     encrypt_and_append_version(target_exe_path, f"v{ver}")
-                    
-                    # 🔍 주입 직후 내부 실행파일 검증
+
                     extracted_raw_ver = extract_version_from_exe(target_exe_path)
                     if f"v{ver}" not in extracted_raw_ver and ver not in extracted_raw_ver:
                         raise ValueError(f"버전 주입 검증 실패: 예상(v{ver}), 추출된 버전({extracted_raw_ver})")
@@ -801,7 +828,6 @@ class UpdateManagerWindow(QMainWindow):
                     encrypt_and_append_version(path, f"v{ver}")
                     target_exe_path = path
 
-                    # 🔍 주입 직후 실행파일 검증
                     extracted_raw_ver = extract_version_from_exe(target_exe_path)
                     if f"v{ver}" not in extracted_raw_ver and ver not in extracted_raw_ver:
                         raise ValueError(f"버전 주입 검증 실패: 예상(v{ver}), 추출된 버전({extracted_raw_ver})")
@@ -817,12 +843,13 @@ class UpdateManagerWindow(QMainWindow):
             report(100, f"v{ver} 로컬 버전 강제주입이 완료되었습니다.")
             return True
 
-        TaskManager().enqueue(
+        TaskManager().submit(
+            self._task_listener,
             TaskPriority.HIGH,
             task_key,
-            self.window_id,
             f"로컬 버전 v{ver} 강제주입",
-            task_func
+            task_func,
+            cancel_on_close=True,
         )
 
     def upload_selected_versions(self):
@@ -834,15 +861,22 @@ class UpdateManagerWindow(QMainWindow):
         if not config["github_token"]:
             QMessageBox.warning(self, "경고", "GitHub 토큰이 설정되지 않았습니다.")
             return
-            
+
         sync_manager = self.get_sync_manager()
-        task_items = [{"version": item["version"], "local_path": item["local_path"], "name": os.path.basename(item["local_path"]) if item["local_path"] else ""} for item in selected]
-        
+        task_items = [
+            {
+                "version": item["version"],
+                "local_path": item["local_path"],
+                "name": os.path.basename(item["local_path"]) if item["local_path"] else ""
+            }
+            for item in selected
+        ]
+
         self.upload_progress_dialog.init_tasks(task_items)
         self._update_dialog_title_and_total("원격 GitHub 업로드", task_items)
         self.upload_progress_dialog.show()
         self.upload_progress_dialog.raise_()
-        
+
         for item in task_items:
             self.enqueue_upload_task(sync_manager, item)
 
@@ -855,31 +889,38 @@ class UpdateManagerWindow(QMainWindow):
         if not config["github_token"]:
             QMessageBox.warning(self, "경고", "GitHub 토큰이 설정되지 않았습니다.")
             return
-            
+
         sync_manager = self.get_sync_manager()
-        task_items = [{"version": item["version"], "github_info": item["github_info"], "name": item["github_info"].get("name", "") if item["github_info"] else ""} for item in selected]
-        
+        task_items = [
+            {
+                "version": item["version"],
+                "github_info": item["github_info"],
+                "name": item["github_info"].get("name", "") if item["github_info"] else ""
+            }
+            for item in selected
+        ]
+
         self.upload_progress_dialog.init_tasks(task_items)
         self._update_dialog_title_and_total("로컬 다운로드", task_items)
         self.upload_progress_dialog.show()
         self.upload_progress_dialog.raise_()
-        
+
         for item in task_items:
             self.enqueue_download_task(sync_manager, item)
 
     def enqueue_upload_task(self, sync_manager, item):
         ver = item["version"]
         path = item["local_path"]
-        task_key = f"{self.window_id}_UPLOAD_{ver}"
+        task_key = f"{self.window_id}_UPLOAD_{ver}_{int(os.times()[4]*1000)}"
         self.active_task_keys.append(task_key)
 
-        def task_func(progress_cb=None, cancel_event=None):
+        def task_func(progress_cb=None, cancel_event=None, cancel_token=None):
             def cb(pct, msg):
                 if progress_cb:
                     progress_cb(pct, msg)
 
             def check_cancel():
-                return cancel_event and cancel_event.is_set()
+                return bool(cancel_event and cancel_event.is_set())
 
             success, err_msg = sync_manager.upload_to_github_with_progress(
                 ver, path, progress_callback=cb, cancel_check=check_cancel
@@ -888,22 +929,29 @@ class UpdateManagerWindow(QMainWindow):
                 raise Exception(err_msg)
             return success
 
-        TaskManager().enqueue(TaskPriority.NORMAL, task_key, self.window_id, f"버전 v{ver} 업로드", task_func)
+        TaskManager().submit(
+            self._task_listener,
+            TaskPriority.NORMAL,
+            task_key,
+            f"버전 v{ver} 업로드",
+            task_func,
+            cancel_on_close=True,
+        )
 
     def enqueue_download_task(self, sync_manager, item):
         ver = item["version"]
         gh_info = item["github_info"]
         download_url = gh_info.get("download_url") if gh_info else None
-        task_key = f"{self.window_id}_DOWNLOAD_{ver}"
+        task_key = f"{self.window_id}_DOWNLOAD_{ver}_{int(os.times()[4]*1000)}"
         self.active_task_keys.append(task_key)
 
-        def task_func(progress_cb=None, cancel_event=None):
+        def task_func(progress_cb=None, cancel_event=None, cancel_token=None):
             def cb(pct, msg):
                 if progress_cb:
                     progress_cb(pct, msg)
 
             def check_cancel():
-                return cancel_event and cancel_event.is_set()
+                return bool(cancel_event and cancel_event.is_set())
 
             success, err_msg = sync_manager.download_from_github_with_progress(
                 ver, download_url, progress_callback=cb, cancel_check=check_cancel
@@ -912,7 +960,14 @@ class UpdateManagerWindow(QMainWindow):
                 raise Exception(err_msg)
             return success
 
-        TaskManager().enqueue(TaskPriority.NORMAL, task_key, self.window_id, f"버전 v{ver} 다운로드", task_func)
+        TaskManager().submit(
+            self._task_listener,
+            TaskPriority.NORMAL,
+            task_key,
+            f"버전 v{ver} 다운로드",
+            task_func,
+            cancel_on_close=True,
+        )
 
     def get_checked_items(self) -> list:
         checked_items = []
@@ -956,11 +1011,6 @@ class UpdateManagerWindow(QMainWindow):
 
             if ("로컬버전 체크" in task_name or "원격버전 체크" in task_name) and isinstance(data, list):
                 self.apply_sync_table_data(data)
-                pass
-                # if "로컬버전 체크" in task_name:
-                #     QMessageBox.information(self, "완료", "✅ 로컬버전 체크가 완료되었습니다.")
-                # elif "원격버전 체크" in task_name:
-                #     QMessageBox.information(self, "완료", "✅ 원격버전 체크가 완료되었습니다.")
             elif "원격 version.json 조회" in task_name and isinstance(data, dict):
                 content = data.get("content")
                 sha = data.get("sha")
@@ -976,8 +1026,6 @@ class UpdateManagerWindow(QMainWindow):
                 self.handle_remote_version_check()
             elif "강제주입" in task_name:
                 self.handle_local_version_check()
-                pass
-                # self.handle_remote_version_check()
         elif status != "CANCELLED":
             if "자동 정렬" in task_name:
                 self.btn_auto_sync_json.setEnabled(True)
@@ -991,11 +1039,10 @@ class UpdateManagerWindow(QMainWindow):
         pass
 
     def apply_sync_table_data(self, result: list):
-        # [요청 반영] 버전이 큰 버전이 위로 오도록 내림차순 정렬 (SemVer 기준)
         try:
             result = sorted(
-                result, 
-                key=lambda x: version.parse(x.get('version', '0.0.0')), 
+                result,
+                key=lambda x: version.parse(x.get('version', '0.0.0')),
                 reverse=True
             )
         except Exception as e:
@@ -1003,8 +1050,6 @@ class UpdateManagerWindow(QMainWindow):
 
         self.current_sync_data = result
         self.table.setRowCount(len(result))
-        
-        target_checked = getattr(self, "last_injected_versions", [])
 
         for row, stat in enumerate(result):
             # 0: 순서
@@ -1024,7 +1069,7 @@ class UpdateManagerWindow(QMainWindow):
                 chk_item.setCheckState(Qt.CheckState.Unchecked)
                 chk_item.setForeground(QBrush(QColor("gray")))
             self.table.setItem(row, 1, chk_item)
-            
+
             # 2: Local 버전
             ver_text = f"v{stat['version']}"
             ver_item = QTableWidgetItem(ver_text)
@@ -1033,14 +1078,14 @@ class UpdateManagerWindow(QMainWindow):
                 ver_item.setText(f"⚠️ {ver_text} (내부: v{inner_v})")
                 ver_item.setForeground(QBrush(QColor("#F44747")))
             self.table.setItem(row, 2, ver_item)
-            
+
             # 3: 싱크 상태
             status_text = stat['sync_status']
             status_item = QTableWidgetItem(status_text)
             status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             status_item.setForeground(QBrush(QColor("green" if stat['sync_status'] == "SYNCED" else "orange")))
             self.table.setItem(row, 3, status_item)
-            
+
             # 4: 로컬/GitHub 유무
             loc_s = 'O' if has_local_file else 'X'
             rel_s = 'O' if stat['has_release'] else 'X'
@@ -1058,7 +1103,7 @@ class UpdateManagerWindow(QMainWindow):
             else:
                 gh_ver_item.setForeground(QBrush(QColor("gray")))
             self.table.setItem(row, 5, gh_ver_item)
-            
+
             # 6: 원격 릴리스 관리 버튼
             if stat['has_release'] or stat['has_tag']:
                 btn_del_remote = QPushButton("🗑️ 원격 릴리스/태그 제거")
@@ -1072,3 +1117,19 @@ class UpdateManagerWindow(QMainWindow):
 
         if hasattr(self, "last_injected_versions"):
             delattr(self, "last_injected_versions")
+
+    def closeEvent(self, event) -> None:
+        TaskManager().on_window_closing(
+            self._task_listener,
+            reason="UpdateManagerWindow 종료로 작업이 취소되었습니다.",
+        )
+        super().closeEvent(event)
+# ```[cite: 1, 3]
+
+# ---
+
+# ### 반영된 주요 포인트
+# * `task_key` 중복 오류(`ValueError`) 방지를 위해 타임스탬프(`int(os.times()[4]*1000)`)를 포함한 키 생성을 유지했습니다[cite: 1, 3].
+# * `submit(...)` 호출 시 `cancel_on_close=True`로 설정하여 `UpdateManagerWindow` 종료나 소멸 시 진행/대기 중인 큐 작업이 `on_window_closing`을 통해 정리되도록 했습니다[cite: 1, 3].
+
+# 실행 시 `main_app.py`나 `upload_progress_dialog.py` 쪽에서 추가로 연동할 부분(예: `app.aboutToQuit.connect(TaskManager.on_about_to_quit)`)도 함께 확인해 보시겠어요?

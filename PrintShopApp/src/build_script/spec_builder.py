@@ -128,6 +128,31 @@ class SpecAndPyInstallerBuilder:
         label = spec_obj.label if spec_obj else target_key
         exe_stem = Path(spec_obj.exe_name).stem if (spec_obj and spec_obj.exe_name) else label
         console_flag = spec_obj.console if spec_obj else True
+        hidden_imports = (
+            tuple(dict.fromkeys(str(m).strip() for m in spec_obj.hidden_imports if str(m).strip()))
+            if (spec_obj and spec_obj.hidden_imports)
+            else ()
+        )
+        hidden_imports_literal = repr(list(hidden_imports))
+
+        pathex_entries: list[str] = [self.project_root, self.src_dir]
+        if spec_obj and getattr(spec_obj, "extra_pathex", None):
+            root_path = Path(self.project_root)
+            for raw_p in spec_obj.extra_pathex:
+                cleaned = str(raw_p).strip()
+                if not cleaned:
+                    continue
+                p_obj = Path(cleaned)
+                resolved = (
+                    p_obj.resolve()
+                    if p_obj.is_absolute()
+                    else (root_path / Path(*cleaned.split("/"))).resolve()
+                )
+                resolved_str = str(resolved)
+                if os.path.isdir(resolved_str) and resolved_str not in pathex_entries:
+                    pathex_entries.append(resolved_str)
+
+        pathex_literal = "[" + ", ".join(f"r{repr(p)}" for p in pathex_entries) + "]"
 
         app_ver_files = self.version_service.get_version_files(target_key)
         app_rc_path = (
@@ -146,10 +171,10 @@ class SpecAndPyInstallerBuilder:
 
             a = Analysis(
                 [r'{entry_script}'],
-                pathex=[r'{self.project_root}', r'{self.src_dir}'],
+                pathex={pathex_literal},
                 binaries=[],
                 datas=[],
-                hiddenimports=[],
+                hiddenimports={hidden_imports_literal},
                 hookspath=[],
                 hooksconfig={{}},
                 runtime_hooks=[],
@@ -186,7 +211,10 @@ class SpecAndPyInstallerBuilder:
         with open(generated_spec_path, "w", encoding="utf-8") as f:
             f.write(spec_content)
 
-        logd(f"  • [{target_key}] 기본 .spec 생성 완료: {generated_spec_path} (entry={entry_script}, exe={exe_stem}.exe)")
+        logd(
+            f"  • [{target_key}] 기본 .spec 생성 완료: {generated_spec_path} "
+            f"(entry={entry_script}, exe={exe_stem}.exe, hiddenimports={list(hidden_imports)})"
+        )
         return generated_spec_path
 
     def clean_target_outputs(self, target_key: str, work_out: str, dist_out: str) -> None:

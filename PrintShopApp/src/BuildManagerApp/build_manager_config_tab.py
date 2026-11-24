@@ -19,31 +19,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from build_manager_config import BuildManagerConfig
 from Common.config import ConfigType, FileConfigManager
 
 
-class BuildManagerConfig(FileConfigManager):
-    """config.py 기반 자체 설정 파일(필요한 섹션·스키마로 교체해 사용)."""
-
-    file_dir = "."
-    file_name = "BuildManager.ini"
-
-    section = "BuildManagerConfig"
-    section_order = 30
-    auto_save = False
-    schema = {
-        "default_mode": {"default": "production", "type": ConfigType.STRING},
-        "auto_scroll_log": {"default": True, "type": ConfigType.BOOLEAN},
-        "clean_build_default": {"default": False, "type": ConfigType.BOOLEAN},
-        "clean_spec_default": {"default": False, "type": ConfigType.BOOLEAN},
-        "clean_work_default": {"default": False, "type": ConfigType.BOOLEAN},
-        "clean_dist_default": {"default": False, "type": ConfigType.BOOLEAN},
-        "app_bump_units": {"default": {}, "type": ConfigType.DICT},
-    }
-
-
 class ConfigTab(QWidget):
-    """ConfigManager / FileConfigManager 상속 설정을 표시·편집하는 탭."""
+    """[BuildManagerConfig] 섹션 설정을 표시·편집하는 탭[cite: 1]."""
 
     config_changed = Signal(dict)
 
@@ -57,6 +38,10 @@ class ConfigTab(QWidget):
         self._editors: dict[str, QWidget] = {}
 
         self._build_ui()
+        self.load_from_manager(show_error=False)
+
+    def set_config_manager(self, config_manager: FileConfigManager) -> None:
+        self.config_mgr = config_manager
         self.load_from_manager(show_error=False)
 
     def _create_editor_for_key(self, key: str, meta: dict[str, Any]) -> QWidget:
@@ -109,13 +94,17 @@ class ConfigTab(QWidget):
                 if not txt:
                     return []
                 try:
-                    return json.loads(txt)
+                    parsed = json.loads(txt)
+                    return parsed if isinstance(parsed, list) else [parsed]
                 except Exception:
                     return [x.strip() for x in txt.split(",") if x.strip()]
             if cfg_type == ConfigType.DICT:
                 if not txt:
                     return {}
-                return json.loads(txt)
+                parsed = json.loads(txt)
+                if not isinstance(parsed, dict):
+                    raise ValueError("DICT 형식(JSON 객체)이어야 합니다.")
+                return parsed
             return txt
         return None
 
@@ -125,7 +114,7 @@ class ConfigTab(QWidget):
 
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
 
         container = QWidget()
         layout = QVBoxLayout(container)
@@ -133,7 +122,7 @@ class ConfigTab(QWidget):
 
         filepath_text = getattr(self.config_mgr, "filepath", "")
         section_text = getattr(self.config_mgr, "section", "")
-        group = QGroupBox(f"Config 설정 ({section_text})")
+        group = QGroupBox(f"Config 설정 ([{section_text}])")
         form = QFormLayout(group)
 
         self.lbl_filepath = QLineEdit(str(filepath_text))

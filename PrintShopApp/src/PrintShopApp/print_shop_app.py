@@ -270,17 +270,23 @@ class PrintShopApp(QMainWindow):
 
 
 def initialize_all_configurations():
-    _config_load_count = 0  # 로드 카운터 초기화            
+    _config_load_count = 0  # 로드 카운터 초기화
     for config_cls in FileConfigManager._registry:
-        filepath = os.path.join(config_cls.file_dir, config_cls.file_name)
+        filepath = config_cls._resolve_cls_filepath()
         is_file_exists = os.path.exists(filepath)
-        
+
         instance = config_cls()
+        resolved_filepath = instance.filepath
 
         _config_load_count += 1
 
         if is_file_exists:
-            logd(f"{_config_load_count:02d} : [Config Loaded] 파일에서 로드됨 - Section: '{instance.section}' -> File: {filepath}")
+            logd(
+                f"{_config_load_count:02d} : [Config Loaded] 파일에서 로드됨 - Section: '{instance.section}' -> File: {resolved_filepath}"
+            )
         else:
-            logd(f"{_config_load_count:02d} : [Config Initialized] 파일이 없어 기본값으로 생성됨 - Section: '{instance.section}' -> File: {filepath}")
+            logd(
+                f"{_config_load_count:02d} : [Config Initialized] 파일이 없어 기본값으로 생성됨 - Section: '{instance.section}' -> File: {resolved_filepath}"
+            )
+
 

@@ -1,7 +1,7 @@
 """
 BuildTargets 일반 설정 탭 위젯 모듈 (build_target_general_tab.py)
-- 프로젝트 루트 / 빌드 설정 JSON 경로 관리 및 불러오기·저장 요청
-- 전역 빌드 디렉터리 설정 (dirs) 입력 및 수집/동기화 제공
+- 프로젝트 루트 / 통합 설정 파일(BuildManager.ini) 경로 관리 및 불러오기·저장 요청
+- 전역 빌드 디렉터리 설정 ([BuildDirsConfig]) 입력 및 수집/동기화 제공
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from build_script.build_targets import DEFAULT_CONFIG_FILENAME
+from build_manager_config import BUILD_MANAGER_INI_NAME
 
 DIR_FIELD_SPECS: list[tuple[str, str]] = [
     ("work_dir_name", "작업 폴더 (work)"),
@@ -31,7 +31,7 @@ DIR_FIELD_SPECS: list[tuple[str, str]] = [
 
 
 class BuildTargetGeneralTab(QWidget):
-    paths_changed = Signal(Path, Path)  # (project_root, config_path)
+    paths_changed = Signal(Path, Path)  # (project_root, ini_path)
     load_requested = Signal(Path)
     save_requested = Signal(Path)
     dir_config_changed = Signal(dict)
@@ -47,7 +47,7 @@ class BuildTargetGeneralTab(QWidget):
         self.config_path = (
             Path(config_path).resolve()
             if config_path
-            else (self.project_root / DEFAULT_CONFIG_FILENAME)
+            else (self.project_root / BUILD_MANAGER_INI_NAME)
         )
         self._dir_inputs: dict[str, QLineEdit] = {}
 
@@ -59,8 +59,7 @@ class BuildTargetGeneralTab(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
-        # 1. 경로 및 설정 파일 그룹
-        path_group = QGroupBox("경로 및 설정 파일")
+        path_group = QGroupBox("경로 및 통합 설정 파일")
         path_form = QFormLayout(path_group)
 
         root_row = QHBoxLayout()
@@ -74,7 +73,7 @@ class BuildTargetGeneralTab(QWidget):
 
         cfg_row = QHBoxLayout()
         self.edit_config_path = QLineEdit(str(self.config_path))
-        self.btn_browse_cfg = QPushButton("설정 JSON 선택...")
+        self.btn_browse_cfg = QPushButton("설정 INI 선택...")
         self.btn_browse_cfg.clicked.connect(self._on_browse_config_path_clicked)
         self.btn_load_cfg = QPushButton("불러오기")
         self.btn_load_cfg.clicked.connect(self._on_load_path_clicked)
@@ -84,12 +83,11 @@ class BuildTargetGeneralTab(QWidget):
         cfg_row.addWidget(self.btn_browse_cfg)
         cfg_row.addWidget(self.btn_load_cfg)
         cfg_row.addWidget(self.btn_save_cfg)
-        path_form.addRow("빌드 설정 JSON", cfg_row)
+        path_form.addRow("설정 파일 (INI)", cfg_row)
 
         layout.addWidget(path_group)
 
-        # 2. 전역 빌드 디렉터리 설정 그룹
-        dir_group = QGroupBox("전역 빌드 디렉터리 설정 (dirs)")
+        dir_group = QGroupBox("전역 빌드 디렉터리 설정 ([BuildDirsConfig])")
         dir_form = QFormLayout(dir_group)
 
         for key, label_text in DIR_FIELD_SPECS:
@@ -118,7 +116,7 @@ class BuildTargetGeneralTab(QWidget):
         self.config_path = (
             Path(config_path).resolve()
             if config_path
-            else (self.project_root / DEFAULT_CONFIG_FILENAME)
+            else (self.project_root / BUILD_MANAGER_INI_NAME)
         )
         self.sync_path_fields()
         if emit_signal:
@@ -159,16 +157,16 @@ class BuildTargetGeneralTab(QWidget):
         if not chosen:
             return
         self.project_root = Path(chosen).resolve()
-        self.config_path = self.project_root / DEFAULT_CONFIG_FILENAME
+        self.config_path = self.project_root / BUILD_MANAGER_INI_NAME
         self.sync_path_fields()
         self.paths_changed.emit(self.project_root, self.config_path)
 
     def _on_browse_config_path_clicked(self) -> None:
         chosen, _ = QFileDialog.getOpenFileName(
             self,
-            "빌드 설정 JSON 파일 선택",
+            "빌드 설정 INI 파일 선택",
             str(self.config_path.parent),
-            "JSON Files (*.json);;All Files (*.*)",
+            "INI Files (*.ini);;All Files (*.*)",
         )
         if not chosen:
             return

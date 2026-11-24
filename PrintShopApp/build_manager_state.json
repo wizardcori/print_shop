@@ -11,7 +11,7 @@
   "mode": "production",
   "bump_unit": "patch",
   "skip_installer": false,
-  "installer_only": false,
+  "installer_only": true,
   "clean_build": false,
   "clean_work_out": false,
   "clean_dist_out": false,

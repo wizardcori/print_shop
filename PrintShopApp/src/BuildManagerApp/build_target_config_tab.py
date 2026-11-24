@@ -1,13 +1,12 @@
 """
 BuildTargets 세부 설정 위젯 모듈 (build_target_config_tab.py)
-- 인스톨러 조합 설정(installer) 및 앱별 세부 빌드 설정(apps, 개별 버전 증가/정리 옵션 포함)을
-  전용 탭(개별 앱 탭 -> 마지막 인스톨러 탭)으로 구성하여 조회/편집/JSON 저장 제공
-- 경로 및 전역 디렉터리(dirs) 설정은 BuildTargetGeneralTab과 연동
-- 별도 위젯 창으로 열릴 때 닫기 버튼 클릭 시 hide()로 숨김 처리
+- 인스톨러 조합 설정([BuildInstallerConfig]), 앱별 세부 빌드 설정([BuildAppsConfig]),
+  전역 디렉터리([BuildDirsConfig])를 BuildManager.ini 섹션에서 로드/저장
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -29,17 +28,21 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from build_manager_config import BUILD_MANAGER_INI_NAME, BuildManagerIniStore
 from build_script.build_targets import (
     APP_OVERRIDE_FIELDS,
     BuildTargets,
-    DEFAULT_CONFIG_FILENAME,
 )
 from build_script.target_config_io import (
     InstallerBuildConfig,
     normalize_target_id_list,
-    write_build_config_json,
 )
-from build_target_general_tab import BuildTargetGeneralTab
+#from build_target_general_tab import BuildTargetGeneralTab
+
+DEFAULT_INSTALLER_KEYS: tuple[str, ...] = (
+    "PrintShopApp",
+    "PrintShopUpdateService",
+)
 
 BUMP_UNIT_OPTIONS: list[tuple[str, str | None]] = [
     ("변경 없음 (none)", None),
@@ -82,8 +85,6 @@ def _split_list_field(text: str) -> list[str]:
     return [part.strip() for part in raw.split(sep) if part.strip()]
 
 
-import re
-
 def _parse_semver(raw_version: str) -> tuple[int, int, int] | None:
     match = re.search(r"\b(\d+)\.(\d+)\.(\d+)\b", (raw_version or "").strip())
     if not match:
@@ -110,7 +111,7 @@ def _compute_next_version_str(current_ver: str | None, bump_unit: str | None) ->
 
 class BuildTargetConfigTab(QWidget):
     config_changed = Signal(dict)
-    paths_changed = Signal(Path, Path)  # (project_root, config_path)
+    paths_changed = Signal(Path, Path)  # (project_root, ini_path)
     save_requested = Signal()
 
     def __init__(
@@ -133,17 +134,17 @@ class BuildTargetConfigTab(QWidget):
         self.config_path = (
             Path(config_path).resolve()
             if config_path
-            else (self.project_root / DEFAULT_CONFIG_FILENAME)
+            else (self.project_root / BUILD_MANAGER_INI_NAME)
         )
         self.auto_save = auto_save
         self.general_tab: BuildTargetGeneralTab | None = general_tab
+        self._ini_store = BuildManagerIniStore(self.config_path.parent)
 
         self._app_overrides: dict[str, dict[str, Any]] = {}
         self._app_bump_units: dict[str, str | None] = {}
         self._app_clean_options: dict[str, dict[str, bool]] = {}
         self._installer_config: InstallerBuildConfig = InstallerBuildConfig()
 
-        # target_key -> {field_name: input_widget}
         self._app_tab_inputs: dict[str, dict[str, QWidget]] = {}
         self._app_spec_labels: dict[str, QLabel] = {}
         self._app_tab_index_to_key: dict[int, str] = {}
@@ -161,10 +162,9 @@ class BuildTargetConfigTab(QWidget):
         if self.general_tab is not None:
             self.bind_general_tab(self.general_tab)
         self.sync_path_fields()
-        self.load_from_json(self.config_path, show_error=False)
+        self.load_from_ini(self.config_path, show_error=False)
 
     def force_close_window(self) -> None:
-        """프로그램 종료 시 실제로 창을 닫습니다."""
         self._allow_close = True
         self.close()
 
@@ -176,7 +176,6 @@ class BuildTargetConfigTab(QWidget):
         self.hide()
 
     def bind_general_tab(self, general_tab: BuildTargetGeneralTab) -> None:
-        """외부 General 탭 위젯과 경로·디렉터리·불러오기/저장 시그널을 연결."""
         self.general_tab = general_tab
         general_tab.set_paths(self.project_root, self.config_path)
         general_tab.paths_changed.connect(self._on_general_paths_changed)
@@ -187,15 +186,16 @@ class BuildTargetConfigTab(QWidget):
     def _on_general_paths_changed(self, project_root: Path, config_path: Path) -> None:
         self.project_root = Path(project_root).resolve()
         self.config_path = Path(config_path).resolve()
+        self._ini_store.reload_all(self.config_path.parent)
         self.paths_changed.emit(self.project_root, self.config_path)
 
     def _on_general_load_requested(self, config_path: Path) -> None:
         self.config_path = Path(config_path).resolve()
-        self.load_from_json(self.config_path, show_error=True)
+        self.load_from_ini(self.config_path, show_error=True)
 
     def _on_general_save_requested(self, config_path: Path) -> None:
         self.config_path = Path(config_path).resolve()
-        self.save_to_json(self.config_path)
+        self.save_to_ini(self.config_path)
         self.save_requested.emit()
 
     def _on_general_dirs_changed(self, _dir_overrides: dict[str, str]) -> None:
@@ -214,14 +214,28 @@ class BuildTargetConfigTab(QWidget):
         self.config_path = (
             Path(config_path).resolve()
             if config_path
-            else (self.project_root / DEFAULT_CONFIG_FILENAME)
+            else (self.project_root / BUILD_MANAGER_INI_NAME)
         )
+        self._ini_store.reload_all(self.config_path.parent)
         self.sync_path_fields()
+
+    def _get_default_installer_keys(self, ordered: list[str]) -> set[str]:
+        matched: set[str] = set()
+        for key in DEFAULT_INSTALLER_KEYS:
+            if key in ordered:
+                matched.add(key)
+        if not matched:
+            for key in ordered:
+                lower = key.lower()
+                if "printshopapp" in lower or "updateservice" in lower:
+                    matched.add(key)
+        return matched or set(ordered[:2])
 
     def _resolve_selected_installer_keys(self, raw_targets: Any) -> set[str]:
         ordered = list(BuildTargets.ordered_keys())
+        default_keys = self._get_default_installer_keys(ordered)
         if not raw_targets:
-            return set(ordered)
+            return default_keys
 
         if isinstance(raw_targets, (list, tuple, set)):
             tokens = [str(x).strip() for x in raw_targets if str(x).strip()]
@@ -229,7 +243,7 @@ class BuildTargetConfigTab(QWidget):
             tokens = [t.strip() for t in str(raw_targets).replace(";", ",").split(",") if t.strip()]
 
         if not tokens:
-            return set(ordered)
+            return default_keys
 
         resolved: set[str] = set()
         for tok in tokens:
@@ -248,10 +262,9 @@ class BuildTargetConfigTab(QWidget):
                     resolved.add(key)
                     break
 
-        return resolved or set(ordered)
+        return resolved or default_keys
 
     def _compute_auto_installer_fields(self, selected_keys: list[str]) -> tuple[str, str]:
-        """선택된 포함 대상 목록으로부터 기본 파일명(name)과 버전 기준(version_source_id)을 계산합니다."""
         if not selected_keys:
             return "", ""
 
@@ -264,7 +277,6 @@ class BuildTargetConfigTab(QWidget):
         return auto_name, auto_ver_src
 
     def _sync_installer_modes_when_empty(self) -> None:
-        """포함 대상이 하나도 선택되지 않았을 때 단독 모드 및 건너뛰기를 모두 체크 해제합니다."""
         if not self._installer_inputs:
             return
         ordered = list(BuildTargets.ordered_keys())
@@ -286,7 +298,6 @@ class BuildTargetConfigTab(QWidget):
                 chk_skip.blockSignals(False)
 
     def _sync_installer_auto_fields(self, *, force: bool = False) -> None:
-        """포함 대상 체크박스 선택 상태에 맞춰 name 및 version_source_id를 자동 생성합니다."""
         if not self._installer_inputs:
             return
 
@@ -464,7 +475,6 @@ class BuildTargetConfigTab(QWidget):
         self._app_clean_options = updated
 
     def set_app_bump_units(self, bump_units: dict[str, Any] | None) -> None:
-        """외부(BuildManagerWindow 등)에서 앱별 버전 증가 설정을 동기화."""
         src = bump_units or {}
         for key in BuildTargets.ordered_keys():
             if key in src:
@@ -476,14 +486,12 @@ class BuildTargetConfigTab(QWidget):
             self._load_app_form(key)
 
     def get_app_bump_units(self) -> dict[str, str | None]:
-        """현재 확인된 모든 앱의 개별 버전 증가 설정 반환."""
         result: dict[str, str | None] = {}
         for key in BuildTargets.ordered_keys():
             result[key] = _normalize_bump_unit(self._app_bump_units.get(key))
         return result
 
     def set_app_clean_options(self, clean_options: dict[str, dict[str, Any]] | None) -> None:
-        """외부에서 앱별 정리 옵션(--clean-work, --clean-dist, --clean-spec) 동기화."""
         src = clean_options or {}
         for key in BuildTargets.ordered_keys():
             current = dict(
@@ -500,7 +508,6 @@ class BuildTargetConfigTab(QWidget):
             self._load_app_form(key)
 
     def get_app_clean_options(self) -> dict[str, dict[str, bool]]:
-        """현재 앱별 정리 옵션 반환."""
         result: dict[str, dict[str, bool]] = {}
         for key in BuildTargets.ordered_keys():
             current = self._app_clean_options.get(key, {})
@@ -509,24 +516,27 @@ class BuildTargetConfigTab(QWidget):
             }
         return result
 
-    def load_from_json(
+    def load_from_ini(
         self,
-        json_path: str | Path | None = None,
+        ini_path: str | Path | None = None,
         *,
         show_error: bool = True,
     ) -> bool:
-        target_file = Path(json_path).resolve() if json_path else self.config_path
+        target_file = Path(ini_path).resolve() if ini_path else self.config_path
         self.config_path = target_file
+        self._ini_store.reload_all(target_file.parent)
         self.sync_path_fields()
         try:
-            json_arg = str(target_file) if target_file.is_file() else None
-            if json_arg:
-                BuildTargets.configure(
-                    project_root=self.project_root,
-                    json_path=target_file,
-                )
-            else:
-                BuildTargets.configure(project_root=self.project_root)
+            sections = self._ini_store.load_target_sections()
+            dir_ov = {k: v for k, v in sections["dirs"].items() if v}
+            app_ov = sections["app_overrides"]
+            inst_dict = sections["installer"]
+
+            BuildTargets.configure(
+                project_root=self.project_root,
+                code_overrides=dir_ov or None,
+                app_overrides=app_ov or None,
+            )
 
             dcfg = BuildTargets.get_dir_config(self.project_root)
             if self.general_tab is not None:
@@ -536,9 +546,13 @@ class BuildTargetConfigTab(QWidget):
             self._sync_bump_units_from_overrides()
             self._sync_clean_options_from_overrides()
 
-            self._installer_config = InstallerBuildConfig.resolve(
-                project_root=self.project_root,
-                json_path=json_arg,
+            self._installer_config = InstallerBuildConfig(
+                targets=normalize_target_id_list(inst_dict.get("targets")) if inst_dict.get("targets") else None,
+                installer_only=bool(inst_dict.get("installer_only", False)),
+                skip_installer=bool(inst_dict.get("skip_installer", False)),
+                name=inst_dict.get("name"),
+                version_source_id=inst_dict.get("version_source_id"),
+                extra=dict(inst_dict.get("extra") or {}),
             )
 
             self._rebuild_app_tabs()
@@ -552,38 +566,37 @@ class BuildTargetConfigTab(QWidget):
                 QMessageBox.critical(
                     self,
                     "설정 불러오기 실패",
-                    f"설정을 불러오는 중 오류가 발생했습니다:\n{exc}",
+                    f"INI 설정을 불러오는 중 오류가 발생했습니다:\n{exc}",
                 )
             return False
 
-    def save_to_json(
+    def save_to_ini(
         self,
-        json_path: str | Path | None = None,
+        ini_path: str | Path | None = None,
         *,
         silent: bool = False,
         emit_signal: bool | None = None,
     ) -> Path | None:
         if self.general_tab is not None:
             self.config_path = self.general_tab.get_config_path_from_input()
-        target_file = Path(json_path).resolve() if json_path else self.config_path
+        target_file = Path(ini_path).resolve() if ini_path else self.config_path
+        self._ini_store.reload_all(target_file.parent)
+
         should_emit = (not self.auto_save) if emit_signal is None else emit_signal
         self._apply_all_to_targets(emit_signal=should_emit)
         try:
             dcfg = BuildTargets.get_dir_config(self.project_root)
-            if hasattr(BuildTargets, "save_config_json"):
-                saved = BuildTargets.save_config_json(
-                    target_file,
-                    dir_config=dcfg,
-                    app_overrides=self._app_overrides,
-                    installer_config=self._installer_config,
-                )
-            else:
-                saved = write_build_config_json(
-                    target_file,
-                    dir_config=dcfg,
-                    app_overrides=self._app_overrides,
-                    installer_config=self._installer_config,
-                )
+            dir_dict = {
+                "work_dir_name": dcfg.work_dir_name,
+                "dist_dir_name": dcfg.dist_dir_name,
+                "release_dir_name": dcfg.release_dir_name,
+                "install_dir_name": dcfg.install_dir_name,
+            }
+            saved = self._ini_store.save_target_sections(
+                dir_values=dir_dict,
+                app_overrides=self._app_overrides,
+                installer_values=self._installer_config.to_dict(),
+            )
             if not silent:
                 QMessageBox.information(self, "설정 저장", f"설정을 저장했습니다:\n{saved}")
             return Path(saved)
@@ -592,9 +605,22 @@ class BuildTargetConfigTab(QWidget):
                 QMessageBox.critical(
                     self,
                     "설정 저장 실패",
-                    f"설정을 저장하는 중 오류가 발생했습니다:\n{exc}",
+                    f"INI 설정을 저장하는 중 오류가 발생했습니다:\n{exc}",
                 )
             return None
+
+    # 하위 호환 별칭
+    def load_from_json(self, json_path: str | Path | None = None, *, show_error: bool = True) -> bool:
+        return self.load_from_ini(json_path, show_error=show_error)
+
+    def save_to_json(
+        self,
+        json_path: str | Path | None = None,
+        *,
+        silent: bool = False,
+        emit_signal: bool | None = None,
+    ) -> Path | None:
+        return self.save_to_ini(json_path, silent=silent, emit_signal=emit_signal)
 
     def _build_ui(self) -> None:
         outer_layout = QVBoxLayout(self)
@@ -605,19 +631,16 @@ class BuildTargetConfigTab(QWidget):
         self.sub_tabs.currentChanged.connect(self._on_sub_tab_changed)
 
         self._installer_tab_widget = self._create_installer_tab()
-
-        # build_targets 순서대로 개별 앱 탭 생성 후 인스톨러 탭을 마지막에 배치
         self._rebuild_app_tabs()
 
         outer_layout.addWidget(self.sub_tabs, stretch=1)
 
-        # 하단 공통 액션 버튼 (설정탭과 저장 동선 중복 방지를 위해 저장 버튼 제외)
         action_row = QHBoxLayout()
-        self.btn_apply_all = QPushButton("전체 탭 변경사항 반영")
+        self.btn_apply_all = QPushButton("전체 탭 변경사항 반영 및 저장")
         self.btn_apply_all.clicked.connect(self._on_apply_all_tabs)
 
         self.btn_reload = QPushButton("다시 불러오기")
-        self.btn_reload.clicked.connect(self.reload_from_targets)
+        self.btn_reload.clicked.connect(lambda: self.load_from_ini(self.config_path, show_error=True))
 
         self.btn_reset_all = QPushButton("전체 기본값 복원")
         self.btn_reset_all.clicked.connect(self.reset_all_defaults)
@@ -647,7 +670,7 @@ class BuildTargetConfigTab(QWidget):
         layout = QVBoxLayout(content)
         layout.setSpacing(10)
 
-        inst_group = QGroupBox("인스톨러 조합 설정 (installer)")
+        inst_group = QGroupBox("인스톨러 조합 설정 ([BuildInstallerConfig])")
         inst_form = QFormLayout(inst_group)
 
         targets_container = QWidget()
@@ -683,7 +706,7 @@ class BuildTargetConfigTab(QWidget):
 
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
-        btn_apply_inst = QPushButton("인스톨러 설정 반영")
+        btn_apply_inst = QPushButton("인스톨러 설정 반영 및 저장")
         btn_apply_inst.clicked.connect(self._on_apply_installer)
         btn_row.addWidget(btn_apply_inst)
         layout.addLayout(btn_row)
@@ -691,11 +714,6 @@ class BuildTargetConfigTab(QWidget):
 
         scroll.setWidget(content)
         return scroll
-
-    # def _format_app_tab_title(self, target_key: str) -> str:
-    #     bump_val = _normalize_bump_unit(self._app_bump_units.get(target_key))
-    #     bump_suffix = f" [+{bump_val}]" if bump_val else ""
-    #     return f"{target_key}{bump_suffix}"
 
     def _create_single_app_tab(self, target_key: str) -> QWidget:
         scroll = QScrollArea(self)
@@ -788,7 +806,7 @@ class BuildTargetConfigTab(QWidget):
         btn_reset = QPushButton("이 앱 기본값 초기화")
         btn_reset.clicked.connect(lambda _checked=False, k=target_key: self._on_reset_app(k))
 
-        btn_apply = QPushButton("이 앱 설정 반영")
+        btn_apply = QPushButton("이 앱 설정 반영 및 저장")
         btn_apply.clicked.connect(lambda _checked=False, k=target_key: self._on_apply_app(k))
 
         btn_row.addWidget(btn_reset)
@@ -822,14 +840,12 @@ class BuildTargetConfigTab(QWidget):
         self._app_tab_index_to_key.clear()
         self._app_key_to_tab_index.clear()
 
-        # 1. build_targets 순서대로 개별 앱 탭 추가
         for key in BuildTargets.ordered_keys():
             tab_widget = self._create_single_app_tab(key)
             idx = self.sub_tabs.addTab(tab_widget, self._format_app_tab_title(key))
             self._app_tab_index_to_key[idx] = key
             self._app_key_to_tab_index[key] = idx
 
-        # 2. 인스톨러 탭을 제일 마지막에 추가
         if self._installer_tab_widget is None:
             self._installer_tab_widget = self._create_installer_tab()
         self._installer_tab_index = self.sub_tabs.addTab(
@@ -1047,14 +1063,14 @@ class BuildTargetConfigTab(QWidget):
 
     def _on_apply_installer(self) -> None:
         self._installer_config = self._collect_installer_config()
-        self._apply_all_to_targets()
+        self.save_to_ini(self.config_path, silent=True, emit_signal=True)
 
     def _on_apply_app(self, target_key: str) -> None:
         self._stage_app_state(target_key)
-        self._apply_all_to_targets()
+        self.save_to_ini(self.config_path, silent=True, emit_signal=True)
 
     def _on_apply_all_tabs(self) -> None:
-        self._apply_all_to_targets()
+        self.save_to_ini(self.config_path, silent=True, emit_signal=True)
 
     def _on_reset_app(self, target_key: str) -> None:
         self._app_overrides.pop(target_key, None)
@@ -1062,27 +1078,10 @@ class BuildTargetConfigTab(QWidget):
         self._app_clean_options[target_key] = {
             field: False for field in CLEAN_OPTION_FIELDS
         }
-        self._apply_all_to_targets()
+        self.save_to_ini(self.config_path, silent=True, emit_signal=True)
 
     def reload_from_targets(self) -> None:
-        BuildTargets.configure(project_root=self.project_root)
-        dcfg = BuildTargets.get_dir_config(self.project_root)
-        if self.general_tab is not None:
-            self.general_tab.set_dir_values(dcfg)
-
-        self._app_overrides = BuildTargets.get_app_overrides()
-        self._sync_bump_units_from_overrides()
-        self._sync_clean_options_from_overrides()
-        json_arg = str(self.config_path) if self.config_path.is_file() else None
-        self._installer_config = InstallerBuildConfig.resolve(
-            project_root=self.project_root,
-            json_path=json_arg,
-        )
-        self._rebuild_app_tabs()
-        self._load_installer_form(self._installer_config)
-        for key in BuildTargets.ordered_keys():
-            self._load_app_form(key)
-        self.config_changed.emit(self.get_current_config_payload())
+        self.load_from_ini(self.config_path, show_error=False)
 
     def reset_all_defaults(self) -> None:
         self._app_overrides = {}
@@ -1100,7 +1099,7 @@ class BuildTargetConfigTab(QWidget):
         self._load_installer_form(self._installer_config)
         for key in BuildTargets.ordered_keys():
             self._load_app_form(key)
-        self.config_changed.emit(self.get_current_config_payload())
+        self.save_to_ini(self.config_path, silent=True, emit_signal=True)
 
     def get_current_config_payload(self) -> dict[str, Any]:
         self._stage_all_tabs_state()
@@ -1117,10 +1116,10 @@ class BuildTargetConfigTab(QWidget):
         target_keys: list[str],
         clean_patch: dict[str, bool],
         *,
+        persist_ini: bool = False,
         persist_json: bool = False,
         emit_signal: bool = True,
     ) -> None:
-        """메인 앱에서 변경된 정리 옵션을 현재 선택된 개별 앱들에 일괄 적용."""
         if not target_keys or not clean_patch:
             return
 
@@ -1144,7 +1143,6 @@ class BuildTargetConfigTab(QWidget):
             bucket.update(normalized_patch)
             self._app_overrides[key] = bucket
 
-            # 해당 앱 탭의 체크박스도 즉시 동기화
             inputs = self._app_tab_inputs.get(key)
             if inputs:
                 for field_name, val in normalized_patch.items():
@@ -1160,8 +1158,8 @@ class BuildTargetConfigTab(QWidget):
             app_overrides=self._app_overrides,
         )
 
-        if persist_json:
-            self.save_to_json(self.config_path, silent=True, emit_signal=False)
+        if persist_ini or persist_json:
+            self.save_to_ini(self.config_path, silent=True, emit_signal=False)
 
         if emit_signal:
             self.config_changed.emit(self.get_current_config_payload())
@@ -1171,10 +1169,10 @@ class BuildTargetConfigTab(QWidget):
         target_keys: list[str],
         field_patch: dict[str, Any],
         *,
+        persist_ini: bool = False,
         persist_json: bool = False,
         emit_signal: bool = True,
     ) -> None:
-        """메인 앱에서 변경된 필드(mode, bump_unit 등)를 현재 선택된 개별 앱들에 일괄 적용."""
         if not target_keys or not field_patch:
             return
 
@@ -1235,8 +1233,8 @@ class BuildTargetConfigTab(QWidget):
             app_overrides=self._app_overrides,
         )
 
-        if persist_json:
-            self.save_to_json(self.config_path, silent=True, emit_signal=False)
+        if persist_ini or persist_json:
+            self.save_to_ini(self.config_path, silent=True, emit_signal=False)
 
         if emit_signal:
             self.config_changed.emit(self.get_current_config_payload())
@@ -1294,10 +1292,8 @@ class BuildTargetConfigTab(QWidget):
         cur_ver = self._resolve_app_current_version(target_key)
         next_ver = _compute_next_version_str(cur_ver, bump_val)
         if cur_ver and next_ver:
-            return f"{target_key} {next_ver}]"
-            #return f"{target_key} [+{bump_val}: {cur_ver} -> {next_ver}]"        
+            return f"{target_key} [{next_ver}]"
         if next_ver:
-            return f"{target_key} {next_ver}]"
-            #return f"{target_key} [+{bump_val} -> {next_ver}]"
-            
-        return f"{target_key} [+{bump_val}]"            
+            return f"{target_key} [{next_ver}]"
+
+        return f"{target_key} [+{bump_val}]"

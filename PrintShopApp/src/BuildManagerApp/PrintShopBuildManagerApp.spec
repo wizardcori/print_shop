@@ -2,10 +2,10 @@
 
 a = Analysis(
     [r'C:\1print_shop\PrintShopApp\src\BuildManagerApp\main_app.py'],
-    pathex=[r'C:\1print_shop\PrintShopApp', r'C:\1print_shop\PrintShopApp\src'],
+    pathex=[r'C:\\1print_shop\\PrintShopApp', r'C:\\1print_shop\\PrintShopApp\\src', r'C:\\1print_shop\\PrintShopApp\\src\\build_script'],
     binaries=[],
     datas=[],
-    hiddenimports=[],
+    hiddenimports=['env_ui_helper', 'build_script.env_ui_helper', 'packaging_service', 'build_script.packaging_service', 'spec_builder', 'build_script.spec_builder', 'target_config_io', 'build_script.target_config_io', 'version_service', 'build_script.version_service'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

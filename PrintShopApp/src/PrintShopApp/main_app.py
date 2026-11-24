@@ -1,19 +1,47 @@
 import sys
 from pathlib import Path
 
-# main.py 등 최초 진입점에서 딱 한 번 실행
+APP_DIR = Path(__file__).resolve().parent
+SRC_DIR = APP_DIR.parent
+
+for p in (str(APP_DIR), str(SRC_DIR)):
+    if p not in sys.path:
+        sys.path.insert(0, p)
+
+from app_name import APP_NAME
+# 1
+from Common.path_mgr import PathMgr
+PathMgr.refresh_paths(app_name=APP_NAME)
+
+# 2
+from Common.config import FileConfigManager, DbConfigManager
+
+# 3
 from Common.log import setup_global_log, logd, LogManagerRegistry, FileTagManager  # 또는 dlog
 setup_global_log()
 
-from Common.log import set_file_tag; set_file_tag("SYSTEM")
+from Common.log import set_file_tag, logd, loge; set_file_tag("SYSTEM")
 
-def find_dir_parent_direction(start_file: str, target_dir_name: str = "src") -> Path | None:
-    current = Path(start_file).resolve().parent
-    for parent in [current, *current.parents]:
-        candidate = parent / target_dir_name
-        if candidate.is_dir():
-            return candidate
-    return None
+
+from pathlib import Path
+import sys
+
+
+def get_base_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def find_dir_parent_direction(target_name: str, start_path: str | Path | None = None) -> Path:
+    current = Path(start_path).resolve() if start_path is not None else get_base_dir()
+
+    for candidate in (current, *current.parents):
+        if candidate.name == target_name or (candidate / target_name).is_dir():
+            return candidate if candidate.name == target_name else candidate / target_name
+
+    # 찾지 못했을 때 None 대신 안전한 폴백 경로 반환
+    return current
 
 SRC_DIR = find_dir_parent_direction(__file__, "src")
 if SRC_DIR and str(SRC_DIR) not in sys.path:
@@ -24,7 +52,7 @@ PROJECT_ROOT = find_dir_parent_direction(SRC_DIR, "PrintShopApp")
 if PROJECT_ROOT and str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-
+logd(f"PROJECT_ROOT:{PROJECT_ROOT}, SRC_DIR:{SRC_DIR}")
 
 from Common.Version.version_tab  import VersionTab
 from redis_server.redis_session_manager import redis_session_manager

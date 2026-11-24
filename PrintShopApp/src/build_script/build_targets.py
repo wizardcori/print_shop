@@ -95,6 +95,8 @@ class AppTargetSpec:
     copy_to_archive: bool = DEFAULT_COPY_TO_ARCHIVE
     include_in_installer: bool = DEFAULT_INCLUDE_IN_INSTALLER
     standalone_installer: bool = DEFAULT_STANDALONE_INSTALLER
+    hidden_imports: tuple[str, ...] = field(default_factory=tuple)
+    extra_pathex: tuple[str, ...] = field(default_factory=tuple)
 
 
 class _BuildTargetsMeta(type):
@@ -184,6 +186,10 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
         ):
             if flag_key in override and isinstance(override[flag_key], bool):
                 rec[flag_key] = override[flag_key]
+
+        for tuple_key in ("hidden_imports", "extra_pathex"):
+            if tuple_key in override:
+                rec[tuple_key] = normalize_str_tuple(override[tuple_key])
 
         rec["prefix"] = prefix
         return rec
@@ -297,6 +303,8 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
         copy_to_archive: bool = DEFAULT_COPY_TO_ARCHIVE,
         include_in_installer: bool = DEFAULT_INCLUDE_IN_INSTALLER,
         standalone_installer: bool = DEFAULT_STANDALONE_INSTALLER,
+        hidden_imports: tuple[str, ...] = (),
+        extra_pathex: tuple[str, ...] = (),
     ) -> dict:
         is_main_app_exception = str(order) == "1" and name == "App"
         resolved_name = MAIN_APP_OVERRIDE_NAME if is_main_app_exception else name
@@ -322,6 +330,8 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
             "copy_to_archive": bool(copy_to_archive),
             "include_in_installer": bool(include_in_installer),
             "standalone_installer": bool(standalone_installer),
+            "hidden_imports": tuple(hidden_imports),
+            "extra_pathex": tuple(extra_pathex),
         }
 
     @classmethod
@@ -346,6 +356,8 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
             copy_to_archive=bool(record.get("copy_to_archive", DEFAULT_COPY_TO_ARCHIVE)),
             include_in_installer=bool(record.get("include_in_installer", DEFAULT_INCLUDE_IN_INSTALLER)),
             standalone_installer=bool(record.get("standalone_installer", DEFAULT_STANDALONE_INSTALLER)),
+            hidden_imports=tuple(record.get("hidden_imports", ())),
+            extra_pathex=tuple(record.get("extra_pathex", ())),
         )
 
     @classmethod
@@ -370,6 +382,8 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
                 copy_to_archive=spec.copy_to_archive,
                 include_in_installer=spec.include_in_installer,
                 standalone_installer=spec.standalone_installer,
+                hidden_imports=spec.hidden_imports,
+                extra_pathex=spec.extra_pathex,
             )
 
         return type(class_name, (AppTargetSpec,), {"__init__": __init__})
@@ -723,7 +737,23 @@ BuildTargets.set_base_records(
         BuildTargets._make_record("2", "UpdateService"),
         BuildTargets._make_record("3", "UpdateManager"),
         BuildTargets._make_record("4", "VersionViewer"),
-        BuildTargets._make_record("5", "BuildManagerApp"),
+        BuildTargets._make_record(
+            "5",
+            "BuildManagerApp",
+            extra_pathex=("src/build_script",),
+            hidden_imports=(
+                "env_ui_helper",
+                "build_script.env_ui_helper",
+                "packaging_service",
+                "build_script.packaging_service",
+                "spec_builder",
+                "build_script.spec_builder",
+                "target_config_io",
+                "build_script.target_config_io",
+                "version_service",
+                "build_script.version_service",
+            ),
+        ),
     ]
 )
 
