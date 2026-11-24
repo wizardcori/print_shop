@@ -129,6 +129,7 @@ venv/
 # ==========================================
 /Authenticate/Authenticate.txt
 /secrets/
+/.secrets/
 .continue/
 *.pem
 *.key
