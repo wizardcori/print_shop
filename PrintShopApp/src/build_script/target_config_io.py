@@ -14,8 +14,8 @@ from typing import Any
 
 WORK_DIR_NAME: str = "build"
 DIST_DIR_NAME: str = "dist"
-RELEASE_DIR_NAME: str = "build_archive"
-INSTALL_DIR_NAME: str = "installer"
+RELEASE_DIR_NAME: str = "release"
+INSTALL_DIR_NAME: str = "Installer"
 
 DEFAULT_CONFIG_FILENAME: str = "build_dirs.json"
 ENV_APP_OVERRIDES_KEY: str = "BUILD_APP_OVERRIDES_JSON"
@@ -41,21 +41,128 @@ APP_OVERRIDE_FIELDS: tuple[str, ...] = (
     "version_file",
     "version_rel_paths",
     "console",
+    "copy_to_test",
+    "copy_to_archive",
+    "include_in_installer",
+    "standalone_installer",
+    "is_installer",
+    "hidden_imports",
+    "extra_pathex",
+    "pyinstaller",
+    "pyinstaller_onefile",
+    "pyinstaller_uac_admin",
+    "pyinstaller_icon_path",
+    "pyinstaller_hidden_imports",
+    "pyinstaller_excludes",
+    "pyinstaller_datas",
+    "pyinstaller_binaries",
+    "pyinstaller_extra_pathex",
+    "inno",
+    "inno_install_subdir",
+    "inno_excludes",
+    "inno_flags",
+    "inno_components",
+    "inno_tasks",
+    "extra",
     "bump_unit",
-    "mode",    
+    "mode",
     "clean_work",
     "clean_dist",
     "clean_spec",
 )
+
+JSON_SECTION_DIRS: str = "dirs"
+JSON_SECTION_APPS: str = "apps"
+JSON_SECTION_INSTALLER: str = "installer"
+
+INSTALLER_FIELD_TARGETS: str = "targets"
+INSTALLER_FIELD_ONLY: str = "installer_only"
+INSTALLER_FIELD_SKIP: str = "skip_installer"
+INSTALLER_FIELD_NAME: str = "name"
+INSTALLER_FIELD_VERSION_SOURCE: str = "version_source_id"
+INSTALLER_FIELD_EXTRA: str = "extra"
+
+INSTALLER_KNOWN_FIELDS: frozenset[str] = frozenset(
+    {
+        INSTALLER_FIELD_TARGETS,
+        INSTALLER_FIELD_ONLY,
+        INSTALLER_FIELD_SKIP,
+        INSTALLER_FIELD_NAME,
+        INSTALLER_FIELD_VERSION_SOURCE,
+    }
+)
+
+NONE_BUMP_TOKENS: frozenset[str] = frozenset({"none", "null", "false", "0", "변경 없음"})
+VALID_BUMP_UNITS: frozenset[str] = frozenset({"patch", "minor", "major"})
+
+TRUTHY_TOKENS: frozenset[str] = frozenset({"true", "1", "yes", "y", "on"})
+FALSY_TOKENS: frozenset[str] = frozenset({"false", "0", "no", "n", "off"})
+NULL_TOKENS: frozenset[str] = frozenset({"null", "none", ""})
+
+DEFAULT_JSON_INDENT: int = 2
+DEFAULT_TEXT_ENCODING: str = "utf-8"
+BOM_TEXT_ENCODING: str = "utf-8-sig"
+
+__all__ = [
+    "APP_OVERRIDE_FIELDS",
+    "BOM_TEXT_ENCODING",
+    "BuildDirConfig",
+    "DEFAULT_CONFIG_FILENAME",
+    "DEFAULT_JSON_INDENT",
+    "DEFAULT_TEXT_ENCODING",
+    "DIST_DIR_NAME",
+    "ENV_APP_OVERRIDES_KEY",
+    "ENV_DIR_KEYS",
+    "ENV_INSTALLER_CONFIG_KEY",
+    "ENV_INSTALLER_ONLY_KEY",
+    "ENV_INSTALLER_TARGETS_KEY",
+    "ENV_SKIP_INSTALLER_KEY",
+    "FALSY_TOKENS",
+    "INSTALLER_FIELD_EXTRA",
+    "INSTALLER_FIELD_NAME",
+    "INSTALLER_FIELD_ONLY",
+    "INSTALLER_FIELD_SKIP",
+    "INSTALLER_FIELD_TARGETS",
+    "INSTALLER_FIELD_VERSION_SOURCE",
+    "INSTALLER_KNOWN_FIELDS",
+    "INSTALL_DIR_NAME",
+    "InstallerBuildConfig",
+    "JSON_SECTION_APPS",
+    "JSON_SECTION_DIRS",
+    "JSON_SECTION_INSTALLER",
+    "NONE_BUMP_TOKENS",
+    "NULL_TOKENS",
+    "RELEASE_DIR_NAME",
+    "TRUTHY_TOKENS",
+    "VALID_BUMP_UNITS",
+    "WORK_DIR_NAME",
+    "add_build_config_arguments",
+    "extract_apps_from_env",
+    "extract_apps_from_json",
+    "extract_cli_config_overrides",
+    "extract_installer_from_env",
+    "extract_installer_from_json",
+    "load_json_dict",
+    "merge_app_override_dicts",
+    "normalize_bump_unit",
+    "normalize_str_tuple",
+    "normalize_target_id_list",
+    "parse_bool_env",
+    "parse_cli_app_override_tokens",
+    "parse_scalar_value",
+    "resolve_app_overrides",
+    "resolve_default_json_path",
+    "write_build_config_json",
+]
 
 
 def normalize_bump_unit(value: Any) -> str | None:
     if value is None:
         return None
     s = str(value).strip().lower()
-    if not s or s in ("none", "null", "false", "0", "변경 없음"):
+    if not s or s in NONE_BUMP_TOKENS:
         return None
-    if s in ("patch", "minor", "major"):
+    if s in VALID_BUMP_UNITS:
         return s
     return None
 
@@ -92,11 +199,11 @@ def normalize_target_id_list(value: Any) -> list[str] | None:
 def parse_scalar_value(raw: str) -> Any:
     text = raw.strip()
     low = text.lower()
-    if low in ("true", "1", "yes", "y", "on"):
+    if low in TRUTHY_TOKENS:
         return True
-    if low in ("false", "0", "no", "n", "off"):
+    if low in FALSY_TOKENS:
         return False
-    if low in ("null", "none", ""):
+    if low in NULL_TOKENS:
         return None
     if (text.startswith("{") and text.endswith("}")) or (text.startswith("[") and text.endswith("]")):
         try:
@@ -199,7 +306,7 @@ def load_json_dict(json_path: str | Path) -> dict[str, Any]:
     p = Path(json_path)
     if not p.is_file():
         raise FileNotFoundError(f"빌드 설정 JSON 파일을 찾을 수 없습니다: {p}")
-    with open(p, "r", encoding="utf-8-sig") as f:
+    with open(p, "r", encoding=BOM_TEXT_ENCODING) as f:
         loaded = json.load(f)
     if not isinstance(loaded, dict):
         raise ValueError(f"JSON 설정 최상위는 객체(dict)여야 합니다: {p}")
@@ -223,7 +330,7 @@ def extract_apps_from_json(json_path: str | Path | None) -> dict[str, dict[str, 
     if not json_path:
         return {}
     loaded = load_json_dict(json_path)
-    apps_section = loaded.get("apps")
+    apps_section = loaded.get(JSON_SECTION_APPS)
     if not isinstance(apps_section, dict):
         return {}
     return {str(k): dict(v) for k, v in apps_section.items() if isinstance(v, dict)}
@@ -243,7 +350,7 @@ def extract_installer_from_json(json_path: str | Path | None) -> dict[str, Any]:
     if not json_path:
         return {}
     loaded = load_json_dict(json_path)
-    section = loaded.get("installer")
+    section = loaded.get(JSON_SECTION_INSTALLER)
     return dict(section) if isinstance(section, dict) else {}
 
 
@@ -258,15 +365,15 @@ def extract_installer_from_env() -> dict[str, Any]:
 
     raw_targets = os.environ.get(ENV_INSTALLER_TARGETS_KEY)
     if raw_targets is not None and str(raw_targets).strip() != "":
-        merged["targets"] = normalize_target_id_list(raw_targets)
+        merged[INSTALLER_FIELD_TARGETS] = normalize_target_id_list(raw_targets)
 
     installer_only_env = parse_bool_env(ENV_INSTALLER_ONLY_KEY)
     if installer_only_env is not None:
-        merged["installer_only"] = installer_only_env
+        merged[INSTALLER_FIELD_ONLY] = installer_only_env
 
     skip_installer_env = parse_bool_env(ENV_SKIP_INSTALLER_KEY)
     if skip_installer_env is not None:
-        merged["skip_installer"] = skip_installer_env
+        merged[INSTALLER_FIELD_SKIP] = skip_installer_env
 
     return merged
 
@@ -291,7 +398,7 @@ class BuildDirConfig:
         if not json_path:
             return self
         loaded = load_json_dict(json_path)
-        section = loaded.get("dirs") if isinstance(loaded.get("dirs"), dict) else loaded
+        section = loaded.get(JSON_SECTION_DIRS) if isinstance(loaded.get(JSON_SECTION_DIRS), dict) else loaded
         return self.apply_dict(section)
 
     def apply_env(self) -> "BuildDirConfig":
@@ -344,29 +451,32 @@ class InstallerBuildConfig:
         if not data:
             return self
 
-        if "targets" in data:
-            raw_t = data.get("targets")
+        if INSTALLER_FIELD_TARGETS in data:
+            raw_t = data.get(INSTALLER_FIELD_TARGETS)
             if raw_t is None:
                 self.targets = None
             else:
                 normalized = normalize_target_id_list(raw_t)
                 self.targets = normalized if normalized is not None else []
 
-        if "installer_only" in data and isinstance(data.get("installer_only"), bool):
-            self.installer_only = bool(data["installer_only"])
+        if INSTALLER_FIELD_ONLY in data and isinstance(data.get(INSTALLER_FIELD_ONLY), bool):
+            self.installer_only = bool(data[INSTALLER_FIELD_ONLY])
 
-        if "skip_installer" in data and isinstance(data.get("skip_installer"), bool):
-            self.skip_installer = bool(data["skip_installer"])
+        if INSTALLER_FIELD_SKIP in data and isinstance(data.get(INSTALLER_FIELD_SKIP), bool):
+            self.skip_installer = bool(data[INSTALLER_FIELD_SKIP])
 
-        if "name" in data:
-            self.name = str(data["name"]).strip() if data["name"] else None
+        if INSTALLER_FIELD_NAME in data:
+            self.name = str(data[INSTALLER_FIELD_NAME]).strip() if data[INSTALLER_FIELD_NAME] else None
 
-        if "version_source_id" in data:
-            self.version_source_id = str(data["version_source_id"]).strip() if data["version_source_id"] else None
+        if INSTALLER_FIELD_VERSION_SOURCE in data:
+            self.version_source_id = (
+                str(data[INSTALLER_FIELD_VERSION_SOURCE]).strip()
+                if data[INSTALLER_FIELD_VERSION_SOURCE]
+                else None
+            )
 
-        known_keys = {"targets", "installer_only", "skip_installer", "name", "version_source_id"}
         for k, v in data.items():
-            if k not in known_keys:
+            if k not in INSTALLER_KNOWN_FIELDS:
                 if v is None:
                     self.extra.pop(k, None)
                 else:
@@ -407,16 +517,16 @@ class InstallerBuildConfig:
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
-            "targets": list(self.targets) if self.targets is not None else None,
-            "installer_only": self.installer_only,
-            "skip_installer": self.skip_installer,
+            INSTALLER_FIELD_TARGETS: list(self.targets) if self.targets is not None else None,
+            INSTALLER_FIELD_ONLY: self.installer_only,
+            INSTALLER_FIELD_SKIP: self.skip_installer,
         }
         if self.name is not None:
-            payload["name"] = self.name
+            payload[INSTALLER_FIELD_NAME] = self.name
         if self.version_source_id is not None:
-            payload["version_source_id"] = self.version_source_id
+            payload[INSTALLER_FIELD_VERSION_SOURCE] = self.version_source_id
         if self.extra:
-            payload["extra"] = dict(self.extra)
+            payload[INSTALLER_FIELD_EXTRA] = dict(self.extra)
         return payload
 
 
@@ -454,18 +564,18 @@ def write_build_config_json(
     target_path = Path(json_path)
     target_path.parent.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {
-        "dirs": {
+        JSON_SECTION_DIRS: {
             "work_dir_name": dir_config.work_dir_name,
             "dist_dir_name": dir_config.dist_dir_name,
             "release_dir_name": dir_config.release_dir_name,
             "install_dir_name": dir_config.install_dir_name,
         },
-        "apps": app_overrides,
+        JSON_SECTION_APPS: app_overrides,
     }
     if installer_config is not None:
-        payload["installer"] = installer_config.to_dict()
-    with open(target_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
+        payload[JSON_SECTION_INSTALLER] = installer_config.to_dict()
+    with open(target_path, "w", encoding=DEFAULT_TEXT_ENCODING) as f:
+        json.dump(payload, f, ensure_ascii=False, indent=DEFAULT_JSON_INDENT)
     return target_path
 
 
@@ -474,17 +584,17 @@ def add_build_config_arguments(parser: Any) -> None:
     parser.add_argument(
         "--dir-config",
         default=None,
-        help="디렉터리/앱/인스톨러 설정 JSON 파일 경로 (기본: build_dirs.json)",
+        help=f"디렉터리/앱/인스톨러 설정 JSON 파일 경로 (기본: {DEFAULT_CONFIG_FILENAME})",
     )
-    parser.add_argument("--work-dir-name", default=None, help="작업 폴더명 (기본: build)")
-    parser.add_argument("--dist-dir-name", default=None, help="배포 산출물 폴더명 (기본: dist)")
-    parser.add_argument("--release-dir-name", default=None, help="릴리스 폴더명 (기본: build_archive)")
-    parser.add_argument("--install-dir-name", default=None, help="인스톨러 폴더명 (기본: installer)")
+    parser.add_argument("--work-dir-name", default=None, help=f"작업 폴더명 (기본: {WORK_DIR_NAME})")
+    parser.add_argument("--dist-dir-name", default=None, help=f"배포 산출물 폴더명 (기본: {DIST_DIR_NAME})")
+    parser.add_argument("--release-dir-name", default=None, help=f"릴리스 폴더명 (기본: {RELEASE_DIR_NAME})")
+    parser.add_argument("--install-dir-name", default=None, help=f"인스톨러 폴더명 (기본: {INSTALL_DIR_NAME})")
 
     parser.add_argument(
         "--app-config",
         default=None,
-        help="앱별 세부설정 JSON 파일 경로 (최상위 또는 'apps' 객체 지원)",
+        help=f"앱별 세부설정 JSON 파일 경로 (최상위 또는 '{JSON_SECTION_APPS}' 객체 지원)",
     )
     parser.add_argument(
         "--app-set",
@@ -525,11 +635,11 @@ def extract_cli_config_overrides(args: Any) -> dict[str, Any]:
     cli_installer_overrides: dict[str, Any] = {}
     raw_inst_targets = getattr(args, "installer_targets", None)
     if raw_inst_targets is not None:
-        cli_installer_overrides["targets"] = normalize_target_id_list(raw_inst_targets)
+        cli_installer_overrides[INSTALLER_FIELD_TARGETS] = normalize_target_id_list(raw_inst_targets)
     if getattr(args, "installer_only", None) is not None:
-        cli_installer_overrides["installer_only"] = bool(getattr(args, "installer_only"))
+        cli_installer_overrides[INSTALLER_FIELD_ONLY] = bool(getattr(args, "installer_only"))
     if getattr(args, "skip_installer", None) is not None:
-        cli_installer_overrides["skip_installer"] = bool(getattr(args, "skip_installer"))
+        cli_installer_overrides[INSTALLER_FIELD_SKIP] = bool(getattr(args, "skip_installer"))
 
     return {
         "dir_config_json": getattr(args, "dir_config", None),

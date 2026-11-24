@@ -5,12 +5,13 @@
 from __future__ import annotations
 
 import os
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from Common.path_mgr import PathMgr
-from target_config_io import (
+from build_script.target_config_io import (
     APP_OVERRIDE_FIELDS,
     BuildDirConfig,
     DEFAULT_CONFIG_FILENAME,
@@ -28,8 +29,19 @@ from target_config_io import (
 )
 
 PREFIX: str = "PrintShop"
-MAIN_APP_OVERRIDE_NAME: str = "PrintShopApp"
+MAIN_APP_ORDER: str = "1"
+MAIN_APP_RAW_NAME: str = "App"
+MAIN_APP_OVERRIDE_NAME: str = f"{PREFIX}{MAIN_APP_RAW_NAME}"
+INSTALLER_TARGET_KEY: str = "Installer"
+INSTALLER_DEFAULT_LABEL: str = f"{PREFIX}{INSTALLER_TARGET_KEY}"
 TEST_DIR_NAME: str = "test"
+
+DEFAULT_ENTRY_FILENAME: str = "main_app.py"
+DEFAULT_VERSION_FILENAME: str = "version.txt"
+SRC_DIR_NAME: str = "src"
+EXE_EXTENSION: str = ".exe"
+SPEC_EXTENSION: str = ".spec"
+UNKNOWN_ORDER_SORT_KEY: int = 999999
 
 # 빌드 및 배포 정책 기본값 상수
 DEFAULT_CONSOLE: bool = True
@@ -37,6 +49,21 @@ DEFAULT_COPY_TO_TEST: bool = True
 DEFAULT_COPY_TO_ARCHIVE: bool = True
 DEFAULT_INCLUDE_IN_INSTALLER: bool = True
 DEFAULT_STANDALONE_INSTALLER: bool = False
+DEFAULT_IS_INSTALLER: bool = False
+DEFAULT_RUN_TEST: bool = True
+
+DEFAULT_ONEFILE: bool = True
+DEFAULT_UAC_ADMIN: bool = False
+
+LEGACY_TARGET_ALIASES: dict[str, str] = {
+    "app": MAIN_APP_OVERRIDE_NAME,
+    "main_app": MAIN_APP_OVERRIDE_NAME,
+    "update_service": "UpdateService",
+    "update_manager": "UpdateManager",
+    "version_viewer": "VersionViewer",
+    "build_manager_app": "BuildManagerApp",
+    "installer": INSTALLER_TARGET_KEY,
+}
 
 __all__ = [
     "ALL_TARGETS",
@@ -48,35 +75,82 @@ __all__ = [
     "DEFAULT_CONSOLE",
     "DEFAULT_COPY_TO_ARCHIVE",
     "DEFAULT_COPY_TO_TEST",
+    "DEFAULT_ENTRY_FILENAME",
     "DEFAULT_INCLUDE_IN_INSTALLER",
+    "DEFAULT_IS_INSTALLER",
+    "DEFAULT_ONEFILE",
     "DEFAULT_STANDALONE_INSTALLER",
+    "DEFAULT_UAC_ADMIN",
+    "DEFAULT_VERSION_FILENAME",
     "DIST_DIR_NAME",
     "ENV_APP_OVERRIDES_KEY",
     "ENV_DIR_KEYS",
+    "EXE_EXTENSION",
+    "INSTALLER_DEFAULT_LABEL",
+    "INSTALLER_TARGET_KEY",
     "INSTALL_DIR_NAME",
+    "InnoSetupSpec",
     "LABELS",
+    "LEGACY_TARGET_ALIASES",
+    "MAIN_APP_ORDER",
     "MAIN_APP_OVERRIDE_NAME",
+    "MAIN_APP_RAW_NAME",
     "PREFIX",
+    "PyInstallerSpec",
     "RELEASE_DIR_NAME",
+    "SPEC_EXTENSION",
+    "SRC_DIR_NAME",
     "TARGET_CLASSES",
     "TARGET_LABELS",
     "TARGET_SPECS",
     "TEST_DIR_NAME",
+    "UNKNOWN_ORDER_SORT_KEY",
     "WORK_DIR_NAME",
     "get_build_target_helpers",
     "get_target_spec",
+    "inject_target_records",
     "parse_cli_app_override_tokens",
 ]
 
 
 def _validate_single_segment_name(name: str, kind: str) -> str:
-    """루트 폴더명 및 앱 폴더명이 단일 디렉터리 세그먼트인지 검증."""
+    """루트 폴더명 및 앱/인스톨러 폴더명이 단일 디렉터리 세그먼트인지 검증."""
     cleaned = str(name or "").strip()
     if not cleaned or cleaned in (".", ".."):
         raise ValueError(f"유효하지 않은 {kind} 이름입니다: '{name}'")
     if "/" in cleaned or "\\" in cleaned or Path(cleaned).is_absolute():
         raise ValueError(f"{kind} 이름에는 경로 구분자나 절대경로를 사용할 수 없습니다: '{name}'")
     return cleaned
+
+
+def _order_sort_key(order_val: Any) -> int:
+    return int(order_val) if str(order_val).isdigit() else UNKNOWN_ORDER_SORT_KEY
+
+
+@dataclass(frozen=True)
+class PyInstallerSpec:
+    """PyInstaller 빌드 전용 예비/세부 설정."""
+
+    onefile: bool = DEFAULT_ONEFILE
+    uac_admin: bool = DEFAULT_UAC_ADMIN
+    icon_path: str | None = None
+    hidden_imports: tuple[str, ...] = ()
+    excludes: tuple[str, ...] = ()
+    datas: tuple[str, ...] = ()
+    binaries: tuple[str, ...] = ()
+    extra_pathex: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class InnoSetupSpec:
+    """Inno Setup 인스톨러 전용 예비/세부 설정."""
+
+    install_subdir: str = ""
+    excludes: str = ""
+    flags: tuple[str, ...] = ()
+    components: tuple[str, ...] = ()
+    tasks: tuple[str, ...] = ()
+    extra_defines: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -92,15 +166,20 @@ class AppTargetSpec:
     console: bool = DEFAULT_CONSOLE
     version_rel_paths: tuple[str, ...] = field(default_factory=tuple)
     copy_to_test: bool = DEFAULT_COPY_TO_TEST
+    run_test: bool = DEFAULT_RUN_TEST    
     copy_to_archive: bool = DEFAULT_COPY_TO_ARCHIVE
     include_in_installer: bool = DEFAULT_INCLUDE_IN_INSTALLER
     standalone_installer: bool = DEFAULT_STANDALONE_INSTALLER
+    is_installer: bool = DEFAULT_IS_INSTALLER
     hidden_imports: tuple[str, ...] = field(default_factory=tuple)
     extra_pathex: tuple[str, ...] = field(default_factory=tuple)
+    pyinstaller: PyInstallerSpec = field(default_factory=PyInstallerSpec)
+    inno: InnoSetupSpec = field(default_factory=InnoSetupSpec)
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 class _BuildTargetsMeta(type):
-    """RECORDS 변경 시 파생 맵(ALL_TARGETS, LABELS, SPECS 등)을 자동 갱신하는 메타클래스."""
+    """RECORDS 변경 시 클래스 변수(TARGET_CLASSES, TARGET_SPECS, ALL_TARGETS, LABELS 등)를 갱신."""
 
     def __setattr__(cls, name: str, value: Any) -> None:
         super().__setattr__(name, value)
@@ -109,7 +188,7 @@ class _BuildTargetsMeta(type):
 
 
 class BuildTargets(metaclass=_BuildTargetsMeta):
-    """앱별 빌드 대상 레코드 및 조회/경로 헬퍼를 제공하는 클래스."""
+    """앱 및 인스톨러 대상 레코드, 설정 및 경로 헬퍼를 관리하는 클래스."""
 
     PREFIX: str = PREFIX
     TEST_DIR_NAME: str = TEST_DIR_NAME
@@ -117,12 +196,48 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
     _base_records: list[dict] = []
     _app_overrides: dict[str, dict[str, Any]] = {}
     RECORDS: list[dict] = []
+
     TARGET_CLASSES: tuple[type[AppTargetSpec], ...] = ()
+    TARGET_SPECS: tuple[AppTargetSpec, ...] = ()
     SPECS: tuple[AppTargetSpec, ...] = ()
     BY_KEY: dict[str, AppTargetSpec] = {}
     BY_ORDER: dict[str, AppTargetSpec] = {}
     ALL_TARGETS: dict[str, str] = {}
     LABELS: dict[str, str] = {}
+    TARGET_LABELS: dict[str, str] = LABELS
+
+    @classmethod
+    def _build_pyinstaller_dict(cls, raw: Any) -> dict[str, Any]:
+        src = raw if isinstance(raw, dict) else {}
+        icon_val = src.get("icon_path")
+        return {
+            "onefile": bool(src.get("onefile", DEFAULT_ONEFILE)),
+            "uac_admin": bool(src.get("uac_admin", DEFAULT_UAC_ADMIN)),
+            "icon_path": str(icon_val).strip() if icon_val else None,
+            "hidden_imports": normalize_str_tuple(src.get("hidden_imports")) or (),
+            "excludes": normalize_str_tuple(src.get("excludes")) or (),
+            "datas": normalize_str_tuple(src.get("datas")) or (),
+            "binaries": normalize_str_tuple(src.get("binaries")) or (),
+            "extra_pathex": normalize_str_tuple(src.get("extra_pathex")) or (),
+        }
+
+    @classmethod
+    def _build_inno_dict(cls, raw: Any) -> dict[str, Any]:
+        src = raw if isinstance(raw, dict) else {}
+        raw_defines = src.get("extra_defines")
+        defines_clean: dict[str, str] = {}
+        if isinstance(raw_defines, dict):
+            for k, v in raw_defines.items():
+                if str(k).strip() and v is not None:
+                    defines_clean[str(k).strip()] = str(v)
+        return {
+            "install_subdir": str(src.get("install_subdir") or "").strip(),
+            "excludes": str(src.get("excludes") or "").strip(),
+            "flags": normalize_str_tuple(src.get("flags")) or (),
+            "components": normalize_str_tuple(src.get("components")) or (),
+            "tasks": normalize_str_tuple(src.get("tasks")) or (),
+            "extra_defines": defines_clean,
+        }
 
     @classmethod
     def _apply_override_to_record(cls, base_rec: dict, override: dict[str, Any]) -> dict:
@@ -130,7 +245,7 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
         prefix = rec.get("prefix", cls.PREFIX)
 
         if "label" in override and isinstance(override["label"], str) and override["label"].strip():
-            rec["label"] = _validate_single_segment_name(override["label"].strip(), "앱 라벨")
+            rec["label"] = _validate_single_segment_name(override["label"].strip(), "폴더 라벨")
 
         resolved_label = rec["label"]
 
@@ -144,14 +259,14 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
         if "exe_name" in override and isinstance(override["exe_name"], str) and override["exe_name"].strip():
             rec["exe_name"] = override["exe_name"].strip()
         elif "label" in override:
-            rec["exe_name"] = f"{resolved_label}.exe"
+            rec["exe_name"] = f"{resolved_label}{EXE_EXTENSION}"
 
         if "spec_hints" in override:
             sh = normalize_str_tuple(override["spec_hints"])
             if sh:
                 rec["spec_hints"] = sh
         elif "label" in override:
-            rec["spec_hints"] = (f"{resolved_label}.spec",)
+            rec["spec_hints"] = (f"{resolved_label}{SPEC_EXTENSION}",)
 
         if "entry_hints" in override:
             eh = normalize_str_tuple(override["entry_hints"])
@@ -159,10 +274,11 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
                 rec["entry_hints"] = eh
         elif "entry_file" in override and isinstance(override["entry_file"], str) and override["entry_file"].strip():
             entry_fn = override["entry_file"].strip().lstrip("/\\")
-            if entry_fn.startswith("src/"):
-                rec["entry_hints"] = (entry_fn,)
-            else:
-                rec["entry_hints"] = (f"src/{primary_dir}/{entry_fn}",)
+            rec["entry_hints"] = (
+                (entry_fn,)
+                if entry_fn.startswith(f"{SRC_DIR_NAME}/")
+                else (f"{SRC_DIR_NAME}/{primary_dir}/{entry_fn}",)
+            )
 
         if "version_rel_paths" in override:
             vr = normalize_str_tuple(override["version_rel_paths"])
@@ -170,10 +286,11 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
                 rec["version_rel_paths"] = vr
         elif "version_file" in override and isinstance(override["version_file"], str) and override["version_file"].strip():
             ver_fn = override["version_file"].strip().lstrip("/\\")
-            if ver_fn.startswith("src/"):
-                rec["version_rel_paths"] = (ver_fn,)
-            else:
-                rec["version_rel_paths"] = (f"src/{primary_dir}/{ver_fn}",)
+            rec["version_rel_paths"] = (
+                (ver_fn,)
+                if ver_fn.startswith(f"{SRC_DIR_NAME}/")
+                else (f"{SRC_DIR_NAME}/{primary_dir}/{ver_fn}",)
+            )
 
         if "console" in override and isinstance(override["console"], bool):
             rec["console"] = override["console"]
@@ -183,13 +300,66 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
             "copy_to_archive",
             "include_in_installer",
             "standalone_installer",
+            "is_installer",
         ):
             if flag_key in override and isinstance(override[flag_key], bool):
                 rec[flag_key] = override[flag_key]
 
         for tuple_key in ("hidden_imports", "extra_pathex"):
             if tuple_key in override:
-                rec[tuple_key] = normalize_str_tuple(override[tuple_key])
+                norm_t = normalize_str_tuple(override[tuple_key])
+                if norm_t is not None:
+                    rec[tuple_key] = norm_t
+
+        py_dict = cls._build_pyinstaller_dict(rec.get("pyinstaller"))
+        if isinstance(override.get("pyinstaller"), dict):
+            py_dict.update(cls._build_pyinstaller_dict({**py_dict, **override["pyinstaller"]}))
+        py_flat_map = {
+            "pyinstaller_onefile": ("onefile", lambda v: bool(v) if isinstance(v, bool) else py_dict["onefile"]),
+            "pyinstaller_uac_admin": ("uac_admin", lambda v: bool(v) if isinstance(v, bool) else py_dict["uac_admin"]),
+            "pyinstaller_icon_path": ("icon_path", lambda v: str(v).strip() if v else None),
+            "pyinstaller_hidden_imports": ("hidden_imports", lambda v: normalize_str_tuple(v) or ()),
+            "pyinstaller_excludes": ("excludes", lambda v: normalize_str_tuple(v) or ()),
+            "pyinstaller_datas": ("datas", lambda v: normalize_str_tuple(v) or ()),
+            "pyinstaller_binaries": ("binaries", lambda v: normalize_str_tuple(v) or ()),
+            "pyinstaller_extra_pathex": ("extra_pathex", lambda v: normalize_str_tuple(v) or ()),
+        }
+        for flat_k, (sub_k, conv_fn) in py_flat_map.items():
+            if flat_k in override:
+                py_dict[sub_k] = conv_fn(override[flat_k])
+        rec["pyinstaller"] = py_dict
+
+        inno_dict = cls._build_inno_dict(rec.get("inno"))
+        if isinstance(override.get("inno"), dict):
+            merged_inno_src = {
+                **inno_dict,
+                **override["inno"],
+                "extra_defines": {
+                    **inno_dict.get("extra_defines", {}),
+                    **(
+                        override["inno"].get("extra_defines")
+                        if isinstance(override["inno"].get("extra_defines"), dict)
+                        else {}
+                    ),
+                },
+            }
+            inno_dict = cls._build_inno_dict(merged_inno_src)
+        inno_flat_map = {
+            "inno_install_subdir": ("install_subdir", lambda v: str(v or "").strip()),
+            "inno_excludes": ("excludes", lambda v: str(v or "").strip()),
+            "inno_flags": ("flags", lambda v: normalize_str_tuple(v) or ()),
+            "inno_components": ("components", lambda v: normalize_str_tuple(v) or ()),
+            "inno_tasks": ("tasks", lambda v: normalize_str_tuple(v) or ()),
+        }
+        for flat_k, (sub_k, conv_fn) in inno_flat_map.items():
+            if flat_k in override:
+                inno_dict[sub_k] = conv_fn(override[flat_k])
+        rec["inno"] = inno_dict
+
+        if isinstance(override.get("extra"), dict):
+            merged_extra = dict(rec.get("extra") or {})
+            merged_extra.update(override["extra"])
+            rec["extra"] = merged_extra
 
         rec["prefix"] = prefix
         return rec
@@ -198,11 +368,10 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
     def _refresh_records_with_overrides(cls) -> None:
         if not cls._base_records:
             return
-        merged_recs = [
+        cls.RECORDS = [
             cls._apply_override_to_record(base_rec, cls._app_overrides.get(base_rec["key"], {}))
             for base_rec in cls._base_records
         ]
-        cls.RECORDS = merged_recs
 
     @classmethod
     def configure(
@@ -233,7 +402,6 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
             ("work_dir_name", "work 루트 폴더"),
             ("dist_dir_name", "dist 루트 폴더"),
             ("release_dir_name", "release 루트 폴더"),
-            ("install_dir_name", "install 루트 폴더"),
         ):
             _validate_single_segment_name(getattr(resolved_cfg, field_name), label)
 
@@ -284,8 +452,9 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
             return cls._dir_config
         return BuildDirConfig.resolve(project_root=project_root)
 
-    @staticmethod
+    @classmethod
     def _make_record(
+        cls,
         order: str,
         name: str,
         *,
@@ -294,25 +463,63 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
         exe_name: str | None = None,
         spec_hints: tuple[str, ...] | None = None,
         dir_hints: tuple[str, ...] | None = None,
-        entry_file: str = "main_app.py",
+        entry_file: str = DEFAULT_ENTRY_FILENAME,
         entry_hints: tuple[str, ...] | None = None,
-        version_file: str = "version.txt",
+        version_file: str = DEFAULT_VERSION_FILENAME,
         version_rel_paths: tuple[str, ...] | None = None,
         console: bool = DEFAULT_CONSOLE,
         copy_to_test: bool = DEFAULT_COPY_TO_TEST,
+        run_test: bool = DEFAULT_RUN_TEST,        
         copy_to_archive: bool = DEFAULT_COPY_TO_ARCHIVE,
         include_in_installer: bool = DEFAULT_INCLUDE_IN_INSTALLER,
         standalone_installer: bool = DEFAULT_STANDALONE_INSTALLER,
+        is_installer: bool = DEFAULT_IS_INSTALLER,
         hidden_imports: tuple[str, ...] = (),
         extra_pathex: tuple[str, ...] = (),
+        pyinstaller: dict[str, Any] | PyInstallerSpec | None = None,
+        inno: dict[str, Any] | InnoSetupSpec | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> dict:
-        is_main_app_exception = str(order) == "1" and name == "App"
+        is_main_app_exception = str(order) == MAIN_APP_ORDER and name == MAIN_APP_RAW_NAME
         resolved_name = MAIN_APP_OVERRIDE_NAME if is_main_app_exception else name
         resolved_key = MAIN_APP_OVERRIDE_NAME if is_main_app_exception else name
-        resolved_label = label or (MAIN_APP_OVERRIDE_NAME if is_main_app_exception else f"{prefix}{name}")
-        _validate_single_segment_name(resolved_label, "앱 폴더 라벨")
-        resolved_dirs = dir_hints or ((MAIN_APP_OVERRIDE_NAME, "App") if is_main_app_exception else (name,))
+        resolved_label = (
+            label.strip()
+            if isinstance(label, str) and label.strip()
+            else (MAIN_APP_OVERRIDE_NAME if is_main_app_exception else f"{prefix}{name}")
+        )
+        _validate_single_segment_name(resolved_label, "폴더 라벨")
+        resolved_dirs = dir_hints or (
+            (MAIN_APP_OVERRIDE_NAME, MAIN_APP_RAW_NAME) if is_main_app_exception else (name,)
+        )
         primary_dir = resolved_dirs[0]
+
+        py_raw = (
+            {
+                "onefile": pyinstaller.onefile,
+                "uac_admin": pyinstaller.uac_admin,
+                "icon_path": pyinstaller.icon_path,
+                "hidden_imports": pyinstaller.hidden_imports,
+                "excludes": pyinstaller.excludes,
+                "datas": pyinstaller.datas,
+                "binaries": pyinstaller.binaries,
+                "extra_pathex": pyinstaller.extra_pathex,
+            }
+            if isinstance(pyinstaller, PyInstallerSpec)
+            else (pyinstaller or {})
+        )
+        inno_raw = (
+            {
+                "install_subdir": inno.install_subdir,
+                "excludes": inno.excludes,
+                "flags": inno.flags,
+                "components": inno.components,
+                "tasks": inno.tasks,
+                "extra_defines": inno.extra_defines,
+            }
+            if isinstance(inno, InnoSetupSpec)
+            else (inno or {})
+        )
 
         return {
             "order": order,
@@ -320,18 +527,23 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
             "name": resolved_name,
             "prefix": prefix,
             "label": resolved_label,
-            "exe_name": exe_name or f"{resolved_label}.exe",
-            "spec_hints": spec_hints or (f"{resolved_label}.spec",),
+            "exe_name": exe_name or f"{resolved_label}{EXE_EXTENSION}",
+            "spec_hints": spec_hints or (f"{resolved_label}{SPEC_EXTENSION}",),
             "dir_hints": resolved_dirs,
-            "entry_hints": entry_hints or (f"src/{primary_dir}/{entry_file}",),
+            "entry_hints": entry_hints or (f"{SRC_DIR_NAME}/{primary_dir}/{entry_file}",),
             "console": bool(console),
-            "version_rel_paths": version_rel_paths or (f"src/{primary_dir}/{version_file}",),
+            "version_rel_paths": version_rel_paths or (f"{SRC_DIR_NAME}/{primary_dir}/{version_file}",),
             "copy_to_test": bool(copy_to_test),
+            "run_test": bool(run_test),            
             "copy_to_archive": bool(copy_to_archive),
             "include_in_installer": bool(include_in_installer),
             "standalone_installer": bool(standalone_installer),
+            "is_installer": bool(is_installer),
             "hidden_imports": tuple(hidden_imports),
             "extra_pathex": tuple(extra_pathex),
+            "pyinstaller": cls._build_pyinstaller_dict(py_raw),
+            "inno": cls._build_inno_dict(inno_raw),
+            "extra": dict(extra) if isinstance(extra, dict) else {},
         }
 
     @classmethod
@@ -341,6 +553,8 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
 
     @classmethod
     def _record_to_spec(cls, record: dict) -> AppTargetSpec:
+        py_d = cls._build_pyinstaller_dict(record.get("pyinstaller"))
+        inno_d = cls._build_inno_dict(record.get("inno"))
         return AppTargetSpec(
             order=record["order"],
             key=record["key"],
@@ -353,11 +567,16 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
             console=bool(record.get("console", DEFAULT_CONSOLE)),
             version_rel_paths=record.get("version_rel_paths", ()),
             copy_to_test=bool(record.get("copy_to_test", DEFAULT_COPY_TO_TEST)),
+            run_test=bool(record.get("run_test", DEFAULT_RUN_TEST)),            
             copy_to_archive=bool(record.get("copy_to_archive", DEFAULT_COPY_TO_ARCHIVE)),
             include_in_installer=bool(record.get("include_in_installer", DEFAULT_INCLUDE_IN_INSTALLER)),
             standalone_installer=bool(record.get("standalone_installer", DEFAULT_STANDALONE_INSTALLER)),
+            is_installer=bool(record.get("is_installer", DEFAULT_IS_INSTALLER)),
             hidden_imports=tuple(record.get("hidden_imports", ())),
             extra_pathex=tuple(record.get("extra_pathex", ())),
+            pyinstaller=PyInstallerSpec(**py_d),
+            inno=InnoSetupSpec(**inno_d),
+            extra=dict(record.get("extra") or {}),
         )
 
     @classmethod
@@ -382,8 +601,12 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
                 copy_to_archive=spec.copy_to_archive,
                 include_in_installer=spec.include_in_installer,
                 standalone_installer=spec.standalone_installer,
+                is_installer=spec.is_installer,
                 hidden_imports=spec.hidden_imports,
                 extra_pathex=spec.extra_pathex,
+                pyinstaller=spec.pyinstaller,
+                inno=spec.inno,
+                extra=spec.extra,
             )
 
         return type(class_name, (AppTargetSpec,), {"__init__": __init__})
@@ -398,36 +621,48 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
         all_targets = {spec.order: spec.key for spec in specs}
         labels = {spec.key: spec.label for spec in specs}
 
+        all_targets_cls = getattr(cls, "ALL_TARGETS", None)
+        if isinstance(all_targets_cls, dict):
+            all_targets_cls.clear()
+            all_targets_cls.update(all_targets)
+        else:
+            all_targets_cls = dict(all_targets)
+
+        labels_cls = getattr(cls, "LABELS", None)
+        if isinstance(labels_cls, dict):
+            labels_cls.clear()
+            labels_cls.update(labels)
+        else:
+            labels_cls = dict(labels)
+
         type.__setattr__(cls, "TARGET_CLASSES", target_classes)
+        type.__setattr__(cls, "TARGET_SPECS", specs)
         type.__setattr__(cls, "SPECS", specs)
         type.__setattr__(cls, "BY_KEY", by_key)
         type.__setattr__(cls, "BY_ORDER", by_order)
-        type.__setattr__(cls, "ALL_TARGETS", all_targets)
-        type.__setattr__(cls, "LABELS", labels)
-
-        mod = globals()
-        if "TARGET_CLASSES" in mod:
-            mod["TARGET_CLASSES"] = target_classes
-        if "TARGET_SPECS" in mod:
-            mod["TARGET_SPECS"] = specs
-        if "ALL_TARGETS" in mod and isinstance(mod["ALL_TARGETS"], dict):
-            mod["ALL_TARGETS"].clear()
-            mod["ALL_TARGETS"].update(all_targets)
-        if "LABELS" in mod and isinstance(mod["LABELS"], dict):
-            mod["LABELS"].clear()
-            mod["LABELS"].update(labels)
-        if "TARGET_LABELS" in mod and isinstance(mod["TARGET_LABELS"], dict):
-            mod["TARGET_LABELS"].clear()
-            mod["TARGET_LABELS"].update(labels)
+        type.__setattr__(cls, "ALL_TARGETS", all_targets_cls)
+        type.__setattr__(cls, "LABELS", labels_cls)
+        type.__setattr__(cls, "TARGET_LABELS", labels_cls)
 
     @classmethod
-    def ordered_keys(cls) -> list[str]:
-        return [cls.ALL_TARGETS[k] for k in sorted(cls.ALL_TARGETS.keys(), key=int)]
+    def app_keys(cls) -> list[str]:
+        """인스톨러 전용 대상을 제외한 일반 앱 target key 목록."""
+        return [
+            spec.key
+            for spec in sorted(cls.SPECS, key=lambda s: _order_sort_key(s.order))
+            if not spec.is_installer
+        ]
+
+    @classmethod
+    def ordered_keys(cls, *, include_installer: bool = False) -> list[str]:
+        if include_installer:
+            return [cls.ALL_TARGETS[k] for k in sorted(cls.ALL_TARGETS.keys(), key=_order_sort_key)]
+        return cls.app_keys()
 
     @classmethod
     def parse_targets(cls, raw_targets: list[str] | str | None) -> list[str]:
         if not raw_targets:
-            return cls.ordered_keys()
+            return cls.ordered_keys(include_installer=False)
 
         tokens: list[str] = []
         if isinstance(raw_targets, str):
@@ -442,14 +677,6 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
                     if t:
                         tokens.append(t)
 
-        legacy_alias = {
-            "app": MAIN_APP_OVERRIDE_NAME,
-            "main_app": MAIN_APP_OVERRIDE_NAME,
-            "update_service": "UpdateService",
-            "update_manager": "UpdateManager",
-            "version_viewer": "VersionViewer",
-            "build_manager_app": "BuildManagerApp",
-        }
         reverse_map = {v.lower(): v for v in cls.ALL_TARGETS.values()}
 
         resolved: list[str] = []
@@ -459,8 +686,8 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
                 mapped = cls.ALL_TARGETS[tok]
             elif low in reverse_map:
                 mapped = reverse_map[low]
-            elif low in legacy_alias and legacy_alias[low] in cls.BY_KEY:
-                mapped = legacy_alias[low]
+            elif low in LEGACY_TARGET_ALIASES and LEGACY_TARGET_ALIASES[low] in cls.BY_KEY:
+                mapped = LEGACY_TARGET_ALIASES[low]
             else:
                 raise ValueError(
                     f"알 수 없는 빌드 대상입니다: '{tok}' "
@@ -482,7 +709,7 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
     def get_folder_name(cls, target_key: str) -> str:
         spec = cls.get_spec(target_key)
         folder = spec.label if spec else cls.get_label(target_key)
-        return _validate_single_segment_name(folder, "앱 폴더")
+        return _validate_single_segment_name(folder, "폴더")
 
     @classmethod
     def _resolve_root_folder_path(
@@ -514,7 +741,7 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
         app_dir = (root_dir / app_folder).resolve()
         if app_dir.parent != root_dir or app_dir.parent.parent != root:
             raise ValueError(
-                f"산출물 경로는 <project_root>/<루트폴더>/<앱폴더> 구조여야 합니다: {app_dir}"
+                f"산출물 경로는 <project_root>/<루트폴더>/<대상폴더> 구조여야 합니다: {app_dir}"
             )
         if create:
             app_dir.mkdir(parents=True, exist_ok=True)
@@ -528,7 +755,6 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
         target_key: str,
         candidate_path: str | Path,
     ) -> Path:
-        """candidate_path가 <project_root>/<루트폴더>/<앱폴더> 또는 그 하위 경로인지 검증."""
         expected_app_dir = Path(
             cls._resolve_app_folder_path(project_root, root_folder_name, target_key, create=False)
         ).resolve()
@@ -551,7 +777,6 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
             _validate_single_segment_name(dcfg.work_dir_name, "work 루트 폴더"),
             _validate_single_segment_name(dcfg.dist_dir_name, "dist 루트 폴더"),
             _validate_single_segment_name(dcfg.release_dir_name, "release 루트 폴더"),
-            _validate_single_segment_name(dcfg.install_dir_name, "install 루트 폴더"),
         ]
         if include_test:
             names.append(_validate_single_segment_name(cls.TEST_DIR_NAME, "test 루트 폴더"))
@@ -568,9 +793,6 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
         *,
         include_test: bool = True,
     ) -> list[str]:
-        """<project_root>/<루트폴더> 산출물 디렉터리를 일관된 규칙으로 정리."""
-        import shutil
-
         removed: list[str] = []
         for folder_name in cls.get_managed_root_names(project_root, include_test=include_test):
             target_dir = cls._resolve_root_folder_path(project_root, folder_name)
@@ -593,14 +815,21 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
 
     @classmethod
     def get_install_root(cls, project_root: str | Path = PathMgr.PROJECT_ROOT) -> str:
-        return str(cls._resolve_root_folder_path(project_root, cls.get_dir_config(project_root).install_dir_name))
+        """인스톨러도 다른 앱과 동일하게 release 루트 기준으로 관리."""
+        return cls.get_release_root(project_root)
 
     @classmethod
     def get_test_root(cls, project_root: str | Path = PathMgr.PROJECT_ROOT) -> str:
         return str(cls._resolve_root_folder_path(project_root, cls.TEST_DIR_NAME))
 
     @classmethod
-    def get_work_dir(cls, target_key: str, project_root: str | Path = PathMgr.PROJECT_ROOT, *, create: bool = False) -> str:
+    def get_work_dir(
+        cls,
+        target_key: str,
+        project_root: str | Path = PathMgr.PROJECT_ROOT,
+        *,
+        create: bool = False,
+    ) -> str:
         return cls._resolve_app_folder_path(
             project_root,
             cls.get_dir_config(project_root).work_dir_name,
@@ -609,7 +838,13 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
         )
 
     @classmethod
-    def get_dist_dir(cls, target_key: str, project_root: str | Path = PathMgr.PROJECT_ROOT, *, create: bool = False) -> str:
+    def get_dist_dir(
+        cls,
+        target_key: str,
+        project_root: str | Path = PathMgr.PROJECT_ROOT,
+        *,
+        create: bool = False,
+    ) -> str:
         return cls._resolve_app_folder_path(
             project_root,
             cls.get_dir_config(project_root).dist_dir_name,
@@ -618,7 +853,13 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
         )
 
     @classmethod
-    def get_release_dir(cls, target_key: str, project_root: str | Path = PathMgr.PROJECT_ROOT, *, create: bool = False) -> str:
+    def get_release_dir(
+        cls,
+        target_key: str,
+        project_root: str | Path = PathMgr.PROJECT_ROOT,
+        *,
+        create: bool = False,
+    ) -> str:
         return cls._resolve_app_folder_path(
             project_root,
             cls.get_dir_config(project_root).release_dir_name,
@@ -627,16 +868,37 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
         )
 
     @classmethod
-    def get_install_dir(cls, target_key: str, project_root: str | Path = PathMgr.PROJECT_ROOT, *, create: bool = False) -> str:
-        return cls._resolve_app_folder_path(
-            project_root,
-            cls.get_dir_config(project_root).install_dir_name,
-            target_key,
-            create=create,
-        )
+    def get_install_dir(
+        cls,
+        target_key: str = INSTALLER_TARGET_KEY,
+        project_root: str | Path = PathMgr.PROJECT_ROOT,
+        *,
+        create: bool = False,
+    ) -> str:
+        """인스톨러도 get_release_root 아래 레코드 폴더명으로 경로를 반환."""
+        key = target_key if target_key in cls.BY_KEY else INSTALLER_TARGET_KEY
+        return cls.get_release_dir(key, project_root, create=create)
 
     @classmethod
-    def get_test_dir(cls, target_key: str, project_root: str | Path = PathMgr.PROJECT_ROOT, *, create: bool = False) -> str:
+    def get_installer_dist_dir(
+        cls,
+        target_key: str = INSTALLER_TARGET_KEY,
+        project_root: str | Path = PathMgr.PROJECT_ROOT,
+        *,
+        create: bool = False,
+    ) -> str:
+        """dist 루트 아래 인스톨러 폴더 경로를 반환."""
+        key = target_key if target_key in cls.BY_KEY else INSTALLER_TARGET_KEY
+        return cls.get_dist_dir(key, project_root, create=create)
+
+    @classmethod
+    def get_test_dir(
+        cls,
+        target_key: str,
+        project_root: str | Path = PathMgr.PROJECT_ROOT,
+        *,
+        create: bool = False,
+    ) -> str:
         return cls._resolve_app_folder_path(
             project_root,
             cls.TEST_DIR_NAME,
@@ -645,7 +907,13 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
         )
 
     @classmethod
-    def get_app_dirs(cls, target_key: str, project_root: str | Path = PathMgr.PROJECT_ROOT, *, create: bool = False) -> dict[str, str]:
+    def get_app_dirs(
+        cls,
+        target_key: str,
+        project_root: str | Path = PathMgr.PROJECT_ROOT,
+        *,
+        create: bool = False,
+    ) -> dict[str, str]:
         return {
             "work_dir": cls.get_work_dir(target_key, project_root, create=create),
             "dist_dir": cls.get_dist_dir(target_key, project_root, create=create),
@@ -655,8 +923,12 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
         }
 
     @classmethod
-    def ensure_all_app_dirs(cls, project_root: str | Path = PathMgr.PROJECT_ROOT, targets: list[str] | None = None) -> dict[str, dict[str, str]]:
-        target_keys = targets or cls.ordered_keys()
+    def ensure_all_app_dirs(
+        cls,
+        project_root: str | Path = PathMgr.PROJECT_ROOT,
+        targets: list[str] | None = None,
+    ) -> dict[str, dict[str, str]]:
+        target_keys = targets or cls.ordered_keys(include_installer=True)
         return {key: cls.get_app_dirs(key, project_root, create=True) for key in target_keys}
 
     @classmethod
@@ -702,7 +974,7 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
                     return str(root / Path(*rel.split("/")))
 
             for sd in spec.dir_hints:
-                candidate = root / "src" / sd / "version.txt"
+                candidate = root / SRC_DIR_NAME / sd / DEFAULT_VERSION_FILENAME
                 if candidate.is_file():
                     return str(candidate)
 
@@ -718,44 +990,41 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
         root = Path(project_root)
         if spec:
             for sd in spec.dir_hints:
-                candidate_dir = root / "src" / sd
+                candidate_dir = root / SRC_DIR_NAME / sd
                 if candidate_dir.is_dir():
                     return str(candidate_dir)
 
         return None
 
 
-TARGET_CLASSES: tuple[type[AppTargetSpec], ...] = ()
-TARGET_SPECS: tuple[AppTargetSpec, ...] = ()
-ALL_TARGETS: dict[str, str] = {}
-LABELS: dict[str, str] = {}
-TARGET_LABELS: dict[str, str] = LABELS
+TARGET_CLASSES: tuple[type[AppTargetSpec], ...] = BuildTargets.TARGET_CLASSES
+TARGET_SPECS: tuple[AppTargetSpec, ...] = BuildTargets.TARGET_SPECS
+ALL_TARGETS: dict[str, str] = BuildTargets.ALL_TARGETS
+LABELS: dict[str, str] = BuildTargets.LABELS
+TARGET_LABELS: dict[str, str] = BuildTargets.TARGET_LABELS
 
-BuildTargets.set_base_records(
-    [
-        BuildTargets._make_record("1", "App", dir_hints=("PrintShopApp", "App")),
-        BuildTargets._make_record("2", "UpdateService"),
-        BuildTargets._make_record("3", "UpdateManager"),
-        BuildTargets._make_record("4", "VersionViewer"),
-        BuildTargets._make_record(
-            "5",
-            "BuildManagerApp",
-            extra_pathex=("src/build_script",),
-            hidden_imports=(
-                "env_ui_helper",
-                "build_script.env_ui_helper",
-                "packaging_service",
-                "build_script.packaging_service",
-                "spec_builder",
-                "build_script.spec_builder",
-                "target_config_io",
-                "build_script.target_config_io",
-                "version_service",
-                "build_script.version_service",
-            ),
-        ),
-    ]
-)
+
+def inject_target_records(
+    records: list[dict[str, Any]],
+    *,
+    dir_config: BuildDirConfig | None = None,
+    app_overrides: dict[str, dict[str, Any]] | None = None,
+) -> type[BuildTargets]:
+    """외부에서 정의한 레코드 목록을 BuildTargets 클래스 변수에 주입."""
+    global TARGET_CLASSES, TARGET_SPECS, ALL_TARGETS, LABELS, TARGET_LABELS
+
+    if dir_config is not None:
+        BuildTargets._dir_config = dir_config
+    if app_overrides is not None:
+        BuildTargets.set_app_overrides(app_overrides, replace=True)
+    BuildTargets.set_base_records(records)
+
+    TARGET_CLASSES = BuildTargets.TARGET_CLASSES
+    TARGET_SPECS = BuildTargets.TARGET_SPECS
+    ALL_TARGETS = BuildTargets.ALL_TARGETS
+    LABELS = BuildTargets.LABELS
+    TARGET_LABELS = BuildTargets.TARGET_LABELS
+    return BuildTargets
 
 
 def get_target_spec(target_key: str) -> AppTargetSpec | None:
@@ -769,7 +1038,7 @@ def get_build_target_helpers(project_root: str | Path = PathMgr.PROJECT_ROOT) ->
         "work_dir_name": BuildTargets.get_dir_config(root).work_dir_name,
         "dist_dir_name": BuildTargets.get_dir_config(root).dist_dir_name,
         "release_dir_name": BuildTargets.get_dir_config(root).release_dir_name,
-        "install_dir_name": BuildTargets.get_dir_config(root).install_dir_name,
+        "install_dir_name": BuildTargets.get_dir_config(root).release_dir_name,
         "test_dir_name": BuildTargets.TEST_DIR_NAME,
         "app_overrides": BuildTargets.get_app_overrides(),
         "get_work_root": lambda: BuildTargets.get_work_root(root),
@@ -780,7 +1049,12 @@ def get_build_target_helpers(project_root: str | Path = PathMgr.PROJECT_ROOT) ->
         "get_work_dir": lambda k, create=False: BuildTargets.get_work_dir(k, root, create=create),
         "get_dist_dir": lambda k, create=False: BuildTargets.get_dist_dir(k, root, create=create),
         "get_release_dir": lambda k, create=False: BuildTargets.get_release_dir(k, root, create=create),
-        "get_install_dir": lambda k, create=False: BuildTargets.get_install_dir(k, root, create=create),
+        "get_install_dir": lambda k=INSTALLER_TARGET_KEY, create=False: BuildTargets.get_install_dir(
+            k, root, create=create
+        ),
+        "get_installer_dist_dir": lambda k=INSTALLER_TARGET_KEY, create=False: BuildTargets.get_installer_dist_dir(
+            k, root, create=create
+        ),
         "get_test_dir": lambda k, create=False: BuildTargets.get_test_dir(k, root, create=create),
         "get_app_dirs": lambda k, create=False: BuildTargets.get_app_dirs(k, root, create=create),
         "get_version_files": lambda k: BuildTargets.get_version_files(k, root),

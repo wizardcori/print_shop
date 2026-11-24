@@ -1374,11 +1374,11 @@ if __name__ == "__main__":
     main_demo = SampleQueueDemoWindow(title="TaskQueue Main SAMPLE Window")
     main_demo.show()
     sys.exit(app.exec())
-# ```[cite: 2]
+# ```
 
 # ### 추가된 `[QueueEvent]` 로그 항목
-# * **`WORKER_START` / `WORKER_STOP` / `SHUTDOWN_REQUEST`**: 워커 루프 시작, 종료 요청, 루프 종료 시점[cite: 2]
-# * **`ENQUEUE` / `DEQUEUE` / `DEQUEUE_CANCELLED`**: 작업 적재, 큐에서 꺼냄, 대기 중 취소로 큐에서 제거될 때[cite: 2]
-# * **`CURRENT_TASK_CHANGED` / `TASK_FINISHED`**: 현재 실행 작업 전환 및 완료(`SUCCESS`/`CANCELLED`/`ERROR`)로 `없음`으로 돌아갈 때[cite: 2]
-# * **`CANCEL_ONE` / `CANCEL_KEYS` / `CANCEL_ALL` / `SKIP_CANCELLED` / `SKIP_SHUTDOWN`**: 단일/다중/전체 취소 및 스킵 발생 시[cite: 2]
-# * **`STATUS_EMIT`**: `queue_updated` 시그널을 내보내며 대기열 스냅샷을 출력할 때[cite: 2]
+# * **`WORKER_START` / `WORKER_STOP` / `SHUTDOWN_REQUEST`**: 워커 루프 시작, 종료 요청, 루프 종료 시점
+# * **`ENQUEUE` / `DEQUEUE` / `DEQUEUE_CANCELLED`**: 작업 적재, 큐에서 꺼냄, 대기 중 취소로 큐에서 제거될 때
+# * **`CURRENT_TASK_CHANGED` / `TASK_FINISHED`**: 현재 실행 작업 전환 및 완료(`SUCCESS`/`CANCELLED`/`ERROR`)로 `없음`으로 돌아갈 때
+# * **`CANCEL_ONE` / `CANCEL_KEYS` / `CANCEL_ALL` / `SKIP_CANCELLED` / `SKIP_SHUTDOWN`**: 단일/다중/전체 취소 및 스킵 발생 시
+# * **`STATUS_EMIT`**: `queue_updated` 시그널을 내보내며 대기열 스냅샷을 출력할 때

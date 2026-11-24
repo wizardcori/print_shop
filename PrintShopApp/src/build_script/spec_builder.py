@@ -1,3 +1,7 @@
+"""
+PyInstaller .spec 탐색·생성 및 빌드 실행 모듈 (spec_builder.py)
+"""
+
 from __future__ import annotations
 
 import os
@@ -5,11 +9,56 @@ import shutil
 import textwrap
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from build_targets import AppTargetSpec, BuildDirConfig, BuildTargets, TARGET_LABELS, get_target_spec
 from Common.log import logd
-from version_service import VersionService
+from build_script.build_targets import (
+    AppTargetSpec,
+    BuildDirConfig,
+    BuildTargets,
+    DEFAULT_CONSOLE,
+    DEFAULT_ENTRY_FILENAME,
+    EXE_EXTENSION,
+    SPEC_EXTENSION,
+    TARGET_LABELS,
+    TEST_DIR_NAME,
+    get_target_spec,
+)
+from build_script.target_config_io import DEFAULT_TEXT_ENCODING
+from build_script.version_service import VersionService
+
+VERSION_INFO_FILENAME: str = "version_info.txt"
+
+ENTRY_FILENAME_CANDIDATES: tuple[str, ...] = (
+    DEFAULT_ENTRY_FILENAME,
+    "main.py",
+    "app.py",
+)
+
+STATIC_IGNORE_DIR_NAMES: frozenset[str] = frozenset(
+    {
+        ".venv",
+        "venv",
+        "__pycache__",
+        TEST_DIR_NAME,
+        ".git",
+    }
+)
+
+PYINSTALLER_BASE_ARGS: tuple[str, ...] = (
+    "-m",
+    "PyInstaller",
+    "--noconfirm",
+    "--clean",
+)
+
+__all__ = [
+    "ENTRY_FILENAME_CANDIDATES",
+    "PYINSTALLER_BASE_ARGS",
+    "STATIC_IGNORE_DIR_NAMES",
+    "SpecAndPyInstallerBuilder",
+    "VERSION_INFO_FILENAME",
+]
 
 
 class SpecAndPyInstallerBuilder:
@@ -46,9 +95,21 @@ class SpecAndPyInstallerBuilder:
         if self._is_cancelled():
             raise InterruptedError(reason)
 
+    def _get_ignored_dir_names(self) -> set[str]:
+        ignored = set(STATIC_IGNORE_DIR_NAMES)
+        ignored.update(
+            {
+                self.dir_config.work_dir_name,
+                self.dir_config.dist_dir_name,
+                self.dir_config.release_dir_name,
+                self.dir_config.install_dir_name,
+            }
+        )
+        return ignored
+
     def find_spec_file(self, target_key: str) -> str | None:
         spec = get_target_spec(target_key)
-        hints = list(spec.spec_hints) if spec else [f"{target_key}.spec"]
+        hints = list(spec.spec_hints) if spec else [f"{target_key}{SPEC_EXTENSION}"]
         subdirs = list(spec.dir_hints) if spec else [target_key]
 
         candidates: list[str] = [os.path.join(self.project_root, h) for h in hints]
@@ -62,21 +123,11 @@ class SpecAndPyInstallerBuilder:
                 return c
 
         lower_hints = {h.lower() for h in hints}
-        ignore_parts = {
-            ".venv",
-            "venv",
-            "__pycache__",
-            self.dir_config.work_dir_name,
-            self.dir_config.dist_dir_name,
-            self.dir_config.release_dir_name,
-            self.dir_config.install_dir_name,
-            "test",
-            ".git",
-        }
+        ignore_parts = self._get_ignored_dir_names()
         for search_root in (self.src_dir, self.project_root):
             if not os.path.isdir(search_root):
                 continue
-            for spec_path in Path(search_root).rglob("*.spec"):
+            for spec_path in Path(search_root).rglob(f"*{SPEC_EXTENSION}"):
                 if any(part in ignore_parts for part in spec_path.parts):
                     continue
                 if spec_path.name.lower() in lower_hints:
@@ -88,8 +139,9 @@ class SpecAndPyInstallerBuilder:
         if spec_obj:
             for rel in spec_obj.entry_hints:
                 candidates.append(os.path.join(self.project_root, *rel.split("/")))
+            entry_names = (*ENTRY_FILENAME_CANDIDATES, f"{target_key}.py", f"{spec_obj.label}.py")
             for sd in spec_obj.dir_hints:
-                for fn in ("main_app.py", "main.py", "app.py", f"{target_key}.py", f"{spec_obj.label}.py"):
+                for fn in entry_names:
                     candidates.append(os.path.join(self.src_dir, sd, fn))
 
         for p in candidates:
@@ -107,16 +159,16 @@ class SpecAndPyInstallerBuilder:
         label = spec_obj.label if spec_obj else target_key
         entry_dir = os.path.dirname(entry_script)
         if entry_dir and os.path.isdir(entry_dir):
-            return os.path.join(entry_dir, f"{label}.spec")
+            return os.path.join(entry_dir, f"{label}{SPEC_EXTENSION}")
 
         if spec_obj:
             for sd in spec_obj.dir_hints:
                 candidate_dir = os.path.join(self.src_dir, sd)
                 if os.path.isdir(candidate_dir):
-                    return os.path.join(candidate_dir, f"{label}.spec")
+                    return os.path.join(candidate_dir, f"{label}{SPEC_EXTENSION}")
 
         os.makedirs(work_out, exist_ok=True)
-        return os.path.join(work_out, f"{label}.spec")
+        return os.path.join(work_out, f"{label}{SPEC_EXTENSION}")
 
     def generate_default_spec_file(
         self,
@@ -127,7 +179,7 @@ class SpecAndPyInstallerBuilder:
     ) -> str:
         label = spec_obj.label if spec_obj else target_key
         exe_stem = Path(spec_obj.exe_name).stem if (spec_obj and spec_obj.exe_name) else label
-        console_flag = spec_obj.console if spec_obj else True
+        console_flag = spec_obj.console if spec_obj else DEFAULT_CONSOLE
         hidden_imports = (
             tuple(dict.fromkeys(str(m).strip() for m in spec_obj.hidden_imports if str(m).strip()))
             if (spec_obj and spec_obj.hidden_imports)
@@ -156,7 +208,7 @@ class SpecAndPyInstallerBuilder:
 
         app_ver_files = self.version_service.get_version_files(target_key)
         app_rc_path = (
-            os.path.join(os.path.dirname(app_ver_files[0]), "version_info.txt")
+            os.path.join(os.path.dirname(app_ver_files[0]), VERSION_INFO_FILENAME)
             if app_ver_files
             else None
         )
@@ -208,12 +260,12 @@ class SpecAndPyInstallerBuilder:
             """
         ).lstrip()
 
-        with open(generated_spec_path, "w", encoding="utf-8") as f:
+        with open(generated_spec_path, "w", encoding=DEFAULT_TEXT_ENCODING) as f:
             f.write(spec_content)
 
         logd(
             f"  • [{target_key}] 기본 .spec 생성 완료: {generated_spec_path} "
-            f"(entry={entry_script}, exe={exe_stem}.exe, hiddenimports={list(hidden_imports)})"
+            f"(entry={entry_script}, exe={exe_stem}{EXE_EXTENSION}, hiddenimports={list(hidden_imports)})"
         )
         return generated_spec_path
 
@@ -230,12 +282,12 @@ class SpecAndPyInstallerBuilder:
             spec_obj = get_target_spec(target_key)
             label = spec_obj.label if spec_obj else TARGET_LABELS.get(target_key, target_key)
             candidate_specs: set[str] = {
-                os.path.join(work_out, f"{label}.spec"),
-                os.path.join(self.src_dir, label, f"{label}.spec"),
+                os.path.join(work_out, f"{label}{SPEC_EXTENSION}"),
+                os.path.join(self.src_dir, label, f"{label}{SPEC_EXTENSION}"),
             }
             if spec_obj:
                 for sd in spec_obj.dir_hints:
-                    candidate_specs.add(os.path.join(self.src_dir, sd, f"{label}.spec"))
+                    candidate_specs.add(os.path.join(self.src_dir, sd, f"{label}{SPEC_EXTENSION}"))
                 for h in spec_obj.spec_hints:
                     candidate_specs.add(os.path.join(self.project_root, h))
                     for sd in spec_obj.dir_hints:
@@ -251,7 +303,7 @@ class SpecAndPyInstallerBuilder:
             if not removed_any:
                 logd(f"  • [{target_key}] 삭제할 .spec 파일을 후보 경로에서 찾지 못해 건너뜀: {sorted(candidate_specs)}")
 
-    def build_target(self, target_key: str, py_exe: str, run_cmd_fn) -> bool:
+    def build_target(self, target_key: str, py_exe: str, run_cmd_fn: Callable[..., Any]) -> bool:
         self._check_cancelled(f"대상({target_key}) 빌드 시작 전 취소되었습니다.")
         work_out = BuildTargets.get_work_dir(target_key, self.project_root, create=True)
         dist_out = BuildTargets.get_dist_dir(target_key, self.project_root, create=True)
@@ -273,10 +325,7 @@ class SpecAndPyInstallerBuilder:
         run_cmd_fn(
             [
                 py_exe,
-                "-m",
-                "PyInstaller",
-                "--noconfirm",
-                "--clean",
+                *PYINSTALLER_BASE_ARGS,
                 "--distpath",
                 dist_out,
                 "--workpath",

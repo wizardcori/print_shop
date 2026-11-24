@@ -2,7 +2,7 @@
 
 a = Analysis(
     [r'C:\1print_shop\PrintShopApp\src\UpdateManager\main_app.py'],
-    pathex=[r'C:\1print_shop\PrintShopApp', r'C:\1print_shop\PrintShopApp\src'],
+    pathex=[r'C:\\1print_shop\\PrintShopApp', r'C:\\1print_shop\\PrintShopApp\\src'],
     binaries=[],
     datas=[],
     hiddenimports=[],

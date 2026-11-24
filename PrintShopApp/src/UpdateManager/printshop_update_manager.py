@@ -1124,12 +1124,12 @@ class UpdateManagerWindow(QMainWindow):
             reason="UpdateManagerWindow 종료로 작업이 취소되었습니다.",
         )
         super().closeEvent(event)
-# ```[cite: 1, 3]
+# ```
 
 # ---
 
 # ### 반영된 주요 포인트
-# * `task_key` 중복 오류(`ValueError`) 방지를 위해 타임스탬프(`int(os.times()[4]*1000)`)를 포함한 키 생성을 유지했습니다[cite: 1, 3].
-# * `submit(...)` 호출 시 `cancel_on_close=True`로 설정하여 `UpdateManagerWindow` 종료나 소멸 시 진행/대기 중인 큐 작업이 `on_window_closing`을 통해 정리되도록 했습니다[cite: 1, 3].
+# * `task_key` 중복 오류(`ValueError`) 방지를 위해 타임스탬프(`int(os.times()[4]*1000)`)를 포함한 키 생성을 유지했습니다.
+# * `submit(...)` 호출 시 `cancel_on_close=True`로 설정하여 `UpdateManagerWindow` 종료나 소멸 시 진행/대기 중인 큐 작업이 `on_window_closing`을 통해 정리되도록 했습니다.
 
 # 실행 시 `main_app.py`나 `upload_progress_dialog.py` 쪽에서 추가로 연동할 부분(예: `app.aboutToQuit.connect(TaskManager.on_about_to_quit)`)도 함께 확인해 보시겠어요?

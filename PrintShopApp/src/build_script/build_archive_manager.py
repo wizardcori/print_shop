@@ -1,3 +1,7 @@
+"""
+앱별 빌드 산출물 버전 아카이빙 및 복원 관리 모듈 (build_archive_manager.py)
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -9,27 +13,44 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from build_targets import BuildDirConfig, BuildTargets
+from build_script.artifact_signing import HASH_CHUNK_SIZE
+from build_script.build_targets import BuildDirConfig, BuildTargets, EXE_EXTENSION
+from build_script.packaging_service import MODE_PRODUCTION
+from build_script.target_config_io import (
+    DEFAULT_JSON_INDENT,
+    DEFAULT_TEXT_ENCODING,
+    DIST_DIR_NAME,
+    RELEASE_DIR_NAME,
+)
+
+MODE_DEVELOPMENT: str = "development"
+
+__all__ = [
+    "BuildArchiveManager",
+    "MODE_DEVELOPMENT",
+    "MODE_PRODUCTION",
+]
 
 
 class BuildArchiveManager:
     """각 앱의 빌드 산출물을 버전별로 아카이빙하고 이력·복원을 관리하는 클래스."""
 
-    ARCHIVE_ROOT_DIR_NAME: str = "build_archive"
-    DIST_DIR_NAME: str = "dist"
+    ARCHIVE_ROOT_DIR_NAME: str = RELEASE_DIR_NAME
+    DIST_DIR_NAME: str = DIST_DIR_NAME
     INDEX_FILE_NAME: str = "index.json"
     MANIFEST_FILE_NAME: str = "build_manifest.json"
     TIMINGS_FILE_NAME: str = "build_step_timings.json"
 
     VERSION_PREFIX: str = "v"
+    DEFAULT_VERSION_TAG: str = "v0.0.0"
     BUILD_PREFIX: str = "b"
     BUILD_ID_SEPARATOR: str = "_"
     BUILD_TIMESTAMP_FORMAT: str = "%Y%m%d_%H%M%S"
     ISO_TIME_FORMAT: str = "%Y-%m-%dT%H:%M:%SZ"
     UNKNOWN_VALUE: str = "unknown"
 
-    MODE_PRODUCTION: str = "production"
-    MODE_DEVELOPMENT: str = "development"
+    MODE_PRODUCTION: str = MODE_PRODUCTION
+    MODE_DEVELOPMENT: str = MODE_DEVELOPMENT
     MODE_TAG_MAP: dict[str, str] = {
         MODE_PRODUCTION: "prod",
         MODE_DEVELOPMENT: "dev",
@@ -37,9 +58,9 @@ class BuildArchiveManager:
 
     DEFAULT_KEEP_VERSIONS: int = 15
     DEFAULT_KEEP_BUILDS_PER_VERSION: int = 5
-    HASH_CHUNK_SIZE: int = 1024 * 1024
-    JSON_INDENT: int = 2
-    JSON_ENCODING: str = "utf-8"
+    HASH_CHUNK_SIZE: int = HASH_CHUNK_SIZE
+    JSON_INDENT: int = DEFAULT_JSON_INDENT
+    JSON_ENCODING: str = DEFAULT_TEXT_ENCODING
 
     KEY_APP_KEY: str = "app_key"
     KEY_APP_NAME: str = "app_name"
@@ -90,13 +111,13 @@ class BuildArchiveManager:
         self.dist_root = self.project_root / dist_name
         self.keep_versions = max(1, int(keep_versions))
         self.keep_builds_per_version = max(1, int(keep_builds_per_version))
-        self.archive_root.mkdir(parents=True, exist_ok=True)[cite: 7]
+        self.archive_root.mkdir(parents=True, exist_ok=True)
 
     @classmethod
     def normalize_version_tag(cls, version: str) -> str:
         clean = str(version or "").strip()
         if not clean:
-            return f"{cls.VERSION_PREFIX}0.0.0"
+            return cls.DEFAULT_VERSION_TAG
         if clean.startswith(cls.VERSION_PREFIX):
             return clean
         return f"{cls.VERSION_PREFIX}{clean}"
@@ -317,7 +338,7 @@ class BuildArchiveManager:
 
         manifest = json.loads(manifest_path.read_text(encoding=self.JSON_ENCODING))
         exe_info = manifest.get(self.KEY_EXE, {})
-        exe_filename = exe_info.get(self.KEY_FILENAME) or f"{app_name}.exe"
+        exe_filename = exe_info.get(self.KEY_FILENAME) or f"{app_name}{EXE_EXTENSION}"
         archived_exe = target_build_dir / exe_filename
         if not archived_exe.is_file():
             raise FileNotFoundError(f"아카이브 EXE가 없습니다: {archived_exe}")

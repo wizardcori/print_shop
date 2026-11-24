@@ -1,11 +1,13 @@
-# src/build_script/artifact_signing.py
+"""
+빌드 산출물 해시 생성 및 EXE 서명/검증 모듈 (artifact_signing.py)
+"""
+
 from __future__ import annotations
 
 import hashlib
 import os
 from typing import Any, Callable
 
-from Common.log import logd
 from Common.Version.exe_version_crypto import (
     compute_file_sha256,
     decrypt_all_items_from_exe,
@@ -13,6 +15,33 @@ from Common.Version.exe_version_crypto import (
     extract_version_from_exe,
     sign_exe_authenticode,
 )
+from Common.log import logd
+from build_script.target_config_io import DEFAULT_TEXT_ENCODING
+
+HASH_CHUNK_SIZE: int = 1024 * 1024
+SHA256_FILE_EXTENSION: str = ".sha256"
+HASH_PREVIEW_LEN: int = 12
+PAYLOAD_VERSION_PREFIX: str = "v"
+
+KEY_VERIFIED: str = "verified"
+KEY_ERROR: str = "error"
+KEY_ITEMS: str = "items"
+KEY_PAYLOAD_SHA256: str = "payload_sha256"
+KEY_COMMIT: str = "commit"
+
+__all__ = [
+    "HASH_CHUNK_SIZE",
+    "HASH_PREVIEW_LEN",
+    "KEY_COMMIT",
+    "KEY_ERROR",
+    "KEY_ITEMS",
+    "KEY_PAYLOAD_SHA256",
+    "KEY_VERIFIED",
+    "PAYLOAD_VERSION_PREFIX",
+    "SHA256_FILE_EXTENSION",
+    "inject_and_verify_exe",
+    "write_sha256_file",
+]
 
 
 def write_sha256_file(target_file: str | None) -> str | None:
@@ -21,12 +50,12 @@ def write_sha256_file(target_file: str | None) -> str | None:
 
     digest = hashlib.sha256()
     with open(target_file, "rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+        for chunk in iter(lambda: f.read(HASH_CHUNK_SIZE), b""):
             digest.update(chunk)
 
     sha_hex = digest.hexdigest()
-    sha_path = f"{target_file}.sha256"
-    with open(sha_path, "w", encoding="utf-8") as f:
+    sha_path = f"{target_file}{SHA256_FILE_EXTENSION}"
+    with open(sha_path, "w", encoding=DEFAULT_TEXT_ENCODING) as f:
         f.write(f"{sha_hex}  {os.path.basename(target_file)}\n")
 
     logd(f"  • SHA-256 생성 완료 ({os.path.basename(sha_path)}): {sha_hex}")
@@ -45,7 +74,7 @@ def inject_and_verify_exe(
         logd(f"  ⚠️ [{app_label}] 대상 EXE가 없어 서명/주입을 건너뜁니다: {exe_path}")
         return None
 
-    expected_payload = f"v{app_version}-{mode}"
+    expected_payload = f"{PAYLOAD_VERSION_PREFIX}{app_version}-{mode}"
     encrypt_and_append_version(
         exe_path=exe_path,
         version_str=expected_payload,
@@ -67,16 +96,18 @@ def inject_and_verify_exe(
         )
 
     ver_info = decrypt_all_items_from_exe(exe_path)
-    if not ver_info.get("verified") or "error" in ver_info:
-        raise ValueError(f"[{app_label}] 서명 메타데이터 검증 실패: {ver_info.get('error')}")
+    if not ver_info.get(KEY_VERIFIED) or KEY_ERROR in ver_info:
+        raise ValueError(f"[{app_label}] 서명 메타데이터 검증 실패: {ver_info.get(KEY_ERROR)}")
 
     sign_exe_authenticode(exe_path, cwd=cwd)
     final_sha256 = write_sha256_file(exe_path) or compute_file_sha256(exe_path)
 
-    items = ver_info.get("items") or {}
+    items = ver_info.get(KEY_ITEMS) or {}
+    payload_sha_preview = str(ver_info.get(KEY_PAYLOAD_SHA256, ""))[:HASH_PREVIEW_LEN]
+    exe_sha_preview = str(final_sha256)[:HASH_PREVIEW_LEN]
     logd(
         f"  ✅ [{app_label}] 서명 및 무결성 검증 완료 ({read_payload}) | "
-        f"payload_sha256={str(ver_info.get('payload_sha256', ''))[:12]}... | "
-        f"exe_sha256={final_sha256[:12]}... | commit={items.get('commit')}"
+        f"payload_sha256={payload_sha_preview}... | "
+        f"exe_sha256={exe_sha_preview}... | commit={items.get(KEY_COMMIT)}"
     )
     return ver_info

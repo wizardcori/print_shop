@@ -138,6 +138,6 @@ def check_login() -> bool:
         if login_dialog.exec() == LoginDialog.DialogCode.Accepted:
             return True
         sys.exit(0)
-# ```[cite: 8]
+# ```
 
 # 로그인 흐름이 정상 동작한 뒤에는 `PrintShopApp()` 생성 및 각 탭(`LinkBoxManager`, `LinkShareManager`) 초기화 단계에서도 경로나 설정 참조가 어긋나는 곳이 있는지 이어서 확인해 볼까요?

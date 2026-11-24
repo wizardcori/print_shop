@@ -24,7 +24,7 @@ from Common.config import ConfigType, FileConfigManager
 
 
 class ConfigTab(QWidget):
-    """[BuildManagerConfig] 섹션 설정을 표시·편집하는 탭[cite: 1]."""
+    """[BuildManagerConfig] 섹션 설정을 표시·편집하는 탭."""
 
     config_changed = Signal(dict)
 

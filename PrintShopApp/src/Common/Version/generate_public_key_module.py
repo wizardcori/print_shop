@@ -66,8 +66,8 @@ def candidate_public_key_paths(
     base = (start_dir or Path(__file__).resolve().parent).resolve()
     cur_script = base
     for _ in range(6):
-        _add(cur_script / "secrets" / filename)
-        _add(cur_script / "secrets" / "keys" / filename)
+        _add(cur_script / ".secrets" / filename)
+        _add(cur_script / ".secrets" / "keys" / filename)
         _add(cur_script / "keys" / filename)
         _add(cur_script / filename)
         if cur_script.parent == cur_script:
@@ -76,8 +76,8 @@ def candidate_public_key_paths(
 
     cur_cwd = Path.cwd().resolve()
     for _ in range(6):
-        _add(cur_cwd / "secrets" / filename)
-        _add(cur_cwd / "secrets" / "keys" / filename)
+        _add(cur_cwd / ".secrets" / filename)
+        _add(cur_cwd / ".secrets" / "keys" / filename)
         _add(cur_cwd / "keys" / filename)
         _add(cur_cwd / filename)
         if cur_cwd.parent == cur_cwd:

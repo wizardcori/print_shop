@@ -19,16 +19,16 @@ from dotenv import load_dotenv
 from Common.log import set_file_tag, logd, loge ;set_file_tag("CRYPTO")
 
 try:
-    from .exe_version_public_key import EmbeddedPublicKey, EMBEDDED_PUBLIC_KEY_PEM
+    from Common.Version.exe_version_public_key import EmbeddedPublicKey, EMBEDDED_PUBLIC_KEY_PEM
 except ImportError:
     try:
-        from exe_version_public_key import EmbeddedPublicKey, EMBEDDED_PUBLIC_KEY_PEM
+        from Common.Version.exe_version_public_key import EmbeddedPublicKey, EMBEDDED_PUBLIC_KEY_PEM
     except ImportError:
         EmbeddedPublicKey = None
         EMBEDDED_PUBLIC_KEY_PEM = ""
 
 try:
-    from .exe_version_desc_v1 import (
+    from Common.Version.exe_version_desc_v1 import (
         ALL_META_KEYS_V1,
         DESCRIPTOR_VERSION as DESCRIPTOR_VERSION_V1,
         SIGN_MAGIC,
@@ -41,7 +41,7 @@ try:
         strip_v1_eof_metadata,
         verify_and_read_v1,
     )
-    from .exe_version_desc_v2 import (
+    from Common.Version.exe_version_desc_v2 import (
         ALL_META_KEYS_V2,
         DESCRIPTOR_VERSION as DESCRIPTOR_VERSION_V2,
         SIGN_TRAILER_SIZE_V2,
@@ -56,7 +56,7 @@ try:
         verify_and_read_v2,
     )
 except ImportError:
-    from exe_version_desc_v1 import (
+    from Common.Version.exe_version_desc_v1 import (
         ALL_META_KEYS_V1,
         DESCRIPTOR_VERSION as DESCRIPTOR_VERSION_V1,
         SIGN_MAGIC,
@@ -69,7 +69,7 @@ except ImportError:
         strip_v1_eof_metadata,
         verify_and_read_v1,
     )
-    from exe_version_desc_v2 import (
+    from Common.Version.exe_version_desc_v2 import (
         ALL_META_KEYS_V2,
         DESCRIPTOR_VERSION as DESCRIPTOR_VERSION_V2,
         SIGN_TRAILER_SIZE_V2,

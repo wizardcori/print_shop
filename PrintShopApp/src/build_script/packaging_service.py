@@ -1,18 +1,65 @@
-# src/build_script/packaging_service.py
+"""
+릴리스 아카이브 및 Windows 인스톨러 패키징 서비스 (packaging_service.py)
+"""
+
 from __future__ import annotations
 
 import os
 import shutil
 import threading
 import zipfile
+from pathlib import Path
 from typing import Any, Callable
 
-from artifact_signing import write_sha256_file
-from build_targets import AppTargetSpec, BuildDirConfig, BuildTargets
-from Common.log import logd
 from Common.Version.exe_version_crypto import sign_exe_authenticode
-from target_config_io import InstallerBuildConfig
-from version_service import VersionService
+from Common.log import logd
+from build_script.artifact_signing import write_sha256_file
+from build_script.build_targets import (
+    AppTargetSpec,
+    BuildDirConfig,
+    BuildTargets,
+    EXE_EXTENSION,
+    INSTALLER_TARGET_KEY,
+)
+from build_script.target_config_io import InstallerBuildConfig
+from build_script.version_service import VersionService
+
+MODE_PRODUCTION: str = "production"
+ARCHIVE_EXTENSION: str = ".zip"
+SHA256_EXTENSION: str = ".sha256"
+ISS_EXTENSION: str = ".iss"
+FULL_COMBO_TAG: str = "1_2_3_4_5"
+NONE_COMBO_TAG: str = "none"
+
+EXPLICIT_ISS_FILENAMES: tuple[str, ...] = (
+    "installer.iss",
+    "PrintShopApp_Setup.iss",
+)
+
+ISCC_EXECUTABLE_NAMES: tuple[str, ...] = (
+    "ISCC.exe",
+    "ISCC",
+    "iscc.exe",
+    "iscc",
+)
+
+ISCC_RELATIVE_CANDIDATES: tuple[tuple[str, ...], ...] = (
+    ("Programs", "Inno Setup 6", "ISCC.exe"),
+    ("Inno Setup 6", "ISCC.exe"),
+    ("Inno Setup 5", "ISCC.exe"),
+)
+
+__all__ = [
+    "ARCHIVE_EXTENSION",
+    "EXPLICIT_ISS_FILENAMES",
+    "FULL_COMBO_TAG",
+    "ISCC_EXECUTABLE_NAMES",
+    "ISCC_RELATIVE_CANDIDATES",
+    "ISS_EXTENSION",
+    "MODE_PRODUCTION",
+    "PackagingService",
+    "SHA256_EXTENSION",
+]
 
 
 class PackagingService:
@@ -21,7 +68,7 @@ class PackagingService:
         project_root: str,
         dir_config: BuildDirConfig,
         version_service: VersionService,
-        mode: str = "production",
+        mode: str = MODE_PRODUCTION,
         cancel_event: threading.Event | None = None,
         cancel_token: Any | None = None,
     ):
@@ -49,12 +96,12 @@ class PackagingService:
     ) -> str:
         if artifact_name and artifact_name.strip():
             base = artifact_name.strip()
-        elif combo_tag and combo_tag != "none" and combo_tag != "1_2_3_4_5":
+        elif combo_tag and combo_tag != NONE_COMBO_TAG and combo_tag != FULL_COMBO_TAG:
             base = f"{main_label}_{combo_tag}_v{main_app_version}_Setup"
         else:
             base = f"{main_label}_v{main_app_version}_Setup"
 
-        if self.mode != "production" and f"_{self.mode}" not in base:
+        if self.mode != MODE_PRODUCTION and f"_{self.mode}" not in base:
             return f"{base}_{self.mode}"
         return base
 
@@ -96,9 +143,9 @@ class PackagingService:
 
             app_ver = self.version_service.get_target_version(spec.key, target_versions)
             archive_name = (
-                f"{spec.label}_{self.mode}_v{app_ver}.zip"
-                if self.mode != "production"
-                else f"{spec.label}_v{app_ver}.zip"
+                f"{spec.label}_{self.mode}_v{app_ver}{ARCHIVE_EXTENSION}"
+                if self.mode != MODE_PRODUCTION
+                else f"{spec.label}_v{app_ver}{ARCHIVE_EXTENSION}"
             )
             release_zip_path = os.path.join(app_release_dir, archive_name)
             BuildTargets.validate_app_artifact_layout(
@@ -112,7 +159,7 @@ class PackagingService:
             with zipfile.ZipFile(release_zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
                 for root, _, files in os.walk(app_dist_dir):
                     for fn in files:
-                        if fn.endswith(".sha256"):
+                        if fn.endswith(SHA256_EXTENSION):
                             continue
                         full_p = os.path.join(root, fn)
                         rel_p = os.path.relpath(full_p, app_dist_dir)
@@ -141,53 +188,91 @@ class PackagingService:
 
     @staticmethod
     def find_iscc_executable() -> str | None:
-        for name in ("ISCC.exe", "ISCC", "iscc.exe", "iscc"):
+        for name in ISCC_EXECUTABLE_NAMES:
             found = shutil.which(name)
             if found and os.path.isfile(found):
                 return found
 
-        local_app_data = os.environ.get("LOCALAPPDATA") or os.path.expanduser(r"~\AppData\Local")
-        candidate_paths = [
-            os.path.join(local_app_data, "Programs", "Inno Setup 6", "ISCC.exe"),
-            r"C:\Users\hwlee\AppData\Local\Programs\Inno Setup 6\ISCC.exe",
-            r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
-            r"C:\Program Files\Inno Setup 6\ISCC.exe",
-            r"C:\Program Files (x86)\Inno Setup 5\ISCC.exe",
-            r"C:\Program Files\Inno Setup 5\ISCC.exe",
-        ]
-        for path in candidate_paths:
-            if path and os.path.isfile(path):
-                return path
+        base_roots: list[str] = []
+        for env_key in ("LOCALAPPDATA", "ProgramFiles(x86)", "ProgramFiles"):
+            val = os.environ.get(env_key)
+            if val and val.strip():
+                base_roots.append(val.strip())
+        local_fallback = os.path.expanduser(r"~\AppData\Local")
+        if local_fallback and local_fallback not in base_roots:
+            base_roots.append(local_fallback)
+
+        for root_dir in base_roots:
+            for rel_parts in ISCC_RELATIVE_CANDIDATES:
+                candidate = os.path.join(root_dir, *rel_parts)
+                if os.path.isfile(candidate):
+                    return candidate
         return None
 
     def find_iss_script(self, installer_dir: str) -> str | None:
-        install_root = BuildTargets.get_install_root(self.project_root)
+        release_root = BuildTargets.get_release_root(self.project_root)
         search_dirs: list[str] = [self.project_root, installer_dir]
-        if install_root not in search_dirs:
-            search_dirs.append(install_root)
+        if release_root not in search_dirs:
+            search_dirs.append(release_root)
 
-        explicit_candidates: list[str] = []
         for d in search_dirs:
-            explicit_candidates.extend(
-                [
-                    os.path.join(d, "installer.iss"),
-                    os.path.join(d, "PrintShopApp_Setup.iss"),
-                ]
-            )
-        for p in explicit_candidates:
-            if os.path.isfile(p):
-                return p
+            for fn in EXPLICIT_ISS_FILENAMES:
+                p = os.path.join(d, fn)
+                if os.path.isfile(p):
+                    return p
 
         iss_files: list[str] = []
         for search_root in search_dirs:
             if os.path.isdir(search_root):
                 for fn in os.listdir(search_root):
-                    if fn.lower().endswith(".iss"):
+                    if fn.lower().endswith(ISS_EXTENSION):
                         full_p = os.path.join(search_root, fn)
                         if os.path.isfile(full_p):
                             iss_files.append(full_p)
 
         return max(iss_files, key=os.path.getmtime) if iss_files else None
+
+    def _sync_installer_to_dist_and_release(
+        self,
+        installer_key: str,
+        installer_exe_path: str,
+    ) -> tuple[str, str]:
+        """인스톨러 EXE 및 SHA-256 파일을 release와 dist 인스톨러 폴더 양쪽에 저장."""
+        release_dir = BuildTargets.get_install_dir(installer_key, self.project_root, create=True)
+        dist_dir = BuildTargets.get_installer_dist_dir(installer_key, self.project_root, create=True)
+
+        BuildTargets.validate_app_artifact_layout(
+            self.project_root,
+            self.dir_config.release_dir_name,
+            installer_key,
+            release_dir,
+        )
+        BuildTargets.validate_app_artifact_layout(
+            self.project_root,
+            self.dir_config.dist_dir_name,
+            installer_key,
+            dist_dir,
+        )
+
+        src_exe = Path(installer_exe_path).resolve()
+        release_exe = Path(release_dir) / src_exe.name
+        if src_exe != release_exe:
+            shutil.copy2(src_exe, release_exe)
+
+        sign_exe_authenticode(str(release_exe), cwd=self.project_root)
+        release_sha = write_sha256_file(str(release_exe))
+
+        dist_exe = Path(dist_dir) / src_exe.name
+        shutil.copy2(release_exe, dist_exe)
+
+        if release_sha and os.path.isfile(release_sha):
+            shutil.copy2(release_sha, Path(dist_dir) / Path(release_sha).name)
+        else:
+            write_sha256_file(str(dist_exe))
+
+        logd(f"  • 인스톨러 release 저장 완료: {release_exe}")
+        logd(f"  • 인스톨러 dist 저장 완료: {dist_exe}")
+        return str(release_exe), str(dist_exe)
 
     def create_windows_installer(
         self,
@@ -202,7 +287,10 @@ class PackagingService:
         main_key = self.version_service.resolve_main_target_key()
         main_label = BuildTargets.get_label(main_key)
         main_dist_dir = BuildTargets.get_dist_dir(main_key, self.project_root)
-        installer_dir = BuildTargets.get_install_dir(main_key, self.project_root, create=True)
+
+        installer_key = INSTALLER_TARGET_KEY if INSTALLER_TARGET_KEY in BuildTargets.BY_KEY else main_key
+        installer_dir = BuildTargets.get_install_dir(installer_key, self.project_root, create=True)
+        installer_folder_name = BuildTargets.get_folder_name(installer_key)
 
         BuildTargets.validate_app_artifact_layout(
             self.project_root,
@@ -212,14 +300,14 @@ class PackagingService:
         )
         BuildTargets.validate_app_artifact_layout(
             self.project_root,
-            self.dir_config.install_dir_name,
-            main_key,
+            self.dir_config.release_dir_name,
+            installer_key,
             installer_dir,
         )
 
         ordered_specs = list(installer_specs) if installer_specs is not None else []
         effective_combo = combo_tag or (
-            "_".join(str(s.order) for s in ordered_specs) if ordered_specs else "none"
+            "_".join(str(s.order) for s in ordered_specs) if ordered_specs else NONE_COMBO_TAG
         )
         target_labels_str = ",".join(s.label for s in ordered_specs)
         target_keys_str = ",".join(s.key for s in ordered_specs)
@@ -238,7 +326,7 @@ class PackagingService:
             logd(f"  • ISCC 컴파일러 검출: {iscc}")
             logd(
                 f"  • 인스톨러 조합 정보: combo={effective_combo}, "
-                f"targets={target_keys_str or 'default'}, out={out_base_name}"
+                f"targets={target_keys_str or 'default'}, out={out_base_name}, dir={installer_dir}"
             )
             cmd = [
                 iscc,
@@ -257,36 +345,38 @@ class PackagingService:
         else:
             reasons = []
             if not iss_path:
-                reasons.append(".iss 스크립트 미검출")
+                reasons.append(f"{ISS_EXTENSION} 스크립트 미검출")
             if not iscc:
-                reasons.append("ISCC.exe 미검출")
+                reasons.append(f"{ISCC_EXECUTABLE_NAMES[0]} 미검출")
             logd(f"  • Inno Setup 컴파일 생략 ({', '.join(reasons)}): 기존 인스톨러 산출물 확인으로 진행")
 
         self._check_cancelled("인스톨러 서명 및 해시 생성 전 취소되었습니다.")
         created_installers = [
             os.path.join(installer_dir, f)
             for f in os.listdir(installer_dir)
-            if f.lower().endswith(".exe")
+            if f.lower().endswith(EXE_EXTENSION)
         ]
         latest_installer = max(created_installers, key=os.path.getmtime) if created_installers else None
         if latest_installer:
             BuildTargets.validate_app_artifact_layout(
                 self.project_root,
-                self.dir_config.install_dir_name,
-                main_key,
+                self.dir_config.release_dir_name,
+                installer_key,
                 latest_installer,
             )
-            sign_exe_authenticode(latest_installer, cwd=self.project_root)
-            write_sha256_file(latest_installer)
+            release_exe_path, dist_exe_path = self._sync_installer_to_dist_and_release(
+                installer_key=installer_key,
+                installer_exe_path=latest_installer,
+            )
             if installer_config and getattr(installer_config, "extra", None):
                 logd(f"  • installer extra 옵션: {installer_config.extra}")
             return (
-                latest_installer,
-                f"Installer ready: {os.path.basename(latest_installer)} "
-                f"(v{main_app_version}, combo={effective_combo})",
+                release_exe_path,
+                f"Installer ready in release & dist: {os.path.basename(release_exe_path)} "
+                f"(v{main_app_version}, combo={effective_combo}, dist={os.path.dirname(dist_exe_path)})",
             )
 
         return None, (
-            f"Installer step completed (no .exe artifact in "
-            f"{self.dir_config.install_dir_name}/{main_label}/)"
+            f"Installer step completed (no {EXE_EXTENSION} artifact in "
+            f"{self.dir_config.release_dir_name}/{installer_folder_name}/)"
         )

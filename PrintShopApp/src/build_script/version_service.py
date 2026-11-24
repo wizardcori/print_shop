@@ -116,6 +116,6 @@ class VersionService:
                 logd(f"  ↩️ 버전 롤백 완료 ({ver_file}): v{prev_ver}")
             except Exception as rb_err:
                 loge(f"  ⚠️ 버전 롤백 중 오류 발생 ({ver_file}): {rb_err}")
-# ```[cite: 5, 8]
+# ```
 
 # `packaging_service.py`도 함께 올려주시면 `copy_to_archive` 정책과 ID 오름차순 인스톨러 조합(`installer_specs`, `combo_tag`, `artifact_name`) 생성 부분까지 연결해 드릴 수 있습니다.
