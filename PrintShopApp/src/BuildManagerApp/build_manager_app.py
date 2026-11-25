@@ -747,6 +747,15 @@ class BuildTaskListener(TaskListenerBase):
         self._window._completed_step_count = 0
         self._window._on_build_finished(ok, msg)
 
+def _normalize_project_root(raw_root: str | Path) -> Path:
+    resolved = Path(raw_root).resolve()
+    if resolved.name.lower() == SRC_SUBDIR_NAME and (
+        (resolved / "Common").is_dir()
+        or (resolved / "build_script").is_dir()
+        or (resolved.parent / SRC_SUBDIR_NAME).is_dir()
+    ):
+        return resolved.parent
+    return resolved
 
 class BuildManagerWindow(QMainWindow):
     """PrintShopApp 빌드 관리 메인 윈도우."""
@@ -759,7 +768,7 @@ class BuildManagerWindow(QMainWindow):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.project_root = Path(project_root).resolve()
+        self.project_root = _normalize_project_root(project_root)        
         self.config_path = (
             Path(config_path).resolve()
             if config_path
@@ -1307,7 +1316,9 @@ class BuildManagerWindow(QMainWindow):
     def _apply_settings_from_window(self) -> None:
         if self._settings_window is None:
             return
-        self.project_root = Path(self._settings_window.project_root).resolve()
+        self.project_root = _normalize_project_root(self._settings_window.project_root)
+        if self._settings_window.config_path is not None:
+            self.config_path = Path(self._settings_window.config_path).resolve()
         if self._settings_window.config_path is not None:
             self.config_path = Path(self._settings_window.config_path).resolve()
         self.ini_store.reload_all(self.config_path.parent)
@@ -1676,11 +1687,13 @@ class BuildManagerWindow(QMainWindow):
         state = self.ini_store.load_ui_state()
 
         proj_dir = state.get("project_root")
-        if isinstance(proj_dir, str) and proj_dir.strip() and Path(proj_dir).is_dir():
-            self.project_root = Path(proj_dir).resolve()
-            self.config_path = self.project_root / BUILD_MANAGER_INI_NAME
-            self.ini_store.reload_all(self.config_path.parent)
-            state = self.ini_store.load_ui_state()
+        if isinstance(proj_dir, str) and proj_dir.strip():
+            candidate_root = _normalize_project_root(proj_dir)
+            if candidate_root.is_dir():
+                self.project_root = candidate_root
+                self.config_path = self.project_root / BUILD_MANAGER_INI_NAME
+                self.ini_store.reload_all(self.config_path.parent)
+                state = self.ini_store.load_ui_state()
 
         self._reload_targets_from_ini()
         self._refresh_target_checkboxes()

@@ -30,6 +30,10 @@ for p in (str(PROJECT_ROOT), str(SRC_DIR), str(CURRENT_DIR)):
 
 from Common.log import logd, loge  # noqa: E402
 from Common.step_timer import BuildStepTimer  # noqa: E402
+
+# from Common.Version.exe_version_crypto import BuildStepTimer  # noqa: E402
+# from Common.Version.generate_public_key_module import BuildStepTimer  # noqa: E402
+
 from build_script.artifact_signing import inject_and_verify_exe  # noqa: E402
 from build_script.build_archive_manager import BuildArchiveManager  # noqa: E402
 from build_script.env_ui_helper import (  # noqa: E402
@@ -787,22 +791,57 @@ class BuildApp:
         self._begin_step(step_key, detail="공개키 모듈 생성 및 샘플 재검증")
         logd(f"[{step_name}] 공개키 모듈 생성, 변수 로딩 및 샘플 재검증 시작...")
 
-        gen_script = os.path.join(self.project_root, *PUBKEY_GEN_SCRIPT_REL_PARTS)
+        primary_script = os.path.join(self.project_root, *PUBKEY_GEN_SCRIPT_REL_PARTS)
+        fallback_script = os.path.join(CURRENT_DIR, PUBKEY_GEN_SCRIPT_REL_PARTS[-1])
+        src_version_script = os.path.join(self.src_dir, "Common", "Version", PUBKEY_GEN_SCRIPT_REL_PARTS[-1])
+
+        logd(
+            f"  • [step3][경로확인] project_root={self.project_root} | "
+            f"SRC_DIR={self.src_dir} | CURRENT_DIR={CURRENT_DIR} | cwd={os.getcwd()}"
+        )
+        logd(
+            f"  • [step3][후보1-primary] {primary_script} (exists={os.path.isfile(primary_script)})"
+        )
+        logd(
+            f"  • [step3][후보2-fallback] {fallback_script} (exists={os.path.isfile(fallback_script)})"
+        )
+        logd(
+            f"  • [step3][후보3-src_version] {src_version_script} (exists={os.path.isfile(src_version_script)})"
+        )
+
+        gen_script = primary_script
+        selected_source = "primary(project_root)"
         if not os.path.isfile(gen_script):
-            gen_script = os.path.join(CURRENT_DIR, PUBKEY_GEN_SCRIPT_REL_PARTS[-1])
+            if os.path.isfile(fallback_script):
+                gen_script = fallback_script
+                selected_source = "fallback(CURRENT_DIR)"
+            elif os.path.isfile(src_version_script):
+                gen_script = src_version_script
+                selected_source = "src_version(self.src_dir)"
 
         try:
             self._check_cancelled()
             if not os.path.isfile(gen_script):
+                loge(
+                    f"  ❌ [step3][미발견] 공개키 생성 스크립트를 찾을 수 없습니다. "
+                    f"primary={primary_script} ({os.path.isfile(primary_script)}), "
+                    f"fallback={fallback_script} ({os.path.isfile(fallback_script)}), "
+                    f"src_version={src_version_script} ({os.path.isfile(src_version_script)})"
+                )
                 raise FileNotFoundError(f"공개키 생성 스크립트를 찾을 수 없습니다: {gen_script}")
+
+            logd(f"  • [step3][선택됨] source={selected_source} | path={os.path.abspath(gen_script)}")
 
             gen_dir = str(Path(gen_script).resolve().parent)
             if gen_dir not in sys.path:
                 sys.path.insert(0, gen_dir)
+                logd(f"  • [step3][sys.path] 추가됨: {gen_dir}")
 
             import Common.Version.generate_public_key_module as pub_gen_mod  # type: ignore
 
             pub_gen_mod = importlib.reload(pub_gen_mod)
+            logd(f"  • [step3][모듈로드] {getattr(pub_gen_mod, '__file__', 'unknown')}")
+
             info = pub_gen_mod.generate_and_verify_public_key_module(
                 project_root=self.project_root,
                 reverify_attempts=PUBKEY_REVERIFY_ATTEMPTS,
@@ -832,7 +871,10 @@ class BuildApp:
             return info
 
         except Exception as exc:
-            loge(f"  ❌ [step3] 실패: {exc}")
+            loge(
+                f"  ❌ [step3] 실패: {exc} | project_root={self.project_root} | "
+                f"primary={primary_script} | fallback={fallback_script}"
+            )
             msg = f"실패: {exc}"
             self._end_step(step_key, detail=msg)
             self._record_result(step_name, STATUS_FAILED, msg, step_key=step_key)

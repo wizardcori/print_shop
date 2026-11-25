@@ -69,7 +69,7 @@ class PathMgr(ThreadSafeSingletonBase):
             cls.APP_NAME = app_name
             try:
                 from Common.log import logd
-                logd(f"APP_NAME : {cls.APP_NAME}")
+                print(f"APP_NAME : {cls.APP_NAME}")
             except Exception:
                 pass
 

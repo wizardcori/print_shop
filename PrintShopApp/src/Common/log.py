@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from Common.log_config import LogConfig, log_config_instance
+#from Common.log_config import LogConfig, log_config_instance
 from Common.path_mgr import PathMgr
 
 try:
@@ -203,7 +203,7 @@ def _populate_record_location_and_tag(record: logging.LogRecord) -> None:
     """CustomLogFormatter / CustomColoredFormatter 공통 레코드 필드 보정."""
     if not hasattr(record, "tag") or not getattr(record, "tag"):
         record.tag = LogTag.DEFAULT
-
+    from Common.log_config import log_config_instance
     path_style = log_config_instance.get("path_style")
     fixed_width = log_config_instance.get("fixed_width_size")
     do_tabular = bool(log_config_instance.get("enable_tabular_alignment"))
@@ -251,6 +251,7 @@ def _populate_record_location_and_tag(record: logging.LogRecord) -> None:
 def _resolve_safe_format_string() -> str:
     """log_config_instance에서 포맷 문자열을 조회하고 비어 있으면 기본 포맷을 반환."""
     try:
+        from Common.log_config import log_config_instance
         fmt = log_config_instance.build_format_string()
         if isinstance(fmt, str) and fmt.strip():
             return fmt
@@ -797,6 +798,7 @@ class LoggerManager:
         self.console_handlers: list[logging.Handler] = []
         self.file_handler_color: PeriodicFlushFileHandler | None = None
 
+        from Common.log_config import log_config_instance
         default_fmt = log_config_instance.build_format_string()
         self.default_individual_format = individual_format or default_fmt
         self.default_global_format = global_format or default_fmt
@@ -828,6 +830,7 @@ class LoggerManager:
         if cls._global_initialized and not force:
             return
 
+        from Common.log_config import log_config_instance
         initial_global_fmt = log_config_instance.build_format_string()
         enable_global = log_config_instance.get("enable_global_log")
         enable_global_color = log_config_instance.get("enable_global_color_file")
@@ -1097,6 +1100,7 @@ class LoggerManager:
 
     @classmethod
     def update_all_logger_formats(cls) -> None:
+        from Common.log_config import log_config_instance
         new_fmt = log_config_instance.build_format_string()
 
         if cls._global_normal_handler:
@@ -1227,7 +1231,7 @@ def logd(message: str, mod: Any = None, level: str = "debug") -> None:
     global _shared_logger
     if _shared_logger is None:
         setup_global_log()
-
+    from Common.log_config import log_config_instance
     if not log_config_instance.is_level_enabled(level):
         return
 

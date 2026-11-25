@@ -62,6 +62,7 @@ if APP_DIR_STR not in sys.path:
 from Common.app_control import QtAppControlReceiver  # noqa: E402
 from BuildManagerApp.build_manager_app import BuildManagerWindow  # noqa: E402
 from Common.prio_worker_queue import TaskManager  # noqa: E402
+from BuildManagerApp.build_manager_log_setting_tab import BuildManagerLogSettingsTab
 
 
 def _cleanup_build_manager() -> None:

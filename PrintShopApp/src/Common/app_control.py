@@ -8,7 +8,7 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable
@@ -24,42 +24,35 @@ except Exception:  # pragma: no cover
     _HAS_PYSIDE6 = False
 
 try:
+    import win32api  # type: ignore
     import win32con  # type: ignore
     import win32event  # type: ignore
 
     _HAS_WIN32_EVENT = True
 except Exception:  # pragma: no cover
+    win32api = None
     win32con = None
     win32event = None
     _HAS_WIN32_EVENT = False
 
-try:
-    from Common.log import set_file_tag, logd as _common_logd, loge as _common_loge
-    set_file_tag("APP_CONTROL")
+from Common.log import logd, loge, set_file_tag
 
-except Exception:  # pragma: no cover
-    _common_logd = None
-    _common_loge = None
-
-
-def _logd(msg: str) -> None:
-    if callable(_common_logd):
-        try:
-            _common_logd(msg)
-        except Exception:
-            pass
-
-
-def _loge(msg: str) -> None:
-    if callable(_common_loge):
-        try:
-            _common_loge(msg)
-        except Exception:
-            pass
+set_file_tag("APP_CTRL")
 
 
 def _default_on_rejected(channel_label: str, reason: str) -> None:
-    _loge(f"[CtrlReceiver] 신호 거부/차단 ({channel_label}): {reason}")
+    loge(f"[CtrlReceiver] 신호 거부/차단 ({channel_label}): {reason}")
+
+
+def _close_win32_handle(handle: Any) -> None:
+    if handle is None or win32api is None:
+        return
+    close_fn = getattr(win32api, "CloseHandle", None)
+    if callable(close_fn):
+        try:
+            close_fn(handle)
+        except Exception as exc:
+            loge(f"[CtrlSignal] 핸들 닫기 실패: {exc}")
 
 
 CTRL_SECRET_KEY: str = "printshop-ctrl-hmac-secret-2026"
@@ -95,6 +88,7 @@ class ControlSignalState:
     sender_key: str = ""
     sender_pid: int | None = None
     sender_role: str = ""
+    log_params: dict[str, Any] = field(default_factory=dict)
 
 
 class SignedSignalVerifier:
@@ -123,10 +117,12 @@ class SignedSignalVerifier:
         sender_key: str = "",
         sender_pid: int | None = None,
         sender_role: str = "",
+        log_params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         act_str = action.value if isinstance(action, ControlAction) else str(action)
         timestamp = float(time.time() if ts is None else ts)
         resolved_pid = int(os.getpid() if sender_pid is None else sender_pid)
+        normalized_log_params = dict(log_params) if isinstance(log_params, dict) else {}
         payload: dict[str, Any] = {
             "action": act_str,
             "app_key": app_key,
@@ -135,6 +131,7 @@ class SignedSignalVerifier:
             "sender_key": str(sender_key or ""),
             "sender_pid": resolved_pid,
             "sender_role": str(sender_role or ""),
+            "log_params": normalized_log_params,
         }
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         payload["sig"] = hmac.new(self._key, canonical, hashlib.sha256).hexdigest()
@@ -159,6 +156,12 @@ class SignedSignalVerifier:
             sender_key = str(payload.get("sender_key") or "")
             raw_sender_pid = payload.get("sender_pid")
             sender_role = str(payload.get("sender_role") or "")
+
+            has_log_params = "log_params" in payload
+            raw_log_params = payload.get("log_params")
+            if has_log_params and raw_log_params is not None and not isinstance(raw_log_params, dict):
+                return False, "잘못된 로그 파라미터 형식"
+            normalized_log_params = dict(raw_log_params) if isinstance(raw_log_params, dict) else {}
 
             if not sig or not nonce or action not in (ControlAction.STOP.value, ControlAction.RESTART.value):
                 return False, "필수 필드 누락 또는 잘못된 액션"
@@ -186,7 +189,7 @@ class SignedSignalVerifier:
                 except (TypeError, ValueError):
                     return False, "잘못된 발신자 PID"
 
-            unsigned = {
+            unsigned: dict[str, Any] = {
                 "action": action,
                 "app_key": app_key,
                 "nonce": nonce,
@@ -195,6 +198,9 @@ class SignedSignalVerifier:
                 "sender_pid": sender_pid,
                 "sender_role": sender_role,
             }
+            if has_log_params:
+                unsigned["log_params"] = normalized_log_params
+
             canonical = json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode("utf-8")
             expected_sig = hmac.new(self._key, canonical, hashlib.sha256).hexdigest()
 
@@ -304,6 +310,7 @@ class AppControlSignalManager:
                 sender_key=self._state.sender_key,
                 sender_pid=self._state.sender_pid,
                 sender_role=self._state.sender_role,
+                log_params=dict(self._state.log_params),
             )
 
     @property
@@ -359,8 +366,8 @@ class AppControlSignalManager:
         try:
             if flag_path.exists():
                 flag_path.unlink()
-        except Exception:
-            pass
+        except Exception as exc:
+            loge(f"[CtrlSignal] 플래그 파일 삭제 실패 ({flag_path}): {exc}")
 
         if _HAS_WIN32_EVENT and sys.platform == "win32":
             ev_name = self._event_name(action, scope)
@@ -368,14 +375,10 @@ class AppControlSignalManager:
             try:
                 h_ev = win32event.CreateEvent(None, True, False, ev_name)
                 win32event.ResetEvent(h_ev)
-            except Exception:
-                pass
+            except Exception as exc:
+                loge(f"[CtrlSignal] 이벤트 리셋 실패 ({ev_name}): {exc}")
             finally:
-                if h_ev is not None:
-                    try:
-                        win32event.CloseHandle(h_ev)
-                    except Exception:
-                        pass
+                _close_win32_handle(h_ev)
 
     def send_signal(
         self,
@@ -387,6 +390,7 @@ class AppControlSignalManager:
         sender_key: str | None = None,
         sender_pid: int | None = None,
         sender_role: str | None = None,
+        log_params: dict[str, Any] | None = None,
     ) -> None:
         if action not in (ControlAction.STOP, ControlAction.RESTART):
             raise ValueError(f"유효하지 않은 제어 액션입니다: {action}")
@@ -401,6 +405,14 @@ class AppControlSignalManager:
         resolved_sender_key = (sender_key if sender_key is not None else self.app_key).strip()
         resolved_sender_pid = int(os.getpid() if sender_pid is None else sender_pid)
         resolved_sender_role = (sender_role if sender_role is not None else self.sender_role).strip()
+        resolved_log_params = dict(log_params) if isinstance(log_params, dict) else {}
+
+        logd(
+            f"[CtrlSender] 제어 신호 발송 시도 (action={action.value}, scope={scope}, "
+            f"target={effective_raw_key if scope == 'app' else 'ALL'}, "
+            f"sender={resolved_sender_key}:{resolved_sender_pid} [{resolved_sender_role}], "
+            f"flag_path={flag_path}, log_params={json.dumps(resolved_log_params, ensure_ascii=False)})"
+        )
 
         if self.verifier is not None:
             sig_nonce = nonce or f"{resolved_sender_pid}-{time.monotonic_ns()}"
@@ -411,6 +423,7 @@ class AppControlSignalManager:
                 sender_key=resolved_sender_key,
                 sender_pid=resolved_sender_pid,
                 sender_role=resolved_sender_role,
+                log_params=resolved_log_params,
             )
             flag_path.write_text(json.dumps(signed, ensure_ascii=False), encoding="utf-8")
         else:
@@ -419,6 +432,7 @@ class AppControlSignalManager:
                 "sender_key": resolved_sender_key,
                 "sender_pid": resolved_sender_pid,
                 "sender_role": resolved_sender_role,
+                "log_params": resolved_log_params,
             }
             flag_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
 
@@ -429,7 +443,13 @@ class AppControlSignalManager:
             try:
                 win32event.SetEvent(h_ev)
             finally:
-                win32event.CloseHandle(h_ev)
+                _close_win32_handle(h_ev)
+
+        logd(
+            f"[CtrlSender] 제어 신호 발송 완료 (action={action.value}, scope={scope}, "
+            f"target={effective_raw_key if scope == 'app' else 'ALL'}, "
+            f"sender={resolved_sender_key}:{resolved_sender_pid})"
+        )
 
     def request_stop(
         self,
@@ -440,6 +460,7 @@ class AppControlSignalManager:
         sender_key: str | None = None,
         sender_pid: int | None = None,
         sender_role: str | None = None,
+        log_params: dict[str, Any] | None = None,
     ) -> None:
         self.send_signal(
             ControlAction.STOP,
@@ -449,6 +470,7 @@ class AppControlSignalManager:
             sender_key=sender_key,
             sender_pid=sender_pid,
             sender_role=sender_role,
+            log_params=log_params,
         )
 
     def request_restart(
@@ -459,6 +481,7 @@ class AppControlSignalManager:
         sender_key: str | None = None,
         sender_pid: int | None = None,
         sender_role: str | None = None,
+        log_params: dict[str, Any] | None = None,
     ) -> None:
         self.send_signal(
             ControlAction.RESTART,
@@ -468,14 +491,15 @@ class AppControlSignalManager:
             sender_key=sender_key,
             sender_pid=sender_pid,
             sender_role=sender_role,
+            log_params=log_params,
         )
 
     def _reject_signal(self, channel_label: str, reason: str) -> None:
         if callable(self.on_rejected):
             try:
                 self.on_rejected(channel_label, reason)
-            except Exception:
-                pass
+            except Exception as exc:
+                loge(f"[CtrlSignal] on_rejected 콜백 예외 ({channel_label}): {exc}")
 
     def _is_self_originated(
         self,
@@ -508,14 +532,14 @@ class AppControlSignalManager:
                     parsed = json.loads(raw)
                     if isinstance(parsed, dict):
                         data = parsed
-            except Exception:
-                pass
+            except Exception as exc:
+                loge(f"[CtrlSignal] 비서명 페이로드 읽기 실패 ({flag_path}): {exc}")
             finally:
                 try:
                     if flag_path.exists():
                         flag_path.unlink()
-                except Exception:
-                    pass
+                except Exception as exc:
+                    loge(f"[CtrlSignal] 페이로드 파일 삭제 실패 ({flag_path}): {exc}")
             return True, data
 
         if not flag_path.is_file():
@@ -531,8 +555,8 @@ class AppControlSignalManager:
             try:
                 if flag_path.exists():
                     flag_path.unlink()
-            except Exception:
-                pass
+            except Exception as exc:
+                loge(f"[CtrlSignal] 서명 페이로드 파일 삭제 실패 ({flag_path}): {exc}")
 
         try:
             data = json.loads(raw_text)
@@ -561,14 +585,10 @@ class AppControlSignalManager:
             try:
                 h_ev = win32event.CreateEvent(None, True, False, ev_name)
                 win32event.ResetEvent(h_ev)
-            except Exception:
-                pass
+            except Exception as exc:
+                loge(f"[CtrlSignal] 감지 이벤트 리셋 실패 ({ev_name}): {exc}")
             finally:
-                if h_ev is not None:
-                    try:
-                        win32event.CloseHandle(h_ev)
-                    except Exception:
-                        pass
+                _close_win32_handle(h_ev)
 
         flag_path = self._flag_file_path(action, source)
         if self.verifier is not None and not via_file:
@@ -583,8 +603,14 @@ class AppControlSignalManager:
 
         sender_key = str(payload.get("sender_key") or "")
         raw_pid = payload.get("sender_pid")
-        sender_pid = int(raw_pid) if isinstance(raw_pid, int) or (isinstance(raw_pid, str) and raw_pid.isdigit()) else None
+        sender_pid = (
+            int(raw_pid)
+            if isinstance(raw_pid, int) or (isinstance(raw_pid, str) and raw_pid.isdigit())
+            else None
+        )
         sender_role = str(payload.get("sender_role") or "")
+        raw_log_params = payload.get("log_params")
+        log_params = dict(raw_log_params) if isinstance(raw_log_params, dict) else {}
 
         blocked, block_reason = self._is_self_originated(action, sender_key, sender_pid)
         if blocked:
@@ -607,6 +633,7 @@ class AppControlSignalManager:
                     sender_key=sender_key,
                     sender_pid=sender_pid,
                     sender_role=sender_role,
+                    log_params=log_params,
                 )
             elif action == ControlAction.RESTART and self._state.action == ControlAction.STOP:
                 self._state.action = ControlAction.RESTART
@@ -614,6 +641,7 @@ class AppControlSignalManager:
                 self._state.sender_key = sender_key
                 self._state.sender_pid = sender_pid
                 self._state.sender_role = sender_role
+                self._state.log_params = log_params
 
         self._signal_event.set()
 
@@ -621,13 +649,17 @@ class AppControlSignalManager:
         if action == ControlAction.RESTART and callable(self.on_restart):
             try:
                 self.on_restart(current_state)
-            except Exception:
-                pass
+            except SystemExit:
+                raise
+            except Exception as exc:
+                loge(f"[CtrlSignal] on_restart 콜백 예외 (app_key={self.app_key}, source={source}): {exc}")
         elif callable(self.on_stop):
             try:
                 self.on_stop(current_state)
-            except Exception:
-                pass
+            except SystemExit:
+                raise
+            except Exception as exc:
+                loge(f"[CtrlSignal] on_stop 콜백 예외 (app_key={self.app_key}, source={source}): {exc}")
 
     def _watch_loop(self) -> None:
         channels: list[tuple[ControlAction, str, Any, Path]] = []
@@ -639,7 +671,8 @@ class AppControlSignalManager:
                 if _HAS_WIN32_EVENT and sys.platform == "win32":
                     try:
                         h_ev = win32event.CreateEvent(None, True, False, self._event_name(action, scope))
-                    except Exception:
+                    except Exception as exc:
+                        loge(f"[CtrlSignal] 감시 이벤트 생성 실패 ({action.value}:{scope}): {exc}")
                         h_ev = None
                 channels.append((action, scope, h_ev, flag_path))
 
@@ -664,11 +697,7 @@ class AppControlSignalManager:
                         self._consume_detected_signal(action, scope, via_file=True)
         finally:
             for _, _, h_ev, _ in channels:
-                if h_ev is not None:
-                    try:
-                        win32event.CloseHandle(h_ev)
-                    except Exception:
-                        pass
+                _close_win32_handle(h_ev)
 
     def spawn_restarted_process(self) -> subprocess.Popen[bytes]:
         if self.restart_cmd:
@@ -704,8 +733,8 @@ class AppControlSignalManager:
         if callable(cleanup_fn):
             try:
                 cleanup_fn()
-            except Exception:
-                pass
+            except Exception as exc:
+                loge(f"[CtrlSignal] cleanup_fn 실행 중 예외 (app_key={self.app_key}): {exc}")
 
         if should_restart:
             self.spawn_restarted_process()
@@ -726,10 +755,16 @@ class AppControlSender:
         namespace: str = "Local",
         fallback_dir: str | Path | None = None,
         prefix: str = "PrintShopApp_Ctrl",
+        stop_log_params: dict[str, Any] | None = None,
+        restart_log_params: dict[str, Any] | None = None,
     ) -> None:
         self.sender_app_key = sender_app_key.strip() or "ControlSender"
         self.sender_role = sender_role.strip() or "sender"
         self.sender_pid = int(os.getpid() if sender_pid is None else sender_pid)
+        self.stop_log_params: dict[str, Any] = dict(stop_log_params) if isinstance(stop_log_params, dict) else {}
+        self.restart_log_params: dict[str, Any] = (
+            dict(restart_log_params) if isinstance(restart_log_params, dict) else {}
+        )
         self._manager = AppControlSignalManager(
             app_key=self.sender_app_key,
             prefix=prefix,
@@ -739,7 +774,24 @@ class AppControlSender:
             sender_role=self.sender_role,
         )
 
-    def stop_app(self, target_app_key: str, *, nonce: str | None = None) -> None:
+    def _resolve_log_params(
+        self,
+        action: ControlAction,
+        log_params: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        base = self.stop_log_params if action == ControlAction.STOP else self.restart_log_params
+        merged = dict(base)
+        if isinstance(log_params, dict):
+            merged.update(log_params)
+        return merged
+
+    def stop_app(
+        self,
+        target_app_key: str,
+        *,
+        nonce: str | None = None,
+        log_params: dict[str, Any] | None = None,
+    ) -> None:
         self._manager.send_signal(
             ControlAction.STOP,
             scope="app",
@@ -748,9 +800,16 @@ class AppControlSender:
             sender_key=self.sender_app_key,
             sender_pid=self.sender_pid,
             sender_role=self.sender_role,
+            log_params=self._resolve_log_params(ControlAction.STOP, log_params),
         )
 
-    def restart_app(self, target_app_key: str, *, nonce: str | None = None) -> None:
+    def restart_app(
+        self,
+        target_app_key: str,
+        *,
+        nonce: str | None = None,
+        log_params: dict[str, Any] | None = None,
+    ) -> None:
         self._manager.send_signal(
             ControlAction.RESTART,
             scope="app",
@@ -759,9 +818,14 @@ class AppControlSender:
             sender_key=self.sender_app_key,
             sender_pid=self.sender_pid,
             sender_role=self.sender_role,
+            log_params=self._resolve_log_params(ControlAction.RESTART, log_params),
         )
 
-    def stop_all(self, *, nonce: str | None = None) -> None:
+    def stop_all(
+        *,
+        nonce: str | None = None,
+        log_params: dict[str, Any] | None = None,
+    ) -> None:
         self._manager.send_signal(
             ControlAction.STOP,
             scope="all",
@@ -770,9 +834,14 @@ class AppControlSender:
             sender_key=self.sender_app_key,
             sender_pid=self.sender_pid,
             sender_role=self.sender_role,
+            log_params=self._resolve_log_params(ControlAction.STOP, log_params),
         )
 
-    def restart_all(self, *, nonce: str | None = None) -> None:
+    def restart_all(
+        *,
+        nonce: str | None = None,
+        log_params: dict[str, Any] | None = None,
+    ) -> None:
         self._manager.send_signal(
             ControlAction.RESTART,
             scope="all",
@@ -781,6 +850,7 @@ class AppControlSender:
             sender_key=self.sender_app_key,
             sender_pid=self.sender_pid,
             sender_role=self.sender_role,
+            log_params=self._resolve_log_params(ControlAction.RESTART, log_params),
         )
 
     def clear_signals(self, target_app_key: str | None = None) -> None:
@@ -812,15 +882,26 @@ class AppControlReceiver:
         ignore_self_signals: bool = False,
         ignore_self_restart: bool = True,
         on_rejected: Callable[[str, str], None] | None = None,
+        stop_log_params: dict[str, Any] | None = None,
+        restart_log_params: dict[str, Any] | None = None,
+        on_action_log: Callable[[ControlAction, dict[str, Any], ControlSignalState], None] | None = None,
         auto_start: bool = True,
     ) -> None:
         self.app_name = app_name
         self.cleanup_fn = cleanup_fn
         self.exit_code = exit_code
+        self.stop_log_params: dict[str, Any] = dict(stop_log_params) if isinstance(stop_log_params, dict) else {}
+        self.restart_log_params: dict[str, Any] = (
+            dict(restart_log_params) if isinstance(restart_log_params, dict) else {}
+        )
+        self.on_action_log = on_action_log
+        self.last_log_params: dict[str, Any] = {}
 
-        _logd(
+        logd(
             f"[CtrlReceiver] 제어 신호 리스너 연결 시작 (app_name={app_name}, "
-            f"role={sender_role}, ignore_self={ignore_self_signals}, ignore_self_restart={ignore_self_restart})"
+            f"role={sender_role}, ignore_self={ignore_self_signals}, ignore_self_restart={ignore_self_restart}, "
+            f"stop_log_params={json.dumps(self.stop_log_params, ensure_ascii=False)}, "
+            f"restart_log_params={json.dumps(self.restart_log_params, ensure_ascii=False)})"
         )
         try:
             self.manager = AppControlSignalManager(
@@ -837,15 +918,36 @@ class AppControlReceiver:
             if auto_start:
                 self.start()
         except Exception as exc:
-            _loge(f"[CtrlReceiver] 제어 신호 리스너 연결 실패 (app_name={app_name}): {exc}")
+            loge(f"[CtrlReceiver] 제어 신호 리스너 연결 실패 (app_name={app_name}): {exc}")
             raise
 
-    def _on_triggered(self, state: ControlSignalState) -> None:
-        action_val = state.action.value if isinstance(state.action, ControlAction) else str(state.action)
-        _logd(
-            f"[CtrlReceiver] 제어 신호 트리거 수신 (app_name={self.app_name}, "
-            f"action={action_val}, sender={state.sender_key}:{state.sender_pid})"
+    def _build_effective_log_params(self, state: ControlSignalState) -> dict[str, Any]:
+        action = state.action if isinstance(state.action, ControlAction) else ControlAction(str(state.action))
+        base = self.stop_log_params if action == ControlAction.STOP else self.restart_log_params
+        merged = dict(base)
+        if isinstance(state.log_params, dict):
+            merged.update(state.log_params)
+        return merged
+
+    def _emit_action_log(self, state: ControlSignalState, prefix: str = "[CtrlReceiver]") -> dict[str, Any]:
+        action = state.action if isinstance(state.action, ControlAction) else ControlAction(str(state.action))
+        effective_params = self._build_effective_log_params(state)
+        self.last_log_params = effective_params
+
+        logd(
+            f"{prefix} 제어 신호 트리거 수신 (app_name={self.app_name}, "
+            f"action={action.value}, sender={state.sender_key}:{state.sender_pid}, "
+            f"log_params={json.dumps(effective_params, ensure_ascii=False)})"
         )
+        if callable(self.on_action_log):
+            try:
+                self.on_action_log(action, effective_params, state)
+            except Exception as exc:
+                loge(f"{prefix} on_action_log 실행 중 오류 (app_name={self.app_name}): {exc}")
+        return effective_params
+
+    def _on_triggered(self, state: ControlSignalState) -> None:
+        self._emit_action_log(state, prefix="[CtrlReceiver]")
         try:
             self.manager.execute_shutdown_or_restart(
                 cleanup_fn=self.cleanup_fn,
@@ -854,12 +956,12 @@ class AppControlReceiver:
         except SystemExit:
             raise
         except Exception as exc:
-            _loge(f"[CtrlReceiver] 종료/재시작 실행 중 오류 (app_name={self.app_name}): {exc}")
+            loge(f"[CtrlReceiver] 종료/재시작 실행 중 오류 (app_name={self.app_name}): {exc}")
             raise
 
     def start(self) -> None:
         self.manager.start_listening()
-        _logd(f"[CtrlReceiver] 제어 신호 리스너 연결 및 감시 시작 완료 (app_name={self.app_name})")
+        logd(f"[CtrlReceiver] 제어 신호 리스너 연결 및 감시 시작 완료 (app_name={self.app_name})")
 
     def stop(self, timeout: float = 2.0) -> None:
         self.manager.stop_listening(timeout=timeout)
@@ -881,6 +983,9 @@ class QtAppControlReceiver(AppControlReceiver):
         ignore_self_signals: bool = False,
         ignore_self_restart: bool = True,
         on_rejected: Callable[[str, str], None] | None = None,
+        stop_log_params: dict[str, Any] | None = None,
+        restart_log_params: dict[str, Any] | None = None,
+        on_action_log: Callable[[ControlAction, dict[str, Any], ControlSignalState], None] | None = None,
         auto_start: bool = True,
     ) -> None:
         if not _HAS_PYSIDE6 or QTimer is None or QApplication is None:
@@ -900,6 +1005,9 @@ class QtAppControlReceiver(AppControlReceiver):
             ignore_self_signals=ignore_self_signals,
             ignore_self_restart=ignore_self_restart,
             on_rejected=on_rejected,
+            stop_log_params=stop_log_params,
+            restart_log_params=restart_log_params,
+            on_action_log=on_action_log,
             auto_start=False,
         )
         self.manager.on_stop = self._on_qt_triggered
@@ -909,13 +1017,14 @@ class QtAppControlReceiver(AppControlReceiver):
             self.start()
 
     def _on_qt_triggered(self, state: ControlSignalState) -> None:
-        action_val = state.action.value if isinstance(state.action, ControlAction) else str(state.action)
+        action = state.action if isinstance(state.action, ControlAction) else ControlAction(str(state.action))
         self.last_state = state
-        self.should_restart = state.action == ControlAction.RESTART
-        _logd(
-            f"[QtCtrlReceiver] 제어 신호 트리거 수신 (app_name={self.app_name}, "
-            f"action={action_val}, restart={self.should_restart}, "
-            f"sender={state.sender_key}:{state.sender_pid})"
+        self.should_restart = action == ControlAction.RESTART
+        effective_params = self._emit_action_log(state, prefix="[QtCtrlReceiver]")
+        logd(
+            f"[QtCtrlReceiver] 종료 예약 (app_name={self.app_name}, "
+            f"action={action.value}, restart={self.should_restart}, "
+            f"log_params={json.dumps(effective_params, ensure_ascii=False)})"
         )
         self.stop()
 
@@ -939,18 +1048,18 @@ class QtAppControlReceiver(AppControlReceiver):
             try:
                 effective_cleanup()
             except Exception as exc:
-                _loge(f"[QtCtrlReceiver] cleanup_fn 실행 중 오류 (app_name={self.app_name}): {exc}")
+                loge(f"[QtCtrlReceiver] cleanup_fn 실행 중 오류 (app_name={self.app_name}): {exc}")
 
         if self.should_restart:
             if callable(before_restart):
                 try:
                     before_restart()
                 except Exception as exc:
-                    _loge(f"[QtCtrlReceiver] before_restart 실행 중 오류 (app_name={self.app_name}): {exc}")
+                    loge(f"[QtCtrlReceiver] before_restart 실행 중 오류 (app_name={self.app_name}): {exc}")
             try:
                 self.manager.spawn_restarted_process()
             except Exception as exc:
-                _loge(f"[QtCtrlReceiver] 재시작 프로세스 실행 실패 (app_name={self.app_name}): {exc}")
+                loge(f"[QtCtrlReceiver] 재시작 프로세스 실행 실패 (app_name={self.app_name}): {exc}")
 
         return self.exit_code if exit_code is None else exit_code
 
@@ -966,6 +1075,9 @@ def attach_control_signal(
     ignore_self_signals: bool = False,
     ignore_self_restart: bool = True,
     on_rejected: Callable[[str, str], None] | None = None,
+    stop_log_params: dict[str, Any] | None = None,
+    restart_log_params: dict[str, Any] | None = None,
+    on_action_log: Callable[[ControlAction, dict[str, Any], ControlSignalState], None] | None = None,
 ) -> AppControlSignalManager:
     receiver = AppControlReceiver(
         app_name=app_name,
@@ -977,6 +1089,9 @@ def attach_control_signal(
         ignore_self_signals=ignore_self_signals,
         ignore_self_restart=ignore_self_restart,
         on_rejected=on_rejected,
+        stop_log_params=stop_log_params,
+        restart_log_params=restart_log_params,
+        on_action_log=on_action_log,
         auto_start=True,
     )
     return receiver.manager
@@ -990,6 +1105,7 @@ def send_stop_signal(
     namespace: str = "Local",
     fallback_dir: str | Path | None = None,
     secret_key: bytes | str | None = None,
+    log_params: dict[str, Any] | None = None,
 ) -> None:
     sender = AppControlSender(
         sender_app_key=sender_app_key,
@@ -997,8 +1113,9 @@ def send_stop_signal(
         namespace=namespace,
         fallback_dir=fallback_dir,
         secret_key=secret_key,
+        stop_log_params=log_params,
     )
-    sender.stop_app(target_app_key)
+    sender.stop_app(target_app_key, log_params=log_params)
 
 
 def send_restart_signal(
@@ -1009,6 +1126,7 @@ def send_restart_signal(
     namespace: str = "Local",
     fallback_dir: str | Path | None = None,
     secret_key: bytes | str | None = None,
+    log_params: dict[str, Any] | None = None,
 ) -> None:
     sender = AppControlSender(
         sender_app_key=sender_app_key,
@@ -1016,5 +1134,6 @@ def send_restart_signal(
         namespace=namespace,
         fallback_dir=fallback_dir,
         secret_key=secret_key,
+        restart_log_params=log_params,
     )
-    sender.restart_app(target_app_key)
+    sender.restart_app(target_app_key, log_params=log_params)

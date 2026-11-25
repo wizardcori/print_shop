@@ -23,7 +23,7 @@ VSVersionInfo(
           StringStruct(u'LegalCopyright', u'Copyright (C) PrintShop'),
           StringStruct(u'OriginalFilename', u'PrintShopVersionViewer.exe'),
           StringStruct(u'ProductName', u'PrintShopVersionViewer'),
-          StringStruct(u'ProductVersion', u'1.2.60'),
+          StringStruct(u'ProductVersion', u'1.2.64'),
           ]
         )
       ]
