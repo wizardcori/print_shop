@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 from Common.log import logd,loge
 from Common.log import set_file_tag ;set_file_tag("MAIN")
 
+from PrintShopApp.print_shop_log_setting_tab import PrintShopLogSettingsTab
+
 from setting import env_settings, general_settings, operator_settings
 # 사용하지 않는 경고를 숨기기 위한 더미 참조
 _ = (env_settings, general_settings, operator_settings)
@@ -36,7 +38,7 @@ if project_dir not in sys.path:
     sys.path.insert(0, project_dir)
 
 from create_admin_shortcut import set_startup_registration
-from Common.settings_dialog import SettingsDialog
+from PrintShopApp.settings_dialog import SettingsDialog
 from Common.geometry_manager import GeometryManager
 
 # [추가] LinkShare 내부의 설정들도 레지스트리에 등록될 수 있도록 임포트

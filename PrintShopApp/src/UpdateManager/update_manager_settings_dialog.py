@@ -12,7 +12,7 @@ from UpdateManager.update_manager_config import (
 )
 
 from Common.log import logd, loge
-from Common.log_settings_tab import LogSettingsTab
+from UpdateManager.update_manager_log_setting_tab import UpdateManagerSettingsTab
 
 
 class UpdateManagerSettingsDialog(QDialog):
@@ -78,8 +78,8 @@ class UpdateManagerSettingsDialog(QDialog):
         
         self.tabs.addTab(tab_general, "⚙️ 기본 설정")
         
-        if LogSettingsTab is not None:
-            self.tab_log_settings = LogSettingsTab(self)
+        if UpdateManagerSettingsTab is not None:
+            self.tab_log_settings = UpdateManagerSettingsTab(self)
             self.tabs.addTab(self.tab_log_settings, "📝 로그 상세 설정")
         
         self.load_values_to_ui()

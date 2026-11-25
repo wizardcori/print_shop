@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -37,16 +37,49 @@ for p in (str(PROJECT_ROOT), str(SRC_DIR), str(CURRENT_DIR)):
 import Common.log as common_log  # noqa: E402
 from Common.log import WindowLogColorHandlerBase, logd, loge, set_file_tag  # noqa: E402
 
-set_file_tag("BUILD_MGR")
+LOG_FILE_TAG: str = "BUILD_MGR"
+set_file_tag(LOG_FILE_TAG)
 
-from build_app_tabs_group import BuildAppTabGroupBox, INSTALLER_TAB_KEY  # noqa: E402
-from build_manager_config import BUILD_MANAGER_INI_NAME, BuildManagerIniStore  # noqa: E402
-from build_script.build import BuildApp, PrintShopBuildStepTimer, parse_targets  # noqa: E402
-from build_script.target_config import TargetConfig  # noqa: E402
-from build_target_config_tab import BuildTargetConfigTab  # noqa: E402
+from BuildManagerApp.build_app_tabs_group import BuildAppTabGroupBox, INSTALLER_TAB_KEY  # noqa: E402
+from BuildManagerApp.build_manager_config import (  # noqa: E402
+    BUILD_MANAGER_INI_NAME,
+    BuildManagerIniStore,
+    DEFAULT_BUILD_MODE,
+    DEFAULT_INSTALL_DIR_NAME,
+    DEFAULT_RELEASE_DIR_NAME,
+)
+from BuildManagerApp.build_target_config_tab import BuildTargetConfigTab  # noqa: E402
+from BuildManagerApp.prev_version_resolver import (  # noqa: E402
+    _build_snapshot_sig,
+    _collect_zip_candidates,
+    clear_prev_version_cache,
+    resolve_prev_version_meta,
+    resolve_zip_prev_version_meta,
+)
 from BuildManagerApp.settings_window import SettingsWindow  # noqa: E402
-from Common.prio_worker_queue import CancelToken, TaskListenerBase, TaskManager, TaskPriority  # noqa: E402
-from prev_version_resolver import resolve_prev_version_meta, resolve_zip_prev_version_meta  # noqa: E402
+from build_script.build import (  # noqa: E402
+    BuildApp,
+    PrintShopBuildStepTimer,
+    STEP_APP_TEST,
+    STEP_BUILD,
+    STEP_ENV,
+    STEP_EOF_CRYPTO,
+    STEP_INSTALLER,
+    STEP_PUBKEY,
+    STEP_RELEASE,
+    STEP_TEST_SYNC,
+    STEP_UI,
+    STEP_VERSION,
+    parse_targets,
+)
+from build_script.target_config import TargetConfig, get_build_target_helpers  # noqa: E402
+from build_script.version_service import VersionService  # noqa: E402
+from Common.prio_worker_queue import (  # noqa: E402
+    CancelToken,
+    TaskListenerBase,
+    TaskManager,
+    TaskPriority,
+)
 
 try:
     from Common.sound import play_task_completion_sound as _external_play_task_completion_sound
@@ -55,6 +88,92 @@ except Exception:  # noqa: E402
 
 if sys.platform == "win32":
     import winsound
+
+PLATFORM_WIN32: str = "win32"
+
+MAIN_WINDOW_DEFAULT_WIDTH: int = 1120
+MAIN_WINDOW_DEFAULT_HEIGHT: int = 740
+MAIN_WINDOW_TITLE_PREFIX: str = "PrintShop Build Manager"
+
+LOG_FONT_FAMILY: str = "Consolas"
+LOG_FONT_SIZE: int = 9
+LOG_MAX_BLOCK_COUNT: int = 5000
+LOG_LEVEL_INFO: str = "info"
+
+DEFAULT_VERSION_FALLBACK: str = "1.0.0"
+DEFAULT_BUMP_UNIT: str = "patch"
+DEFAULT_PROGRESS_MIN: int = 0
+DEFAULT_PROGRESS_MAX: int = 100
+DEFAULT_CLEAN_PROGRESS_START: int = 10
+DEFAULT_ZIP_PROGRESS_STEP: int = 20
+DEFAULT_MS_PER_SEC: int = 1000
+
+STATUS_SUCCESS: str = "SUCCESS"
+STATUS_ERROR: str = "ERROR"
+STATUS_CANCELLED: str = "CANCELLED"
+
+JOB_TYPE_CLEAN: str = "clean"
+JOB_TYPE_STEP: str = "step"
+JOB_TYPE_APP: str = "app"
+JOB_TYPE_INSTALLER: str = "installer"
+JOB_TYPE_PREV_ZIP_INSPECT: str = "prev_zip_inspect"
+
+SHARED_PRE_STEPS: tuple[str, ...] = (
+    STEP_UI,
+    STEP_ENV,
+    STEP_PUBKEY,
+)
+
+APP_PIPELINE_STEPS: tuple[str, ...] = (
+    STEP_VERSION,
+    STEP_BUILD,
+    STEP_EOF_CRYPTO,
+    STEP_TEST_SYNC,
+    STEP_APP_TEST,
+    STEP_RELEASE,
+)
+
+TASK_PREFIX_PREV_ZIP: str = "PREV_ZIP_"
+TASK_PREFIX_BUILD_MGR: str = "BUILD_MGR_"
+
+SRC_SUBDIR_NAME: str = "src"
+VERSION_FILENAME: str = "version.txt"
+VERSION_FILE_ENCODING: str = "utf-8-sig"
+
+KEY_RUN_TEST: str = "run_test"
+KEY_CLEAN_WORK: str = "clean_work"
+KEY_CLEAN_DIST: str = "clean_dist"
+KEY_CLEAN_SPEC: str = "clean_spec"
+KEY_BUMP_UNIT: str = "bump_unit"
+KEY_MODE: str = "mode"
+
+MSG_READY: str = "준비됨"
+MSG_WAITING: str = "대기 중"
+MSG_CANCEL_REQUESTING: str = "빌드 취소 요청 중..."
+MSG_CANCEL_DISPATCHED: str = (
+    "[BuildManager] 빌드 취소 요청이 전달되었습니다. 현재 작업 종료를 기다리는 중입니다."
+)
+MSG_CLOSE_CANCEL_REASON: str = "빌드 매니저 종료로 빌드가 취소되었습니다."
+
+STATUS_BAR_SHORT_MS: int = 4000
+STATUS_BAR_LONG_MS: int = 6000
+SEPARATOR_WIDTH_PX: int = 1
+SEPARATOR_MIN_HEIGHT_PX: int = 16
+ACTION_BTN_MIN_HEIGHT_PX: int = 24
+BUILD_BTN_MIN_HEIGHT_PX: int = 26
+DETAIL_LABEL_MIN_WIDTH_PX: int = 100
+PROGRESS_BAR_MIN_WIDTH_PX: int = 240
+PROGRESS_BAR_HEIGHT_PX: int = 22
+
+MODE_CHOICES: tuple[str, ...] = (DEFAULT_BUILD_MODE, "development")
+BUMP_CHOICES: tuple[tuple[str, str | None], ...] = (
+    ("변경 없음 (none)", None),
+    ("patch", "patch"),
+    ("minor", "minor"),
+    ("major", "major"),
+)
+VALID_BUMP_UNITS: frozenset[str] = frozenset({"patch", "minor", "major"})
+NONE_BUMP_TOKENS: frozenset[str] = frozenset({"none", "null", "false", "0", "변경 없음"})
 
 DEFAULT_INSTALLER_TARGET_ALIASES: tuple[str, ...] = (
     "PrintShopApp",
@@ -111,6 +230,26 @@ BUILD_APP_ACCEPTED_KEYS: set[str] = {
 }
 
 
+def _clamp_percent(val: Any) -> int:
+    if isinstance(val, (int, float)):
+        return max(DEFAULT_PROGRESS_MIN, min(DEFAULT_PROGRESS_MAX, int(val)))
+    return DEFAULT_PROGRESS_MIN
+
+
+def _calc_overall_percent(
+    completed_steps: int,
+    total_steps: int,
+    step_percent: int,
+) -> int:
+    if total_steps <= 0:
+        return DEFAULT_PROGRESS_MIN
+    clamped_step = _clamp_percent(step_percent)
+    overall = ((max(0, completed_steps) + (clamped_step / DEFAULT_PROGRESS_MAX)) / total_steps) * (
+        DEFAULT_PROGRESS_MAX
+    )
+    return _clamp_percent(round(overall))
+
+
 def _resolve_default_installer_targets() -> list[str]:
     ordered = list(TargetConfig.ordered_keys())
     resolved: list[str] = []
@@ -141,7 +280,7 @@ def play_task_completion_sound(
         except Exception as exc:
             logd(f"[BuildManager] 외부 사운드 모듈 재생 실패 (status={status}): {exc}")
 
-    if sys.platform != "win32":
+    if sys.platform != PLATFORM_WIN32:
         return
 
     try:
@@ -156,9 +295,9 @@ def play_task_completion_sound(
                 return
 
         beep_type = {
-            "SUCCESS": winsound.MB_OK,
-            "ERROR": winsound.MB_ICONHAND,
-            "CANCELLED": winsound.MB_ICONEXCLAMATION,
+            STATUS_SUCCESS: winsound.MB_OK,
+            STATUS_ERROR: winsound.MB_ICONHAND,
+            STATUS_CANCELLED: winsound.MB_ICONEXCLAMATION,
         }.get(status, winsound.MB_OK)
         winsound.MessageBeep(beep_type)
     except Exception as exc:
@@ -170,8 +309,8 @@ def _create_v_separator(parent: QWidget | None = None) -> QFrame:
     line = QFrame(parent)
     line.setFrameShape(QFrame.Shape.VLine)
     line.setFrameShadow(QFrame.Shadow.Plain)
-    line.setFixedWidth(1)
-    line.setMinimumHeight(16)
+    line.setFixedWidth(SEPARATOR_WIDTH_PX)
+    line.setMinimumHeight(SEPARATOR_MIN_HEIGHT_PX)
     line.setStyleSheet("color: #666666; background-color: #666666;")
     line.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
     return line
@@ -181,7 +320,7 @@ def _apply_button_emphasis(
     btn: QPushButton,
     *,
     variant: str = "secondary",
-    min_height: int = 24,
+    min_height: int = ACTION_BTN_MIN_HEIGHT_PX,
 ) -> None:
     """버튼 역할(primary / danger / secondary)에 따라 시각 강조 스타일을 적용합니다."""
     btn.setMinimumHeight(min_height)
@@ -279,7 +418,7 @@ def run_prev_zip_inspect_job(
 
     app_key = str(payload["target_key"])
     if callable(progress_cb):
-        progress_cb(20, f"[{app_key}] release ZIP 메모리 확인 중...")
+        progress_cb(DEFAULT_ZIP_PROGRESS_STEP, f"[{app_key}] release ZIP 메모리 확인 중...")
 
     meta = resolve_zip_prev_version_meta(
         project_root=payload["project_root"],
@@ -293,14 +432,63 @@ def run_prev_zip_inspect_job(
         raise InterruptedError("이전버전 ZIP 확인이 취소되었습니다.")
 
     if callable(progress_cb):
-        progress_cb(100, f"[{app_key}] release ZIP 확인 완료")
+        progress_cb(DEFAULT_PROGRESS_MAX, f"[{app_key}] release ZIP 확인 완료")
 
     return {
         "ok": True,
-        "job_type": "prev_zip_inspect",
+        "job_type": JOB_TYPE_PREV_ZIP_INSPECT,
         "target_app": app_key,
         "prev_meta": meta,
         "_zip_sig": payload.get("_zip_sig"),
+    }
+
+
+def _run_single_build_step(
+    app: BuildApp,
+    step_key: str,
+    py_exe: str,
+    mode: str,
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    """BuildApp 인스턴스에서 지정된 단일 빌드 단계만 실행하고 공유 상태를 갱신합니다."""
+    target_versions: dict[str, str] = dict(state.get("target_versions") or {})
+    previous_versions: dict[str, str] = dict(state.get("previous_versions") or {})
+
+    if step_key == STEP_UI:
+        app.step1_convert_ui_files(py_exe=py_exe)
+    elif step_key == STEP_ENV:
+        resolved_py, resolved_mode = app.step2_setup_environment_and_config()
+        state["py_exe"] = resolved_py
+        state["mode"] = resolved_mode
+    elif step_key == STEP_PUBKEY:
+        app.step3_prepare_public_key_module()
+    elif step_key == STEP_VERSION:
+        t_vers, p_vers = app.step4_sync_version_and_resources()
+        target_versions.update(t_vers)
+        previous_versions.update(p_vers)
+        state["target_versions"] = target_versions
+        state["previous_versions"] = previous_versions
+    elif step_key == STEP_BUILD:
+        app.step5_build_targets(py_exe, target_versions)
+    elif step_key == STEP_EOF_CRYPTO:
+        app.step6_inject_eof_encryption(target_versions, mode)
+    elif step_key == STEP_TEST_SYNC:
+        app.step7_sync_to_test_folder()
+    elif step_key == STEP_APP_TEST:
+        app.step7_1_generate_and_run_app_tests(py_exe, target_versions)
+    elif step_key == STEP_RELEASE:
+        app.step8_create_release_artifacts(target_versions)
+    elif step_key == STEP_INSTALLER:
+        main_ver = app.version_service.get_main_app_version(target_versions)
+        app.step9_create_windows_installer(py_exe, main_ver, is_final=True)
+    else:
+        raise ValueError(f"지원하지 않는 빌드 단계입니다: {step_key}")
+
+    return {
+        "target_versions": dict(state.get("target_versions") or {}),
+        "previous_versions": dict(state.get("previous_versions") or {}),
+        "py_exe": state.get("py_exe") or py_exe,
+        "mode": state.get("mode") or mode,
     }
 
 
@@ -313,19 +501,20 @@ def run_build_job(
     """
     PriorityWorkerThread에서 실행되는 작업 래퍼 함수.
     - job_type == "clean": TargetConfig 단일 기준 빌드 출력 디렉터리 정리 전용 작업 수행
-    - job_type == "app" / "installer": BuildApp 파이프라인 실행
+    - job_type == "step": 지정된 단일 파이프라인 단계 실행
+    - job_type == "app" / "installer": BuildApp 전체 파이프라인 실행
     """
     active_event = cancel_token.event if cancel_token is not None else cancel_event
     if active_event and active_event.is_set():
         raise InterruptedError("빌드 시작 전 취소되었습니다.")
 
-    job_type = str(build_kwargs.get("job_type") or "app")
+    job_type = str(build_kwargs.get("job_type") or JOB_TYPE_APP)
     target_app = build_kwargs.get("target_app")
     project_root = str(build_kwargs.get("project_root") or PROJECT_ROOT)
 
-    if job_type == "clean":
+    if job_type == JOB_TYPE_CLEAN:
         if callable(progress_cb):
-            progress_cb(10, "빌드 출력 디렉터리 정리 중...")
+            progress_cb(DEFAULT_CLEAN_PROGRESS_START, "빌드 출력 디렉터리 정리 중...")
 
         TargetConfig.configure(
             project_root=project_root,
@@ -341,11 +530,11 @@ def run_build_job(
             logd(f"[CleanJob] 디렉터리 정리 완료: {removed}")
 
         if callable(progress_cb):
-            progress_cb(100, "빌드 출력 디렉터리 정리 완료")
+            progress_cb(DEFAULT_PROGRESS_MAX, "빌드 출력 디렉터리 정리 완료")
 
         return {
             "ok": True,
-            "job_type": "clean",
+            "job_type": JOB_TYPE_CLEAN,
             "target_app": None,
             "removed_dirs": removed_dirs,
             "message": f"빌드 출력 디렉터리 정리 완료 ({len(removed_dirs)}개 폴더)",
@@ -355,21 +544,26 @@ def run_build_job(
     kwargs = {k: v for k, v in build_kwargs.items() if k in BUILD_APP_ACCEPTED_KEYS}
     kwargs["timer"] = timer
 
+    step_key = str(build_kwargs.get("step_key") or "")
+    if job_type == JOB_TYPE_STEP and step_key != STEP_VERSION:
+        kwargs["bump_unit"] = None
+        kwargs["bump_units"] = {}
+
     def _on_build_progress(payload: dict[str, Any]) -> None:
         if active_event and active_event.is_set():
             raise InterruptedError("빌드 진행 중 취소되었습니다.")
         if callable(progress_cb):
-            pct = payload.get("percent")
-            safe_pct = max(0, min(100, int(pct))) if isinstance(pct, (int, float)) else 0
+            safe_pct = _clamp_percent(payload.get("percent"))
             detail = str(payload.get("detail") or payload.get("step_key") or "빌드 진행 중...")
             progress_cb(safe_pct, detail)
 
     kwargs["progress_callback"] = _on_build_progress
 
     logd(
-        f"[BuildJob] BuildApp 실행 준비 (job_type={job_type}, target_app={target_app}, "
-        f"targets={kwargs.get('targets')}, bump_unit={kwargs.get('bump_unit')}, "
-        f"installer_only={kwargs.get('installer_only')}, mode={kwargs.get('mode')})"
+        f"[BuildJob] BuildApp 실행 준비 (job_type={job_type}, step_key={step_key or '-'}, "
+        f"target_app={target_app}, targets={kwargs.get('targets')}, "
+        f"bump_unit={kwargs.get('bump_unit')}, installer_only={kwargs.get('installer_only')}, "
+        f"mode={kwargs.get('mode')})"
     )
     try:
         app = BuildApp(**kwargs, cancel_event=active_event, cancel_token=cancel_token)
@@ -382,6 +576,26 @@ def run_build_job(
     if active_event and active_event.is_set():
         raise InterruptedError("빌드 초기화 직후 취소되었습니다.")
 
+    if job_type == JOB_TYPE_STEP:
+        step_state = dict(build_kwargs.get("pipeline_state") or {})
+        py_exe = str(step_state.get("py_exe") or sys.executable)
+        step_mode = str(step_state.get("mode") or kwargs.get("mode") or "")
+        updated_state = _run_single_build_step(app, step_key, py_exe, step_mode, step_state)
+
+        if active_event and active_event.is_set():
+            raise InterruptedError("사용자에 의해 단계가 취소되었습니다.")
+
+        label = f"{target_app}:{step_key}" if target_app else step_key
+        return {
+            "ok": True,
+            "job_type": JOB_TYPE_STEP,
+            "step_key": step_key,
+            "target_app": target_app,
+            "pipeline_state": updated_state,
+            "message": f"[{label}] 단계가 완료되었습니다.",
+            "timer": timer,
+        }
+
     ok = bool(app.run())
     if active_event and active_event.is_set():
         raise InterruptedError("사용자에 의해 빌드가 취소되었습니다.")
@@ -389,7 +603,11 @@ def run_build_job(
     if not ok:
         raise RuntimeError(f"빌드 파이프라인이 실패했습니다. (job_type={job_type}, target_app={target_app})")
 
-    label = str(target_app) if target_app else ("installer" if job_type == "installer" else job_type)
+    label = (
+        str(target_app)
+        if target_app
+        else (INSTALLER_TAB_KEY if job_type == JOB_TYPE_INSTALLER else job_type)
+    )
     return {
         "ok": True,
         "job_type": job_type,
@@ -422,9 +640,22 @@ class BuildTaskListener(TaskListenerBase):
     def on_task_progress(self, task_key: str, task_name: str, percent: int, message: str) -> None:
         if task_key not in self._window._active_build_keys:
             return
-        safe_pct = max(0, min(100, int(percent)))
-        self._window.progress_bar.setValue(safe_pct)
-        self._window.lbl_progress_detail.setText(f"[{task_name}] {message}")
+        safe_pct = _clamp_percent(percent)
+        total_steps = self._window._total_build_count
+        if total_steps > 0:
+            overall_pct = _calc_overall_percent(
+                self._window._completed_step_count,
+                total_steps,
+                safe_pct,
+            )
+            step_no = min(total_steps, self._window._completed_step_count + 1)
+            self._window.progress_bar.setValue(overall_pct)
+            self._window.lbl_progress_detail.setText(
+                f"[{step_no}/{total_steps}] [{task_name}] {message}"
+            )
+        else:
+            self._window.progress_bar.setValue(safe_pct)
+            self._window.lbl_progress_detail.setText(f"[{task_name}] {message}")
 
         app_key = self._window._task_to_app_key.get(task_key)
         if app_key and hasattr(self._window, "build_app_tabs_group"):
@@ -433,7 +664,7 @@ class BuildTaskListener(TaskListenerBase):
     def on_task_finished(self, task_key: str, task_name: str, status: str, data: Any) -> None:
         deferred_app_key = self._window._deferred_zip_tasks.pop(task_key, None)
         if deferred_app_key is not None:
-            if status == "SUCCESS" and isinstance(data, dict):
+            if status == STATUS_SUCCESS and isinstance(data, dict):
                 zip_sig = data.get("_zip_sig")
                 if isinstance(zip_sig, tuple):
                     self._window._completed_zip_sigs[deferred_app_key] = zip_sig
@@ -450,45 +681,70 @@ class BuildTaskListener(TaskListenerBase):
         self._window._active_build_keys.discard(task_key)
         app_key = self._window._task_to_app_key.pop(task_key, None)
 
-        ok = status == "SUCCESS"
+        ok = status == STATUS_SUCCESS
         if isinstance(data, dict):
             msg = str(data.get("message") or status)
+            updated_state = data.get("pipeline_state")
+            if isinstance(updated_state, dict):
+                self._window._pipeline_state.update(updated_state)
         else:
             msg = str(data) if data is not None else status
 
         if timing is not None and timing.run_sec is not None:
             msg = f"{msg} (실행 {timing.run_sec:.2f}s / 총 {timing.total_sec:.2f}s)"
 
-        if status == "CANCELLED":
-            logd(f"[BuildManager] [{task_name}] {msg}", level="info")
-        elif status == "ERROR":
+        if status == STATUS_CANCELLED:
+            logd(f"[BuildManager] [{task_name}] {msg}", level=LOG_LEVEL_INFO)
+        elif status == STATUS_ERROR:
             loge(f"[BuildManager] [{task_name}] {msg}")
-
-        if app_key and hasattr(self._window, "build_app_tabs_group"):
-            self._window.build_app_tabs_group.notify_target_finished(
-                app_key,
-                success=ok,
-                percent=100 if ok else self._window.progress_bar.value(),
-            )
 
         if not was_tracked:
             return
 
-        play_task_completion_sound(status, getattr(self._window, "_sound_wav_map", None))
+        if ok:
+            self._window._completed_step_count += 1
 
-        remaining = len(self._window._active_build_keys)
-        total = max(1, self._window._total_build_count)
-        done = total - remaining
+        has_more_steps = (
+            ok
+            and not self._window._cancel_requested
+            and not self._window._is_closing
+            and bool(self._window._pending_step_specs)
+        )
 
-        if remaining > 0:
+        if app_key and hasattr(self._window, "build_app_tabs_group"):
+            is_last_for_card = not has_more_steps or (
+                self._window._pending_step_specs[0].get("ui_key") != app_key
+            )
+            if not ok or is_last_for_card:
+                self._window.build_app_tabs_group.notify_target_finished(
+                    app_key,
+                    success=ok,
+                    percent=DEFAULT_PROGRESS_MAX if ok else self._window.progress_bar.value(),
+                )
+
+        if has_more_steps:
+            total = max(1, self._window._total_build_count)
+            done = self._window._completed_step_count
+            overall_pct = _calc_overall_percent(done, total, 0)
+            self._window.progress_bar.setValue(overall_pct)
             self._window.lbl_progress_detail.setText(
-                f"[{task_name}] {msg} ({done}/{total} 완료, 남은 작업 {remaining}개)"
+                f"[{task_name}] {msg} ({done}/{total} 단계 완료, 다음 단계 준비 중)"
             )
             if self._window.statusBar():
-                self._window.statusBar().showMessage(f"빌드 진행 중 ({done}/{total} 완료)", 4000)
+                self._window.statusBar().showMessage(
+                    f"빌드 진행 중 ({done}/{total} 단계 완료)",
+                    STATUS_BAR_SHORT_MS,
+                )
+            self._window._submit_next_build_step()
             return
 
+        self._window._pending_step_specs.clear()
+        if not ok:
+            self._window._rollback_versions_if_needed()
+
+        play_task_completion_sound(status, getattr(self._window, "_sound_wav_map", None))
         self._window._total_build_count = 0
+        self._window._completed_step_count = 0
         self._window._on_build_finished(ok, msg)
 
 
@@ -518,11 +774,17 @@ class BuildManagerWindow(QMainWindow):
         self._dir_overrides: dict[str, Any] = {}
         self._app_overrides: dict[str, dict[str, Any]] = {}
         self._installer_overrides: dict[str, Any] = {}
+        self._installer_user_configured: bool = False
+        self._auto_scroll_log: bool = True
         self._active_build_keys: set[str] = set()
         self._task_to_app_key: dict[str, str] = {}
         self._deferred_zip_tasks: dict[str, str] = {}
         self._completed_zip_sigs: dict[str, tuple[tuple[str, int, int], ...]] = {}
+        self._pending_step_specs: list[dict[str, Any]] = []
+        self._pipeline_state: dict[str, Any] = {}
+        self._cancel_requested: bool = False
         self._total_build_count: int = 0
+        self._completed_step_count: int = 0
         self._build_listener = BuildTaskListener(self)
         self._log_handler: WindowLogColorHandlerBase | None = None
         self._settings_window: SettingsWindow | None = None
@@ -532,8 +794,8 @@ class BuildManagerWindow(QMainWindow):
 
         self.destroyed.connect(self._on_destroyed_cleanup)
 
-        self.setWindowTitle(f"PrintShop Build Manager - {self.project_root.name}")
-        self.resize(1120, 740)
+        self.setWindowTitle(f"{MAIN_WINDOW_TITLE_PREFIX} - {self.project_root.name}")
+        self.resize(MAIN_WINDOW_DEFAULT_WIDTH, MAIN_WINDOW_DEFAULT_HEIGHT)
 
         self._init_ui()
         self._setup_logging()
@@ -548,6 +810,21 @@ class BuildManagerWindow(QMainWindow):
         self._dispose_build_target_window()
         self._dispose_settings_window()
         self._teardown_logging()
+
+    def _scroll_log_to_bottom(self) -> None:
+        if not getattr(self, "_auto_scroll_log", True):
+            return
+        if not hasattr(self, "log_viewer"):
+            return
+        cursor = self.log_viewer.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        self.log_viewer.setTextCursor(cursor)
+        self.log_viewer.ensureCursorVisible()
+
+    def _apply_auto_scroll_policy(self, enabled: bool) -> None:
+        self._auto_scroll_log = bool(enabled)
+        if self._auto_scroll_log:
+            self._scroll_log_to_bottom()
 
     def _setup_logging(self) -> None:
         self._teardown_logging()
@@ -583,7 +860,7 @@ class BuildManagerWindow(QMainWindow):
         self.setCentralWidget(self.build_page)
 
         if self.statusBar():
-            self.statusBar().showMessage("준비됨")
+            self.statusBar().showMessage(MSG_READY)
 
     def _create_build_page(self) -> QWidget:
         page = QWidget()
@@ -599,14 +876,22 @@ class BuildManagerWindow(QMainWindow):
         top_bar.addWidget(self.lbl_project_info, stretch=1)
 
         self.btn_open_build_target = QPushButton("BuildTarget")
-        _apply_button_emphasis(self.btn_open_build_target, variant="secondary", min_height=24)
+        _apply_button_emphasis(
+            self.btn_open_build_target,
+            variant="secondary",
+            min_height=ACTION_BTN_MIN_HEIGHT_PX,
+        )
         self.btn_open_build_target.clicked.connect(self._on_open_build_target)
         top_bar.addWidget(self.btn_open_build_target)
 
         top_bar.addWidget(_create_v_separator(page))
 
         self.btn_open_settings = QPushButton("설정")
-        _apply_button_emphasis(self.btn_open_settings, variant="secondary", min_height=24)
+        _apply_button_emphasis(
+            self.btn_open_settings,
+            variant="secondary",
+            min_height=ACTION_BTN_MIN_HEIGHT_PX,
+        )
         self.btn_open_settings.clicked.connect(self._on_open_settings)
         top_bar.addWidget(self.btn_open_settings)
         layout.addLayout(top_bar)
@@ -648,15 +933,13 @@ class BuildManagerWindow(QMainWindow):
         g1_layout.setSpacing(5)
 
         self.combo_mode = QComboBox()
-        self.combo_mode.addItems(["production", "development"])
-        self.combo_mode.setToolTip("배포 모드 (production / development)")
+        self.combo_mode.addItems(list(MODE_CHOICES))
+        self.combo_mode.setToolTip(f"배포 모드 ({' / '.join(MODE_CHOICES)})")
         self.combo_mode.currentIndexChanged.connect(self._on_main_mode_changed)
 
         self.combo_bump = QComboBox()
-        self.combo_bump.addItem("변경 없음 (none)", userData=None)
-        self.combo_bump.addItem("patch", userData="patch")
-        self.combo_bump.addItem("minor", userData="minor")
-        self.combo_bump.addItem("major", userData="major")
+        for label_text, unit_val in BUMP_CHOICES:
+            self.combo_bump.addItem(label_text, userData=unit_val)
         self.combo_bump.setToolTip("버전 증가 단위 (none / patch / minor / major)")
         self.combo_bump.currentIndexChanged.connect(self._on_main_bump_changed)
 
@@ -720,31 +1003,43 @@ class BuildManagerWindow(QMainWindow):
         run_row.setSpacing(6)
 
         self.btn_start_build = QPushButton("빌드 실행")
-        _apply_button_emphasis(self.btn_start_build, variant="primary", min_height=26)
+        _apply_button_emphasis(
+            self.btn_start_build,
+            variant="primary",
+            min_height=BUILD_BTN_MIN_HEIGHT_PX,
+        )
         self.btn_start_build.clicked.connect(self._on_start_build)
 
         self.btn_cancel_build = QPushButton("빌드 취소")
-        _apply_button_emphasis(self.btn_cancel_build, variant="danger", min_height=26)
+        _apply_button_emphasis(
+            self.btn_cancel_build,
+            variant="danger",
+            min_height=BUILD_BTN_MIN_HEIGHT_PX,
+        )
         self.btn_cancel_build.setEnabled(False)
         self.btn_cancel_build.clicked.connect(self._on_cancel_build)
 
         self.btn_clear_log = QPushButton("로그 지우기")
-        _apply_button_emphasis(self.btn_clear_log, variant="secondary", min_height=26)
+        _apply_button_emphasis(
+            self.btn_clear_log,
+            variant="secondary",
+            min_height=BUILD_BTN_MIN_HEIGHT_PX,
+        )
         self.btn_clear_log.clicked.connect(self._on_clear_log)
 
-        self.lbl_progress_detail = QLabel("대기 중")
-        self.lbl_progress_detail.setMinimumWidth(100)
+        self.lbl_progress_detail = QLabel(MSG_WAITING)
+        self.lbl_progress_detail.setMinimumWidth(DETAIL_LABEL_MIN_WIDTH_PX)
         self.lbl_progress_detail.setSizePolicy(
             QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
         )
 
         self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
+        self.progress_bar.setRange(DEFAULT_PROGRESS_MIN, DEFAULT_PROGRESS_MAX)
+        self.progress_bar.setValue(DEFAULT_PROGRESS_MIN)
         self.progress_bar.setTextVisible(True)
         self.progress_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.progress_bar.setMinimumWidth(240)
-        self.progress_bar.setMinimumHeight(22)
+        self.progress_bar.setMinimumWidth(PROGRESS_BAR_MIN_WIDTH_PX)
+        self.progress_bar.setMinimumHeight(PROGRESS_BAR_HEIGHT_PX)
         self.progress_bar.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
@@ -773,9 +1068,10 @@ class BuildManagerWindow(QMainWindow):
         log_vbox.setSpacing(4)
         self.log_viewer = QPlainTextEdit()
         self.log_viewer.setReadOnly(True)
-        self.log_viewer.setMaximumBlockCount(5000)
+        self.log_viewer.setMaximumBlockCount(LOG_MAX_BLOCK_COUNT)
+        self.log_viewer.textChanged.connect(self._scroll_log_to_bottom)
 
-        log_font = QFont("Consolas", 9)
+        log_font = QFont(LOG_FONT_FAMILY, LOG_FONT_SIZE)
         log_font.setStyleHint(QFont.StyleHint.Monospace)
         self.log_viewer.setFont(log_font)
 
@@ -796,11 +1092,11 @@ class BuildManagerWindow(QMainWindow):
             inst_targets = self._ensure_default_installer_targets()
             targets_text = ", ".join(inst_targets) if inst_targets else "기본값"
             install_dir = self.project_root / str(
-                self._dir_overrides.get("install_dir_name") or "installer"
+                self._dir_overrides.get("install_dir_name") or DEFAULT_INSTALL_DIR_NAME
             )
             return {
                 "target_name": INSTALLER_TAB_KEY,
-                "label_text": f"installer ({targets_text})",
+                "label_text": f"{INSTALLER_TAB_KEY} ({targets_text})",
                 "display_name": INSTALLER_TAB_KEY,
                 "location_path": install_dir if install_dir.exists() else self.project_root,
                 "bump_checked": False,
@@ -815,7 +1111,7 @@ class BuildManagerWindow(QMainWindow):
         loc_path: Path | None = None
         dir_hints = ov.get("dir_hints") or (getattr(spec, "dir_hints", None) if spec else None) or ()
         for d in dir_hints:
-            cand = self.project_root / "src" / str(d)
+            cand = self.project_root / SRC_SUBDIR_NAME / str(d)
             if cand.exists():
                 loc_path = cand
                 break
@@ -853,11 +1149,11 @@ class BuildManagerWindow(QMainWindow):
         spec = TargetConfig.get_spec(key)
         try:
             dcfg = TargetConfig.get_dir_config(self.project_root)
-            release_dir_name = str(ov.get("release_dir_name") or dcfg.release_dir_name or "release")
+            release_dir_name = str(
+                ov.get("release_dir_name") or dcfg.release_dir_name or DEFAULT_RELEASE_DIR_NAME
+            )
         except Exception:
-            release_dir_name = "release"
-
-        from prev_version_resolver import _build_snapshot_sig, _collect_zip_candidates
+            release_dir_name = DEFAULT_RELEASE_DIR_NAME
 
         zip_paths = _collect_zip_candidates(
             root=self.project_root,
@@ -886,7 +1182,7 @@ class BuildManagerWindow(QMainWindow):
             if self._completed_zip_sigs.get(key) == zip_sig:
                 continue
 
-            task_key = f"PREV_ZIP_{key}"
+            task_key = f"{TASK_PREFIX_PREV_ZIP}{key}"
             ov = self._app_overrides.get(key, {}) if isinstance(self._app_overrides, dict) else {}
             payload = {
                 "project_root": str(self.project_root),
@@ -937,13 +1233,13 @@ class BuildManagerWindow(QMainWindow):
             chk.setChecked(checked)
 
     def _on_tab_card_bump_changed(self, target_key: str, checked: bool) -> None:
-        default_unit = self._get_selected_bump() or "patch"
+        default_unit = self._get_selected_bump() or DEFAULT_BUMP_UNIT
         new_unit = default_unit if checked else None
         bucket = dict(self._app_overrides.get(target_key, {}))
         if new_unit is None:
-            bucket.pop("bump_unit", None)
+            bucket.pop(KEY_BUMP_UNIT, None)
         else:
-            bucket["bump_unit"] = new_unit
+            bucket[KEY_BUMP_UNIT] = new_unit
         self._app_overrides[target_key] = bucket
         self._save_build_config_ini_now()
 
@@ -958,6 +1254,7 @@ class BuildManagerWindow(QMainWindow):
         self._build_target_window.config_changed.connect(self._on_build_target_config_changed)
 
     def _on_build_target_config_changed(self, _payload: dict[str, Any]) -> None:
+        self._sync_installer_overrides_from_target_window()
         self._sync_overrides_from_targets()
         self._ensure_default_installer_targets()
         self._refresh_target_checkboxes()
@@ -1021,7 +1318,7 @@ class BuildManagerWindow(QMainWindow):
         self._refresh_target_checkboxes()
         self._save_all_state()
         if self.statusBar():
-            self.statusBar().showMessage("세팅 윈도우 설정이 반영되었습니다.", 4000)
+            self.statusBar().showMessage("세팅 윈도우 설정이 반영되었습니다.", STATUS_BAR_SHORT_MS)
 
     def _on_open_settings(self) -> None:
         if self._settings_window is None:
@@ -1049,7 +1346,7 @@ class BuildManagerWindow(QMainWindow):
             self.lbl_project_info.setText(
                 f"프로젝트: {self.project_root}  |  설정 INI: {self.config_path}"
             )
-        self.setWindowTitle(f"PrintShop Build Manager - {self.project_root.name}")
+        self.setWindowTitle(f"{MAIN_WINDOW_TITLE_PREFIX} - {self.project_root.name}")
 
     def _sync_overrides_from_targets(self) -> None:
         dcfg = TargetConfig.get_dir_config(self.project_root)
@@ -1072,7 +1369,8 @@ class BuildManagerWindow(QMainWindow):
         self._installer_overrides = {
             "targets": resolved_targets,
             "name": str(self._installer_overrides.get("name") or "").strip() or None,
-            "version_source_id": str(self._installer_overrides.get("version_source_id") or "").strip() or None,
+            "version_source_id": str(self._installer_overrides.get("version_source_id") or "").strip()
+            or None,
             "extra": dict(self._installer_overrides.get("extra") or {}),
         }
 
@@ -1107,13 +1405,13 @@ class BuildManagerWindow(QMainWindow):
         )
         for d in dir_hints:
             if d:
-                candidates.append(self.project_root / "src" / str(d) / "version.txt")
-                candidates.append(self.project_root / str(d) / "version.txt")
+                candidates.append(self.project_root / SRC_SUBDIR_NAME / str(d) / VERSION_FILENAME)
+                candidates.append(self.project_root / str(d) / VERSION_FILENAME)
 
         for path in candidates:
             try:
                 if path.is_file():
-                    lines = path.read_text(encoding="utf-8-sig").strip().splitlines()
+                    lines = path.read_text(encoding=VERSION_FILE_ENCODING).strip().splitlines()
                     if lines and lines[0].strip():
                         return lines[0].strip().split()[0]
             except Exception:
@@ -1256,20 +1554,21 @@ class BuildManagerWindow(QMainWindow):
         return str(data) if data else None
 
     def _get_selected_mode(self) -> str:
-        return self.combo_mode.currentText().strip() or "production"
+        return self.combo_mode.currentText().strip() or DEFAULT_BUILD_MODE
 
     def _collect_ui_state(self) -> dict[str, Any]:
         return {
             "project_root": str(self.project_root),
             "selected_targets": [key for key, chk in self._target_checks.items() if chk.isChecked()],
-            "mode": self._get_selected_mode(),
-            "bump_unit": self._get_selected_bump(),
+            KEY_MODE: self._get_selected_mode(),
+            KEY_BUMP_UNIT: self._get_selected_bump(),
             "skip_installer": bool(self.chk_skip_installer.isChecked()),
             "installer_only": bool(self.chk_installer_only.isChecked()),
             "clean_build": bool(self.chk_clean_build.isChecked()),
             "clean_work_out": bool(self.chk_clean_work.isChecked()),
             "clean_dist_out": bool(self.chk_clean_dist.isChecked()),
             "clean_spec": bool(self.chk_clean_spec.isChecked()),
+            "auto_scroll_log": bool(self._auto_scroll_log),
         }
 
     def _apply_ui_state(self, state: dict[str, Any]) -> None:
@@ -1281,7 +1580,7 @@ class BuildManagerWindow(QMainWindow):
                 chk.setChecked(key in target_set)
                 chk.blockSignals(False)
 
-        mode = state.get("mode")
+        mode = state.get(KEY_MODE)
         if isinstance(mode, str):
             idx = self.combo_mode.findText(mode)
             if idx >= 0:
@@ -1289,7 +1588,7 @@ class BuildManagerWindow(QMainWindow):
                 self.combo_mode.setCurrentIndex(idx)
                 self.combo_mode.blockSignals(False)
 
-        bump = state.get("bump_unit")
+        bump = state.get(KEY_BUMP_UNIT)
         bump_idx = self.combo_bump.findData(bump)
         if bump_idx >= 0:
             self.combo_bump.blockSignals(True)
@@ -1323,9 +1622,11 @@ class BuildManagerWindow(QMainWindow):
         for box in clean_boxes:
             box.blockSignals(False)
 
+        auto_scroll = bool(state.get("auto_scroll_log", True))
+        self._apply_auto_scroll_policy(auto_scroll)
+
         self._sync_all_target_checkbox_state()
         self._sync_build_app_tabs()
-
 
     def _reload_targets_from_ini(self) -> None:
         sections = self.ini_store.load_target_sections()
@@ -1432,9 +1733,9 @@ class BuildManagerWindow(QMainWindow):
 
         clean_all = bool(self.chk_clean_build.isChecked())
         clean_patch = {
-            "clean_work": clean_all or bool(self.chk_clean_work.isChecked()),
-            "clean_dist": clean_all or bool(self.chk_clean_dist.isChecked()),
-            "clean_spec": clean_all or bool(self.chk_clean_spec.isChecked()),
+            KEY_CLEAN_WORK: clean_all or bool(self.chk_clean_work.isChecked()),
+            KEY_CLEAN_DIST: clean_all or bool(self.chk_clean_dist.isChecked()),
+            KEY_CLEAN_SPEC: clean_all or bool(self.chk_clean_spec.isChecked()),
         }
 
         for key in selected_apps:
@@ -1469,20 +1770,27 @@ class BuildManagerWindow(QMainWindow):
 
     def _resolve_app_bump_unit(self, target_key: str, default_bump: str | None) -> str | None:
         ov = self._app_overrides.get(target_key, {}) if isinstance(self._app_overrides, dict) else {}
-        if "bump_unit" in ov and ov["bump_unit"] is not None:
-            s = str(ov["bump_unit"]).strip().lower()
-            if not s or s in ("none", "null", "false", "0", "변경 없음"):
+        if KEY_BUMP_UNIT in ov and ov[KEY_BUMP_UNIT] is not None:
+            s = str(ov[KEY_BUMP_UNIT]).strip().lower()
+            if not s or s in NONE_BUMP_TOKENS:
                 return None
-            if s in ("patch", "minor", "major"):
+            if s in VALID_BUMP_UNITS:
                 return s
         return default_bump
 
     def _resolve_app_mode(self, target_key: str, default_mode: str) -> str:
         ov = self._app_overrides.get(target_key, {}) if isinstance(self._app_overrides, dict) else {}
-        raw_mode = ov.get("mode")
+        raw_mode = ov.get(KEY_MODE)
         if isinstance(raw_mode, str) and raw_mode.strip():
             return raw_mode.strip()
         return default_mode
+
+    def _resolve_app_run_test(self, target_key: str) -> bool:
+        ov = self._app_overrides.get(target_key, {}) if isinstance(self._app_overrides, dict) else {}
+        if KEY_RUN_TEST in ov:
+            return bool(ov[KEY_RUN_TEST])
+        spec = TargetConfig.get_spec(target_key)
+        return bool(getattr(spec, KEY_RUN_TEST, False)) if spec else False
 
     def _apply_patch_to_selected_apps(self, patch: dict[str, Any]) -> None:
         selected_apps = self._get_checked_app_keys()
@@ -1519,15 +1827,236 @@ class BuildManagerWindow(QMainWindow):
 
     def _on_main_mode_changed(self, _index: int) -> None:
         mode = self._get_selected_mode()
-        self._apply_patch_to_selected_apps({"mode": mode})
+        self._apply_patch_to_selected_apps({KEY_MODE: mode})
 
     def _on_main_bump_changed(self, _index: int) -> None:
         bump = self._get_selected_bump()
-        self._apply_patch_to_selected_apps({"bump_unit": bump})
+        self._apply_patch_to_selected_apps({KEY_BUMP_UNIT: bump})
         self._sync_build_app_tabs()
 
+    def _build_step_plan_specs(
+        self,
+        *,
+        app_keys: list[str],
+        parsed_apps: dict[str, list[str]],
+        clean_build_opt: bool,
+        installer_only_opt: bool,
+        include_installer: bool,
+        installer_targets: list[str],
+        mode: str,
+        fallback_bump: str | None,
+    ) -> list[dict[str, Any]]:
+        """선행 공용 단계와 앱별 파이프라인 단계, 인스톨러 단계를 순서대로 구성합니다."""
+        specs: list[dict[str, Any]] = []
+
+        if clean_build_opt:
+            specs.append(
+                {
+                    "kind": JOB_TYPE_CLEAN,
+                    "step_key": JOB_TYPE_CLEAN,
+                    "job_key": JOB_TYPE_CLEAN,
+                    "target_app": None,
+                    "ui_key": None,
+                    "targets": [],
+                    "bump_unit": None,
+                    "mode": mode,
+                    "clean_build": True,
+                    "skip_installer": True,
+                    "installer_only": False,
+                }
+            )
+
+        if not installer_only_opt:
+            all_selected_targets = [t for k in app_keys for t in parsed_apps.get(k, [k])]
+            first_app_key = app_keys[0] if app_keys else None
+
+            for shared_step in SHARED_PRE_STEPS:
+                specs.append(
+                    {
+                        "kind": JOB_TYPE_STEP,
+                        "step_key": shared_step,
+                        "job_key": shared_step,
+                        "target_app": None,
+                        "ui_key": first_app_key,
+                        "targets": all_selected_targets,
+                        "bump_unit": None,
+                        "mode": mode,
+                        "clean_build": False,
+                        "skip_installer": True,
+                        "installer_only": False,
+                    }
+                )
+
+            for key in app_keys:
+                job_targets = parsed_apps[key]
+                job_bump = self._resolve_app_bump_unit(key, fallback_bump)
+                job_mode = self._resolve_app_mode(key, mode)
+                for app_step in APP_PIPELINE_STEPS:
+                    specs.append(
+                        {
+                            "kind": JOB_TYPE_STEP,
+                            "step_key": app_step,
+                            "job_key": f"{key}_{app_step}",
+                            "target_app": key,
+                            "ui_key": key,
+                            "targets": job_targets,
+                            "bump_unit": job_bump if app_step == STEP_VERSION else None,
+                            "mode": job_mode,
+                            "clean_build": False,
+                            "skip_installer": True,
+                            "installer_only": False,
+                        }
+                    )
+
+        if include_installer:
+            specs.append(
+                {
+                    "kind": JOB_TYPE_STEP,
+                    "step_key": STEP_INSTALLER,
+                    "job_key": INSTALLER_TAB_KEY,
+                    "target_app": None,
+                    "ui_key": INSTALLER_TAB_KEY,
+                    "targets": list(installer_targets),
+                    "bump_unit": None,
+                    "mode": mode,
+                    "clean_build": False,
+                    "skip_installer": False,
+                    "installer_only": installer_only_opt,
+                }
+            )
+
+        return specs
+
+    def _submit_next_build_step(self) -> bool:
+        """대기 중인 다음 빌드 단계 1건을 TaskManager에 제출합니다."""
+        if self._cancel_requested or self._is_closing:
+            self._pending_step_specs.clear()
+            return False
+        if not self._pending_step_specs:
+            return False
+
+        spec = self._pending_step_specs.pop(0)
+        kind = str(spec["kind"])
+        step_key = str(spec["step_key"])
+        job_key = str(spec["job_key"])
+        target_app = spec.get("target_app")
+        ui_key = spec.get("ui_key")
+        job_mode = str(spec.get("mode") or self._get_selected_mode())
+        job_bump = spec.get("bump_unit")
+        job_targets = list(spec.get("targets") or [])
+
+        is_clean = kind == JOB_TYPE_CLEAN
+        is_installer = step_key == STEP_INSTALLER
+        is_app_target = isinstance(target_app, str) and bool(target_app)
+
+        app_run_test = self._resolve_app_run_test(target_app) if is_app_target else False
+
+        app_clean_work = (
+            False
+            if is_clean
+            else (
+                self._resolve_app_clean_flag(
+                    target_app, KEY_CLEAN_WORK, bool(self.chk_clean_work.isChecked())
+                )
+                if is_app_target
+                else bool(self.chk_clean_work.isChecked())
+            )
+        )
+        app_clean_dist = (
+            False
+            if is_clean
+            else (
+                self._resolve_app_clean_flag(
+                    target_app, KEY_CLEAN_DIST, bool(self.chk_clean_dist.isChecked())
+                )
+                if is_app_target
+                else bool(self.chk_clean_dist.isChecked())
+            )
+        )
+        app_clean_spec = (
+            False
+            if is_clean
+            else (
+                self._resolve_app_clean_flag(
+                    target_app, KEY_CLEAN_SPEC, bool(self.chk_clean_spec.isChecked())
+                )
+                if is_app_target
+                else bool(self.chk_clean_spec.isChecked())
+            )
+        )
+
+        build_kwargs: dict[str, Any] = {
+            "project_root": str(self.project_root),
+            "job_type": kind,
+            "step_key": step_key,
+            "target_app": target_app if is_app_target else None,
+            "targets": job_targets,
+            KEY_BUMP_UNIT: job_bump,
+            KEY_MODE: job_mode,
+            KEY_RUN_TEST: app_run_test,
+            "skip_installer": bool(spec["skip_installer"]),
+            "installer_only": bool(spec["installer_only"]),
+            "clean_build": bool(spec["clean_build"]),
+            "clean_work_out": app_clean_work,
+            "clean_dist_out": app_clean_dist,
+            "clean_spec": app_clean_spec,
+            "progress_callback": None,
+            "timer": None,
+            "dir_config_json": None,
+            "dir_overrides": dict(self._dir_overrides),
+            "app_overrides": {k: dict(v) for k, v in self._app_overrides.items()},
+            "installer_targets": list(job_targets) if is_installer else None,
+            "installer_overrides": dict(self._installer_overrides),
+            "pipeline_state": dict(self._pipeline_state),
+        }
+
+        ts_ms = int(time.time() * DEFAULT_MS_PER_SEC)
+        step_idx = self._completed_step_count
+        task_key = f"{TASK_PREFIX_BUILD_MGR}{ts_ms}_{step_idx}_{job_key}"
+        task_name = f"Step({job_mode}:{job_key})"
+
+        if ui_key and hasattr(self, "build_app_tabs_group"):
+            self.build_app_tabs_group.focus_tab(str(ui_key))
+
+        self._active_build_keys.clear()
+        self._task_to_app_key.clear()
+        self._active_build_keys.add(task_key)
+        if ui_key:
+            self._task_to_app_key[task_key] = str(ui_key)
+
+        logd(
+            f"[BuildManager] 단계 작업 제출 (task_key={task_key}, job_type={kind}, "
+            f"step_key={step_key}, target_app={build_kwargs['target_app']}, "
+            f"targets={job_targets}, bump_unit={job_bump}, mode={job_mode})"
+        )
+        TaskManager().submit(
+            self._build_listener,
+            TaskPriority.NORMAL,
+            task_key,
+            task_name,
+            run_build_job,
+            build_kwargs,
+            cancel_on_close=True,
+        )
+        return True
+
+    def _rollback_versions_if_needed(self) -> None:
+        prev_versions = self._pipeline_state.get("previous_versions")
+        if not isinstance(prev_versions, dict) or not prev_versions:
+            return
+        try:
+            helpers = get_build_target_helpers(str(self.project_root))
+            svc = VersionService(
+                project_root=str(self.project_root),
+                target_helpers=helpers,
+            )
+            svc.rollback(dict(prev_versions))
+            logd(f"[BuildManager] 단계 실패/취소로 버전 롤백 완료: {prev_versions}")
+        except Exception as exc:
+            loge(f"[BuildManager] 버전 롤백 중 오류 발생: {exc}")
+
     def _on_start_build(self) -> None:
-        if self._active_build_keys:
+        if self._active_build_keys or self._pending_step_specs:
             QMessageBox.information(self, "빌드 진행 중", "이미 빌드가 실행 중이거나 대기열에 있습니다.")
             return
 
@@ -1545,24 +2074,12 @@ class BuildManagerWindow(QMainWindow):
             self._ensure_default_installer_targets() if include_installer else []
         )
 
-        job_specs: list[tuple[str, str]] = []
-        if clean_build_opt:
-            job_specs.append(("clean", "clean"))
-        if not installer_only_opt:
-            for key in app_keys:
-                job_specs.append(("app", key))
-        if include_installer:
-            job_specs.append(("installer", INSTALLER_TAB_KEY))
-
-        if not job_specs:
-            QMessageBox.warning(self, "대상 오류", "실행할 빌드 작업이 없습니다.")
-            return
-
         parsed_apps: dict[str, list[str]] = {}
         try:
-            for kind, key in job_specs:
-                if kind == "app":
-                    parsed_apps[key] = parse_targets([key])
+            for key in app_keys:
+                parsed_apps[key] = parse_targets([key])
+            if include_installer and installer_targets:
+                _ = parse_targets(installer_targets)
         except Exception as exc:
             QMessageBox.warning(self, "대상 오류", f"빌드 대상 확인 중 오류가 발생했습니다:\n{exc}")
             return
@@ -1570,170 +2087,96 @@ class BuildManagerWindow(QMainWindow):
         mode = self._get_selected_mode()
         fallback_bump = self._get_selected_bump()
 
-        self.progress_bar.setValue(0)
-        self.lbl_progress_detail.setText(f"빌드 대기열 등록 중... (총 {len(job_specs)}개 작업)")
+        step_specs = self._build_step_plan_specs(
+            app_keys=app_keys,
+            parsed_apps=parsed_apps,
+            clean_build_opt=clean_build_opt,
+            installer_only_opt=installer_only_opt,
+            include_installer=include_installer,
+            installer_targets=installer_targets,
+            mode=mode,
+            fallback_bump=fallback_bump,
+        )
+
+        if not step_specs:
+            QMessageBox.warning(self, "대상 오류", "실행할 빌드 작업이 없습니다.")
+            return
+
+        self._cancel_requested = False
+        self._pipeline_state = {"mode": mode}
+        self._pending_step_specs = list(step_specs)
+        self._total_build_count = len(step_specs)
+        self._completed_step_count = 0
+
+        self.progress_bar.setValue(DEFAULT_PROGRESS_MIN)
+        self.lbl_progress_detail.setText(f"단계별 빌드 대기열 등록 중... (총 {len(step_specs)}개 단계)")
         self.btn_start_build.setEnabled(False)
         self.btn_cancel_build.setEnabled(True)
 
-        self._task_to_app_key.clear()
         tab_keys: list[str] = [] if installer_only_opt else list(app_keys)
         if include_installer and INSTALLER_TAB_KEY not in tab_keys:
             tab_keys.append(INSTALLER_TAB_KEY)
 
         if hasattr(self, "build_app_tabs_group"):
             self.build_app_tabs_group.reset_all_progress(tab_keys)
-            first_tab_key = job_specs[0][1] if job_specs[0][0] in ("app", "installer") else (
-                tab_keys[0] if tab_keys else None
+            first_tab_key = next(
+                (str(s["ui_key"]) for s in step_specs if s.get("ui_key")),
+                tab_keys[0] if tab_keys else None,
             )
             if first_tab_key:
                 self.build_app_tabs_group.focus_tab(first_tab_key)
 
-        submitted_keys: list[str] = []
-        base_ts = int(time.time() * 1000)
-
         try:
-            for idx, (kind, job_key) in enumerate(job_specs):
-                is_clean_job = kind == "clean"
-                is_installer_job = kind == "installer"
-
-                if is_clean_job:
-                    job_targets: list[str] = []
-                    job_bump: str | None = None
-                    job_mode = mode
-                elif is_installer_job:
-                    job_targets = list(installer_targets)
-                    job_bump = None
-                    job_mode = mode
-                else:
-                    job_targets = parsed_apps[job_key]
-                    job_bump = self._resolve_app_bump_unit(job_key, fallback_bump)
-                    job_mode = self._resolve_app_mode(job_key, mode)
-
-                app_clean_work = (
-                    False
-                    if is_clean_job
-                    else (
-                        self._resolve_app_clean_flag(
-                            job_key, "clean_work", bool(self.chk_clean_work.isChecked())
-                        )
-                        if kind == "app"
-                        else bool(self.chk_clean_work.isChecked())
-                    )
-                )
-                app_clean_dist = (
-                    False
-                    if is_clean_job
-                    else (
-                        self._resolve_app_clean_flag(
-                            job_key, "clean_dist", bool(self.chk_clean_dist.isChecked())
-                        )
-                        if kind == "app"
-                        else bool(self.chk_clean_dist.isChecked())
-                    )
-                )
-                app_clean_spec = (
-                    False
-                    if is_clean_job
-                    else (
-                        self._resolve_app_clean_flag(
-                            job_key, "clean_spec", bool(self.chk_clean_spec.isChecked())
-                        )
-                        if kind == "app"
-                        else bool(self.chk_clean_spec.isChecked())
-                    )
-                )
-
-                build_kwargs: dict[str, Any] = {
-                    "project_root": str(self.project_root),
-                    "job_type": kind,
-                    "target_app": job_key if kind == "app" else None,
-                    "targets": job_targets,
-                    "bump_unit": job_bump,
-                    "mode": job_mode,
-                    "skip_installer": True if is_clean_job else (not is_installer_job),
-                    "installer_only": is_installer_job,
-                    "clean_build": is_clean_job,
-                    "clean_work_out": app_clean_work,
-                    "clean_dist_out": app_clean_dist,
-                    "clean_spec": app_clean_spec,
-                    "progress_callback": None,
-                    "timer": None,
-                    "dir_config_json": None,
-                    "dir_overrides": dict(self._dir_overrides),
-                    "app_overrides": {k: dict(v) for k, v in self._app_overrides.items()},
-                    "installer_targets": list(installer_targets) if is_installer_job else None,
-                    "installer_overrides": dict(self._installer_overrides),
-                }
-
-                task_key = f"BUILD_MGR_{base_ts}_{idx}_{job_key}"
-                task_name = f"Build({job_mode}:{job_key})"
-
-                logd(
-                    f"[BuildManager] 작업 제출 (task_key={task_key}, job_type={kind}, "
-                    f"target_app={build_kwargs['target_app']}, targets={job_targets}, "
-                    f"bump_unit={job_bump}, mode={job_mode})"
-                )
-                TaskManager().submit(
-                    self._build_listener,
-                    TaskPriority.NORMAL,
-                    task_key,
-                    task_name,
-                    run_build_job,
-                    build_kwargs,
-                    cancel_on_close=True,
-                )
-                submitted_keys.append(task_key)
-                self._active_build_keys.add(task_key)
-                if kind == "app":
-                    self._task_to_app_key[task_key] = job_key
-                elif kind == "installer":
-                    self._task_to_app_key[task_key] = INSTALLER_TAB_KEY
-
-            self._total_build_count = len(submitted_keys)
-
+            submitted = self._submit_next_build_step()
+            if not submitted:
+                raise RuntimeError("첫 번째 빌드 단계를 제출할 수 없습니다.")
         except Exception as exc:
-            for k in submitted_keys:
-                TaskManager().cancel(k)
-                self._active_build_keys.discard(k)
-                self._task_to_app_key.pop(k, None)
+            self._pending_step_specs.clear()
+            self._active_build_keys.clear()
+            self._task_to_app_key.clear()
             self._total_build_count = 0
-            loge(f"[BuildManager] 빌드 작업 제출 실패: {exc}")
+            self._completed_step_count = 0
+            loge(f"[BuildManager] 빌드 단계 제출 실패: {exc}")
             self.btn_start_build.setEnabled(True)
             self.btn_cancel_build.setEnabled(False)
             QMessageBox.warning(self, "등록 오류", str(exc))
 
     def _on_cancel_build(self) -> None:
-        if not self._active_build_keys:
+        if not self._active_build_keys and not self._pending_step_specs:
             return
+        self._cancel_requested = True
+        self._pending_step_specs.clear()
         keys_to_cancel = list(self._active_build_keys)
         logd(f"[BuildManager] 빌드 취소 요청 (task_keys={keys_to_cancel})")
         self.btn_cancel_build.setEnabled(False)
-        self.lbl_progress_detail.setText("빌드 취소 요청 중...")
+        self.lbl_progress_detail.setText(MSG_CANCEL_REQUESTING)
         for k in keys_to_cancel:
             TaskManager().cancel(k)
-        logd("[BuildManager] 빌드 취소 요청이 전달되었습니다. 현재 작업 종료를 기다리는 중입니다.", level="info")
+        logd(MSG_CANCEL_DISPATCHED, level=LOG_LEVEL_INFO)
         if self.statusBar():
-            self.statusBar().showMessage("빌드 취소 요청 중...", 4000)
+            self.statusBar().showMessage(MSG_CANCEL_REQUESTING, STATUS_BAR_SHORT_MS)
 
     def _on_build_finished(self, ok: bool, message: str) -> None:
-        from prev_version_resolver import clear_prev_version_cache
-
         self._active_build_keys.clear()
         self._task_to_app_key.clear()
+        self._pending_step_specs.clear()
+        self._pipeline_state.clear()
+        self._cancel_requested = False
         self._total_build_count = 0
+        self._completed_step_count = 0
         self.btn_start_build.setEnabled(True)
         self.btn_cancel_build.setEnabled(False)
         if ok:
-            self.progress_bar.setValue(100)
+            self.progress_bar.setValue(DEFAULT_PROGRESS_MAX)
         self.lbl_progress_detail.setText(message)
         if self.statusBar():
-            self.statusBar().showMessage(message, 6000)
+            self.statusBar().showMessage(message, STATUS_BAR_LONG_MS)
         clear_prev_version_cache()
         self._completed_zip_sigs.clear()
         self._sync_build_app_tabs()
 
     def closeEvent(self, event: Any) -> None:
-        if self._active_build_keys:
+        if self._active_build_keys or self._pending_step_specs:
             reply = QMessageBox.question(
                 self,
                 "종료 확인",
@@ -1747,20 +2190,22 @@ class BuildManagerWindow(QMainWindow):
 
         logd("[BuildManager] closeEvent 처리 시작")
         self._is_closing = True
+        self._cancel_requested = True
+        self._pending_step_specs.clear()
         self._deferred_zip_tasks.clear()
         TaskManager().on_window_closing(
             self._build_listener,
-            reason="빌드 매니저 종료로 빌드가 취소되었습니다.",
+            reason=MSG_CLOSE_CANCEL_REASON,
         )
         self._active_build_keys.clear()
         self._task_to_app_key.clear()
         self._total_build_count = 0
+        self._completed_step_count = 0
         self._save_all_state()
         self._dispose_build_target_window()
         self._dispose_settings_window()
         self._teardown_logging()
         super().closeEvent(event)
-
 
     def _has_custom_installer_config(self) -> bool:
         inst = self._installer_overrides or {}
@@ -1776,6 +2221,10 @@ class BuildManagerWindow(QMainWindow):
 
     def _mark_installer_configured(self) -> None:
         self._installer_user_configured = True
+        if self._build_target_window is not None and hasattr(
+            self._build_target_window, "mark_installer_configured"
+        ):
+            self._build_target_window.mark_installer_configured()
 
     def _ensure_default_installer_targets(self) -> list[str]:
         current_targets = self._installer_overrides.get("targets")
@@ -1794,16 +2243,20 @@ class BuildManagerWindow(QMainWindow):
             )
         return list(defaults)
 
-
-
     def _sync_installer_overrides_from_target_window(self) -> None:
         win = self._build_target_window
         if win is None:
             return
-        inst_cfg = getattr(win, "_installer_config", None)
+        inst_cfg: dict[str, Any] | None = None
+        if hasattr(win, "get_installer_overrides_dict"):
+            try:
+                inst_cfg = win.get_installer_overrides_dict()
+            except Exception:
+                inst_cfg = None
         if not isinstance(inst_cfg, dict) and hasattr(win, "_collect_installer_config"):
             try:
-                inst_cfg = win._collect_installer_config()
+                collected = win._collect_installer_config()
+                inst_cfg = collected.to_dict() if hasattr(collected, "to_dict") else None
             except Exception:
                 inst_cfg = None
         if isinstance(inst_cfg, dict):

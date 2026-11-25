@@ -13,10 +13,31 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app_version_group import AppTargetCardWidget
-from build_progress_tracker import BuildProgressTracker
+from BuildManagerApp.app_version_group import AppTargetCardWidget
+from BuildManagerApp.build_progress_tracker import BuildProgressTracker
 
-INSTALLER_TAB_KEY = "installer"
+INSTALLER_TAB_KEY: str = "installer"
+DEFAULT_TAB_GROUP_TITLE: str = "BuildApp"
+DEFAULT_PACE_DURATION_SEC: float = 45.0
+DEFAULT_TICK_INTERVAL_MS: int = 1000
+TIME_FORMAT_HMS: str = "%H:%M:%S"
+EMPTY_TIME_PLACEHOLDER: str = "-"
+ZERO_ELAPSED_STR: str = "00:00:00"
+PERCENT_MIN: int = 0
+PERCENT_MAX: int = 100
+
+STATUS_BUILDING: str = "빌드중"
+STATUS_COMPLETED: str = "빌드완료"
+STATUS_FAILED: str = "빌드실패"
+
+LABEL_WAITING_BUILD: str = "빌드 대기"
+LABEL_WAITING_DEFAULT: str = "대기 중"
+LABEL_IN_PROGRESS: str = "진행 중"
+LABEL_START_DEFAULT: str = "빌드 시작"
+
+PROP_LOCATION_PATH: str = "_location_path"
+META_KEY_EXE_PATH: str = "_exe_path"
+META_KEY_ITEMS: str = "items"
 
 
 class BuildAppTabGroupBox(QGroupBox):
@@ -29,7 +50,7 @@ class BuildAppTabGroupBox(QGroupBox):
     target_selection_changed = Signal(str, bool)  # (target_key, checked)
     target_bump_changed = Signal(str, bool)       # (target_key, checked)
 
-    def __init__(self, title: str = "BuildApp", parent: QWidget | None = None):
+    def __init__(self, title: str = DEFAULT_TAB_GROUP_TITLE, parent: QWidget | None = None):
         super().__init__(title, parent)
         self._cards_by_key: dict[str, AppTargetCardWidget] = {}
         self._ordered_keys: list[str] = []
@@ -39,8 +60,8 @@ class BuildAppTabGroupBox(QGroupBox):
         self._init_ui()
         self.tracker = BuildProgressTracker(
             group_lookup=self.get_card,
-            pace_duration_sec=45.0,
-            tick_interval_ms=1000,
+            pace_duration_sec=DEFAULT_PACE_DURATION_SEC,
+            tick_interval_ms=DEFAULT_TICK_INTERVAL_MS,
             parent=self,
         )
 
@@ -155,7 +176,7 @@ class BuildAppTabGroupBox(QGroupBox):
                     card.prev_box.setTitle("인스톨러 대상")
                     card.next_box.setTitle("인스톨러 산출물")
                     card.prev_box.clear_info(label_text)
-                    card.next_box.clear_info("대기 중")
+                    card.next_box.clear_info(LABEL_WAITING_DEFAULT)
                 else:
                     card.chk_bump.setVisible(True)
                     card.set_bump_checked(bump_checked, block_signals=True)
@@ -194,7 +215,7 @@ class BuildAppTabGroupBox(QGroupBox):
                         self.tab_widget.tabBar().moveTab(cur_idx, target_pos)
 
             card.set_location_tooltip(str(loc_path) if loc_path else None)
-            card.setProperty("_location_path", str(loc_path) if loc_path else "")
+            card.setProperty(PROP_LOCATION_PATH, str(loc_path) if loc_path else "")
 
             if not is_installer and (isinstance(prev_meta, dict) or prev_meta is None):
                 card.set_prev_meta(prev_meta)
@@ -225,40 +246,40 @@ class BuildAppTabGroupBox(QGroupBox):
         for key in keys:
             card = self._cards_by_key.get(key)
             if card is not None:
-                card.clear_next_meta("빌드 대기")
+                card.clear_next_meta(LABEL_WAITING_BUILD)
                 card.progress_badge.set_waiting(
-                    start_time="-",
-                    elapsed_str="00:00:00",
-                    end_time="-",
-                    percent=0,
+                    start_time=EMPTY_TIME_PLACEHOLDER,
+                    elapsed_str=ZERO_ELAPSED_STR,
+                    end_time=EMPTY_TIME_PLACEHOLDER,
+                    percent=PERCENT_MIN,
                 )
 
-    def notify_target_started(self, target_key: str, detail: str = "빌드 시작") -> None:
+    def notify_target_started(self, target_key: str, detail: str = LABEL_START_DEFAULT) -> None:
         """해당 앱/인스톨러 빌드가 시작될 때 탭을 자동 선택하고 '빌드중' 배지를 시작합니다."""
         if target_key not in self._start_times:
-            self._start_times[target_key] = datetime.now().strftime("%H:%M:%S")
+            self._start_times[target_key] = datetime.now().strftime(TIME_FORMAT_HMS)
         self._started_keys.add(target_key)
         self.focus_tab(target_key)
         card = self._cards_by_key.get(target_key)
         if card is not None and target_key == INSTALLER_TAB_KEY:
             card.set_next_meta(
                 {
-                    "_exe_path": str(card.property("_location_path") or ""),
-                    "items": {
-                        "version": "-",
-                        "build_id": "진행 중",
-                        "commit": "-",
-                        "dirty": "-",
+                    META_KEY_EXE_PATH: str(card.property(PROP_LOCATION_PATH) or ""),
+                    META_KEY_ITEMS: {
+                        "version": EMPTY_TIME_PLACEHOLDER,
+                        "build_id": LABEL_IN_PROGRESS,
+                        "commit": EMPTY_TIME_PLACEHOLDER,
+                        "dirty": EMPTY_TIME_PLACEHOLDER,
                         "time": detail,
                     },
                 }
             )
         self.tracker.handle_progress(
             target_key=target_key,
-            status="빌드중",
-            percent=0,
+            status=STATUS_BUILDING,
+            percent=PERCENT_MIN,
             start_time=self._start_times[target_key],
-            end_time="-",
+            end_time=EMPTY_TIME_PLACEHOLDER,
             detail=detail,
         )
 
@@ -268,14 +289,14 @@ class BuildAppTabGroupBox(QGroupBox):
             self.notify_target_started(target_key, detail=detail)
 
         start_str = self._start_times.setdefault(
-            target_key, datetime.now().strftime("%H:%M:%S")
+            target_key, datetime.now().strftime(TIME_FORMAT_HMS)
         )
         self.tracker.handle_progress(
             target_key=target_key,
-            status="빌드중",
+            status=STATUS_BUILDING,
             percent=percent,
             start_time=start_str,
-            end_time="-",
+            end_time=EMPTY_TIME_PLACEHOLDER,
             detail=detail,
         )
 
@@ -283,30 +304,31 @@ class BuildAppTabGroupBox(QGroupBox):
         self,
         target_key: str,
         success: bool,
-        percent: int = 100,
+        percent: int = PERCENT_MAX,
     ) -> None:
         """빌드 완료/실패 시 해당 앱/인스톨러의 BuildProgressBadge 최종 상태를 반영합니다."""
-        start_str = self._start_times.get(target_key, "-")
-        end_str = datetime.now().strftime("%H:%M:%S")
+        start_str = self._start_times.get(target_key, EMPTY_TIME_PLACEHOLDER)
+        end_str = datetime.now().strftime(TIME_FORMAT_HMS)
         self._started_keys.discard(target_key)
+        final_status = STATUS_COMPLETED if success else STATUS_FAILED
         card = self._cards_by_key.get(target_key)
         if card is not None and target_key == INSTALLER_TAB_KEY:
             card.set_next_meta(
                 {
-                    "_exe_path": str(card.property("_location_path") or ""),
-                    "items": {
-                        "version": "-",
-                        "build_id": "빌드완료" if success else "빌드실패",
-                        "commit": "-",
-                        "dirty": "-",
+                    META_KEY_EXE_PATH: str(card.property(PROP_LOCATION_PATH) or ""),
+                    META_KEY_ITEMS: {
+                        "version": EMPTY_TIME_PLACEHOLDER,
+                        "build_id": final_status,
+                        "commit": EMPTY_TIME_PLACEHOLDER,
+                        "dirty": EMPTY_TIME_PLACEHOLDER,
                         "time": end_str,
                     },
                 }
             )
         self.tracker.handle_progress(
             target_key=target_key,
-            status="빌드완료" if success else "빌드실패",
-            percent=100 if success else percent,
+            status=final_status,
+            percent=PERCENT_MAX if success else percent,
             start_time=start_str,
             end_time=end_str,
             detail="",
@@ -316,7 +338,7 @@ class BuildAppTabGroupBox(QGroupBox):
         card = self._cards_by_key.get(key)
         if card is None:
             return
-        raw_path = str(card.property("_location_path") or "").strip()
+        raw_path = str(card.property(PROP_LOCATION_PATH) or "").strip()
         if not raw_path:
             return
         p = Path(raw_path)

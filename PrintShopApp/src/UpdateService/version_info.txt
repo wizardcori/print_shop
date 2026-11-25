@@ -17,13 +17,13 @@ VSVersionInfo(
           u'040904B0',
           [
           StringStruct(u'CompanyName', u'PrintShop'),
-          StringStruct(u'FileDescription', u'UpdateService Executable'),
+          StringStruct(u'FileDescription', u'PrintShopUpdateService Executable'),
           StringStruct(u'FileVersion', u'0.0.0.0'),
-          StringStruct(u'InternalName', u'UpdateService'),
+          StringStruct(u'InternalName', u'PrintShopUpdateService'),
           StringStruct(u'LegalCopyright', u'Copyright (C) PrintShop'),
-          StringStruct(u'OriginalFilename', u'UpdateService.exe'),
-          StringStruct(u'ProductName', u'UpdateService'),
-          StringStruct(u'ProductVersion', u'1.2.59'),
+          StringStruct(u'OriginalFilename', u'PrintShopUpdateService.exe'),
+          StringStruct(u'ProductName', u'PrintShopUpdateService'),
+          StringStruct(u'ProductVersion', u'1.2.60'),
           ]
         )
       ]

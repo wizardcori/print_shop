@@ -6,9 +6,10 @@ import json
 import os
 import re
 import sqlite3
+import tempfile
+import threading
 from datetime import date, datetime, time
 from typing import Any, Dict, List, Optional, Type
-import threading
 
 from Common.globals import CONFIG_ENCODING
 from Common.path_mgr import PathMgr
@@ -49,14 +50,15 @@ class ConfigModelShape:
     @property
     def resolved_dir(self) -> str:
         if self.file_dir:
-            return self.file_dir
-        return PathMgr.CONFIG_DIR
+            return str(self.file_dir)
+        return getattr(PathMgr, "CONFIG_DIR", "") or tempfile.gettempdir()
 
     @property
     def resolved_name(self) -> str:
         if self.file_name:
-            return self.file_name
-        return PathMgr.CONFIG_FILE
+            return str(self.file_name)
+        app_name = getattr(PathMgr, "APP_NAME", "") or "app"
+        return getattr(PathMgr, "CONFIG_FILE", "") or f"{app_name}.ini"
 
     @property
     def filepath(self) -> str:
@@ -66,15 +68,16 @@ class ConfigModelShape:
     def _resolve_cls_dir(cls) -> str:
         d = getattr(cls, "file_dir", None)
         if d:
-            return d
-        return PathMgr.CONFIG_DIR
+            return str(d)
+        return getattr(PathMgr, "CONFIG_DIR", "") or tempfile.gettempdir()
 
     @classmethod
     def _resolve_cls_name(cls) -> str:
         n = getattr(cls, "file_name", None)
         if n:
-            return n
-        return PathMgr.CONFIG_FILE
+            return str(n)
+        app_name = getattr(PathMgr, "APP_NAME", "") or "app"
+        return getattr(PathMgr, "CONFIG_FILE", "") or f"{app_name}.ini"
 
     @classmethod
     def _resolve_cls_filepath(cls) -> str:
@@ -143,16 +146,20 @@ class ConfigManager(ThreadSafeSingletonBase, ConfigModelShape):
         return parser
 
     def _load_and_inject(self):
-        """기본 파일(INI) 로드 로직"""
+        """기본 파일(INI) 로드 및 누락된 스키마 항목 주입 로직"""
         target_dir = self.resolved_dir
+        filepath = self.filepath
+
         if target_dir and not os.path.exists(target_dir):
             os.makedirs(target_dir, exist_ok=True)
 
-        if os.path.exists(self.filepath):
-            self.config.read(self.filepath, encoding=self.current_encoding)
+        if filepath and os.path.exists(filepath):
+            self.config.read(filepath, encoding=self.current_encoding)
 
+        injected = False
         if not self.config.has_section(self.section):
             self.config.add_section(self.section)
+            injected = True
 
         for key, meta in self.schema.items():
             if not self.config.has_option(self.section, key):
@@ -164,8 +171,10 @@ class ConfigManager(ThreadSafeSingletonBase, ConfigModelShape):
                 elif isinstance(default_val, dict):
                     default_val = json.dumps(dict(default_val), ensure_ascii=False)
                 self.config.set(self.section, key, str(default_val))
+                injected = True
 
-        self.save()
+        if injected:
+            self.save()
 
     def set(self, key: str, value: Any):
         """설정값 검증 및 설정"""
@@ -320,7 +329,7 @@ class ConfigManager(ThreadSafeSingletonBase, ConfigModelShape):
                     return fallback
                 except Exception:
                     return fallback
-                
+
         elif expected_type == ConfigType.DATE:
             return date.fromisoformat(raw_val)
         elif expected_type == ConfigType.TIME:
@@ -347,6 +356,9 @@ class ConfigManager(ThreadSafeSingletonBase, ConfigModelShape):
         target_dir = self.resolved_dir
         filepath = self.filepath
         encoding = self.current_encoding
+
+        if not filepath:
+            return
 
         with ConfigManager._file_io_lock:
             if target_dir and not os.path.exists(target_dir):
@@ -399,7 +411,8 @@ class DbConfigManager:
         if cls_db_path:
             return cls_db_path
         filename = getattr(cls, "db_filename", "app_config.db")
-        return os.path.join(PathMgr.DB_DIR, filename)
+        db_dir = getattr(PathMgr, "DB_DIR", "") or os.path.join(tempfile.gettempdir(), "db")
+        return os.path.join(db_dir, filename)
 
     def __init__(
         self,

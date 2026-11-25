@@ -15,13 +15,16 @@ from Common.log import logd
 from build_script.target_config import (
     AppTargetSpec,
     BuildDirConfig,
-    TargetConfig,
     DEFAULT_CONSOLE,
     DEFAULT_ENTRY_FILENAME,
+    DEFAULT_ONEFILE,
+    DEFAULT_UAC_ADMIN,
     EXE_EXTENSION,
+    PyInstallerSpec,
     SPEC_EXTENSION,
     TARGET_LABELS,
     TEST_DIR_NAME,
+    TargetConfig,
     get_target_spec,
 )
 from build_script.target_config_io import DEFAULT_TEXT_ENCODING
@@ -52,8 +55,16 @@ PYINSTALLER_BASE_ARGS: tuple[str, ...] = (
     "--clean",
 )
 
+# PrintShopApp 기본 포함 리소스 (상대경로: src_rel;dest_rel)
+PRINTSHOP_DEFAULT_DATAS: tuple[str, ...] = (
+    "src/LinkBox/templates;LinkBox/templates",
+    "src/LinkShare/web/templates;LinkShare/web/templates",
+    ".env.feature.runtime;.",
+)
+
 __all__ = [
     "ENTRY_FILENAME_CANDIDATES",
+    "PRINTSHOP_DEFAULT_DATAS",
     "PYINSTALLER_BASE_ARGS",
     "STATIC_IGNORE_DIR_NAMES",
     "SpecAndPyInstallerBuilder",
@@ -106,6 +117,73 @@ class SpecAndPyInstallerBuilder:
             }
         )
         return ignored
+
+    def _resolve_app_bool_flag(self, target_key: str, field_name: str, default_val: bool) -> bool:
+        ov = TargetConfig.get_app_overrides().get(target_key, {})
+        if isinstance(ov, dict) and isinstance(ov.get(field_name), bool):
+            return bool(ov[field_name])
+        return default_val
+
+    def _resolve_project_rel_path(self, raw_path: str) -> str:
+        p = Path(raw_path.strip())
+        if p.is_absolute():
+            return str(p.resolve())
+        return str((Path(self.project_root) / Path(*raw_path.strip().split("/"))).resolve())
+
+    def _to_spec_rel_path(self, abs_or_rel_path: str, base_dir: str) -> str:
+        """가능하면 base_dir 기준 상대 경로로 변환해 .spec 이식성을 높임."""
+        try:
+            rel = os.path.relpath(abs_or_rel_path, base_dir)
+            if not rel.startswith(".."):
+                return rel.replace("\\", "/")
+        except ValueError:
+            pass
+        return abs_or_rel_path.replace("\\", "/")
+
+    def _parse_resource_pairs(self, items: tuple[str, ...]) -> list[tuple[str, str]]:
+        """'src;dest' 또는 'src:dest' 또는 단일 경로 항목을 (abs_src, dest) 튜플 리스트로 변환."""
+        pairs: list[tuple[str, str]] = []
+        for raw in items:
+            token = str(raw).strip()
+            if not token:
+                continue
+            if ";" in token:
+                src_part, dest_part = token.split(";", 1)
+            elif ":" in token and not Path(token).drive:
+                src_part, dest_part = token.split(":", 1)
+            else:
+                src_part, dest_part = token, "."
+            abs_src = self._resolve_project_rel_path(src_part)
+            dest = (dest_part.strip() or ".").replace("\\", "/")
+            pairs.append((abs_src, dest))
+        return pairs
+
+    def _collect_datas_pairs(
+        self,
+        target_key: str,
+        label: str,
+        py_spec: PyInstallerSpec,
+    ) -> list[tuple[str, str]]:
+        """빌드에 포함할 (존재하는_소스_경로, 대상_폴더) 리소스 목록 구성."""
+        raw_items: list[str] = list(py_spec.datas or ())
+        if not raw_items and (target_key == "print_shop_app" or label == "PrintShopApp"):
+            raw_items.extend(PRINTSHOP_DEFAULT_DATAS)
+
+        parsed = self._parse_resource_pairs(tuple(raw_items))
+        valid_pairs: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+
+        for abs_src, dest in parsed:
+            if not os.path.exists(abs_src):
+                logd(f"  • [{target_key}] 리소스 경로가 존재하지 않아 제외됨: {abs_src} -> {dest}")
+                continue
+            spec_src = self._to_spec_rel_path(abs_src, self.project_root)
+            key = (spec_src, dest)
+            if key not in seen:
+                seen.add(key)
+                valid_pairs.append(key)
+
+        return valid_pairs
 
     def find_spec_file(self, target_key: str) -> str | None:
         spec = get_target_spec(target_key)
@@ -180,31 +258,66 @@ class SpecAndPyInstallerBuilder:
         label = spec_obj.label if spec_obj else target_key
         exe_stem = Path(spec_obj.exe_name).stem if (spec_obj and spec_obj.exe_name) else label
         console_flag = spec_obj.console if spec_obj else DEFAULT_CONSOLE
-        hidden_imports = (
-            tuple(dict.fromkeys(str(m).strip() for m in spec_obj.hidden_imports if str(m).strip()))
-            if (spec_obj and spec_obj.hidden_imports)
-            else ()
+        py_spec: PyInstallerSpec = spec_obj.pyinstaller if spec_obj else PyInstallerSpec()
+
+        onefile_flag = bool(getattr(py_spec, "onefile", DEFAULT_ONEFILE))
+        uac_admin_flag = bool(getattr(py_spec, "uac_admin", DEFAULT_UAC_ADMIN))
+
+        raw_icon = getattr(py_spec, "icon_path", None)
+        resolved_icon = self._resolve_project_rel_path(raw_icon) if raw_icon else None
+        spec_icon = (
+            self._to_spec_rel_path(resolved_icon, self.project_root)
+            if (resolved_icon and os.path.isfile(resolved_icon))
+            else None
         )
+        icon_arg = f"r'{spec_icon}'" if spec_icon else "None"
+
+        combined_hidden: list[str] = []
+        if spec_obj and spec_obj.hidden_imports:
+            combined_hidden.extend(spec_obj.hidden_imports)
+        if py_spec.hidden_imports:
+            combined_hidden.extend(py_spec.hidden_imports)
+        hidden_imports = tuple(dict.fromkeys(str(m).strip() for m in combined_hidden if str(m).strip()))
         hidden_imports_literal = repr(list(hidden_imports))
 
-        pathex_entries: list[str] = [self.project_root, self.src_dir]
+        excludes_list = list(
+            dict.fromkeys(str(x).strip() for x in (py_spec.excludes or ()) if str(x).strip())
+        )
+        excludes_literal = repr(excludes_list)
+
+        datas_pairs = self._collect_datas_pairs(target_key, label, py_spec)
+        binaries_pairs = [
+            (self._to_spec_rel_path(s, self.project_root), d)
+            for s, d in self._parse_resource_pairs(py_spec.binaries or ())
+            if os.path.exists(s)
+        ]
+
+        datas_literal = "[" + ", ".join(f"(r{repr(s)}, {repr(d)})" for s, d in datas_pairs) + "]"
+        binaries_literal = "[" + ", ".join(f"(r{repr(s)}, {repr(d)})" for s, d in binaries_pairs) + "]"
+
+        pathex_entries: list[str] = [
+            self._to_spec_rel_path(self.project_root, self.project_root),
+            self._to_spec_rel_path(self.src_dir, self.project_root),
+        ]
+        raw_pathex_all: list[str] = []
         if spec_obj and getattr(spec_obj, "extra_pathex", None):
-            root_path = Path(self.project_root)
-            for raw_p in spec_obj.extra_pathex:
-                cleaned = str(raw_p).strip()
-                if not cleaned:
-                    continue
-                p_obj = Path(cleaned)
-                resolved = (
-                    p_obj.resolve()
-                    if p_obj.is_absolute()
-                    else (root_path / Path(*cleaned.split("/"))).resolve()
-                )
-                resolved_str = str(resolved)
-                if os.path.isdir(resolved_str) and resolved_str not in pathex_entries:
-                    pathex_entries.append(resolved_str)
+            raw_pathex_all.extend(spec_obj.extra_pathex)
+        if py_spec.extra_pathex:
+            raw_pathex_all.extend(py_spec.extra_pathex)
+
+        for raw_p in raw_pathex_all:
+            cleaned = str(raw_p).strip()
+            if not cleaned:
+                continue
+            resolved_str = self._resolve_project_rel_path(cleaned)
+            if os.path.isdir(resolved_str):
+                rel_p = self._to_spec_rel_path(resolved_str, self.project_root)
+                if rel_p not in pathex_entries:
+                    pathex_entries.append(rel_p)
 
         pathex_literal = "[" + ", ".join(f"r{repr(p)}" for p in pathex_entries) + "]"
+
+        spec_entry_script = self._to_spec_rel_path(entry_script, self.project_root)
 
         app_ver_files = self.version_service.get_version_files(target_key)
         app_rc_path = (
@@ -212,73 +325,131 @@ class SpecAndPyInstallerBuilder:
             if app_ver_files
             else None
         )
-        version_arg = f"r'{app_rc_path}'" if (app_rc_path and os.path.isfile(app_rc_path)) else "None"
+        spec_version_path = (
+            self._to_spec_rel_path(app_rc_path, self.project_root)
+            if (app_rc_path and os.path.isfile(app_rc_path))
+            else None
+        )
+        version_arg = f"r'{spec_version_path}'" if spec_version_path else "None"
 
         os.makedirs(work_out, exist_ok=True)
         generated_spec_path = self.resolve_spec_output_path(target_key, spec_obj, entry_script, work_out)
 
-        spec_content = textwrap.dedent(
-            f"""
-            # -*- mode: python ; coding: utf-8 -*-
+        if onefile_flag:
+            exe_and_collect_block = textwrap.dedent(
+                f"""
+                exe = EXE(
+                    pyz,
+                    a.scripts,
+                    a.binaries,
+                    a.zipfiles,
+                    a.datas,
+                    [],
+                    name=f'{exe_stem}',
+                    debug=False,
+                    bootloader_ignore_signals=False,
+                    strip=False,
+                    upx=True,
+                    upx_exclude=[],
+                    runtime_tmpdir=None,
+                    console={console_flag},
+                    disable_windowed_traceback=False,
+                    argv_emulation=False,
+                    target_arch=None,
+                    codesign_identity=None,
+                    entitlements_file=None,
+                    uac_admin={uac_admin_flag},
+                    icon={icon_arg},
+                    version={version_arg},
+                )
+                """
+            ).strip()
+        else:
+            exe_and_collect_block = textwrap.dedent(
+                f"""
+                exe = EXE(
+                    pyz,
+                    a.scripts,
+                    [],
+                    exclude_binaries=True,
+                    name=f'{exe_stem}',
+                    debug=False,
+                    bootloader_ignore_signals=False,
+                    strip=False,
+                    upx=True,
+                    console={console_flag},
+                    disable_windowed_traceback=False,
+                    argv_emulation=False,
+                    target_arch=None,
+                    codesign_identity=None,
+                    entitlements_file=None,
+                    uac_admin={uac_admin_flag},
+                    icon={icon_arg},
+                    version={version_arg},
+                )
+                coll = COLLECT(
+                    exe,
+                    a.binaries,
+                    a.zipfiles,
+                    a.datas,
+                    strip=False,
+                    upx=True,
+                    upx_exclude=[],
+                    name=f'{exe_stem}',
+                )
+                """
+            ).strip()
 
-            a = Analysis(
-                [r'{entry_script}'],
-                pathex={pathex_literal},
-                binaries=[],
-                datas=[],
-                hiddenimports={hidden_imports_literal},
-                hookspath=[],
-                hooksconfig={{}},
-                runtime_hooks=[],
-                excludes=[],
-                noarchive=False,
-            )
-            pyz = PYZ(a.pure)
+        spec_content = (
+            textwrap.dedent(
+                f"""
+                # -*- mode: python ; coding: utf-8 -*-
 
-            exe = EXE(
-                pyz,
-                a.scripts,
-                a.binaries,
-                a.zipfiles,
-                a.datas,
-                [],
-                name=f'{exe_stem}',
-                debug=False,
-                bootloader_ignore_signals=False,
-                strip=False,
-                upx=True,
-                upx_exclude=[],
-                runtime_tmpdir=None,
-                console={console_flag},
-                disable_windowed_traceback=False,
-                argv_emulation=False,
-                target_arch=None,
-                codesign_identity=None,
-                entitlements_file=None,
-                version={version_arg},
-            )
-            """
-        ).lstrip()
+                a = Analysis(
+                    [r'{spec_entry_script}'],
+                    pathex={pathex_literal},
+                    binaries={binaries_literal},
+                    datas={datas_literal},
+                    hiddenimports={hidden_imports_literal},
+                    hookspath=[],
+                    hooksconfig={{}},
+                    runtime_hooks=[],
+                    excludes={excludes_literal},
+                    noarchive=False,
+                )
+                pyz = PYZ(a.pure)
+
+                """
+            ).lstrip()
+            + exe_and_collect_block
+            + "\n"
+        )
 
         with open(generated_spec_path, "w", encoding=DEFAULT_TEXT_ENCODING) as f:
             f.write(spec_content)
 
         logd(
             f"  • [{target_key}] 기본 .spec 생성 완료: {generated_spec_path} "
-            f"(entry={entry_script}, exe={exe_stem}{EXE_EXTENSION}, hiddenimports={list(hidden_imports)})"
+            f"(entry={spec_entry_script}, exe={exe_stem}{EXE_EXTENSION}, onefile={onefile_flag}, "
+            f"uac_admin={uac_admin_flag}, datas_count={len(datas_pairs)}, "
+            f"hiddenimports={list(hidden_imports)})"
         )
         return generated_spec_path
 
     def clean_target_outputs(self, target_key: str, work_out: str, dist_out: str) -> None:
-        if self.clean_work_out and os.path.isdir(work_out):
+        do_clean_work = self._resolve_app_bool_flag(target_key, "clean_work", self.clean_work_out)
+        do_clean_dist = self._resolve_app_bool_flag(target_key, "clean_dist", self.clean_dist_out)
+        do_clean_spec = self._resolve_app_bool_flag(target_key, "clean_spec", self.clean_spec)
+
+        if do_clean_work and os.path.isdir(work_out):
             shutil.rmtree(work_out, ignore_errors=True)
             logd(f"  • work_out 정리 완료: {work_out}")
 
-        if self.clean_dist_out and os.path.isdir(dist_out):
+        if do_clean_dist and os.path.isdir(dist_out):
             shutil.rmtree(dist_out, ignore_errors=True)
             logd(f"  • dist_out 정리 완료: {dist_out}")
 
-        if self.clean_spec:
+        if do_clean_spec:
             spec_obj = get_target_spec(target_key)
             label = spec_obj.label if spec_obj else TARGET_LABELS.get(target_key, target_key)
             candidate_specs: set[str] = {

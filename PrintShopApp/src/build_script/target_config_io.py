@@ -42,6 +42,7 @@ APP_OVERRIDE_FIELDS: tuple[str, ...] = (
     "version_rel_paths",
     "console",
     "copy_to_test",
+    "run_test",
     "copy_to_archive",
     "include_in_installer",
     "standalone_installer",
@@ -331,9 +332,9 @@ def extract_apps_from_json(json_path: str | Path | None) -> dict[str, dict[str, 
         return {}
     loaded = load_json_dict(json_path)
     apps_section = loaded.get(JSON_SECTION_APPS)
-    if not isinstance(apps_section, dict):
-        return {}
-    return {str(k): dict(v) for k, v in apps_section.items() if isinstance(v, dict)}
+    if isinstance(apps_section, dict):
+        return {str(k): dict(v) for k, v in apps_section.items() if isinstance(v, dict)}
+    return {str(k): dict(v) for k, v in loaded.items() if isinstance(v, dict)}
 
 
 def extract_apps_from_env() -> dict[str, dict[str, Any]]:
@@ -477,7 +478,9 @@ class InstallerBuildConfig:
 
         for k, v in data.items():
             if k not in INSTALLER_KNOWN_FIELDS:
-                if v is None:
+                if k == INSTALLER_FIELD_EXTRA and isinstance(v, dict):
+                    self.extra.update(v)
+                elif v is None:
                     self.extra.pop(k, None)
                 else:
                     self.extra[k] = v
@@ -597,6 +600,11 @@ def add_build_config_arguments(parser: Any) -> None:
         help=f"앱별 세부설정 JSON 파일 경로 (최상위 또는 '{JSON_SECTION_APPS}' 객체 지원)",
     )
     parser.add_argument(
+        "--installer-config",
+        default=None,
+        help=f"인스톨러 세부설정 JSON 파일 경로 ('{JSON_SECTION_INSTALLER}' 객체 지원)",
+    )
+    parser.add_argument(
         "--app-set",
         nargs="+",
         default=None,
@@ -644,6 +652,7 @@ def extract_cli_config_overrides(args: Any) -> dict[str, Any]:
     return {
         "dir_config_json": getattr(args, "dir_config", None),
         "app_config_json": getattr(args, "app_config", None),
+        "installer_config_json": getattr(args, "installer_config", None),
         "cli_dir_overrides": cli_dir_overrides,
         "cli_app_overrides": cli_app_overrides,
         "cli_installer_overrides": cli_installer_overrides,

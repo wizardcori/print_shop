@@ -11,9 +11,44 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+PROGRESS_MIN: int = 0
+PROGRESS_MAX: int = 100
+DEFAULT_ELAPSED_STR: str = "00:00:00"
+DEFAULT_TIME_PLACEHOLDER: str = "-"
+PROGRESS_FORMAT: str = "%p%"
+PROGRESS_BAR_MIN_WIDTH: int = 70
+PROGRESS_BAR_HEIGHT: int = 16
+ROW_GAP_COUNT: int = 2
+
+STATE_WAITING: str = "waiting"
+STATE_BUILDING: str = "building"
+STATE_SUCCESS: str = "success"
+STATE_FAILED: str = "failed"
+
+STATUS_TEXT_WAITING: str = "대기중"
+STATUS_TEXT_BUILDING: str = "빌드중"
+STATUS_TEXT_SUCCESS: str = "빌드완료"
+STATUS_TEXT_FAILED: str = "빌드실패"
+
+STATUS_LABEL_BASE_PT: float = 9.0
+STATUS_LABEL_MIN_PT: float = 7.5
+STATUS_LABEL_H_PAD: int = 14
+
+TIMES_LABEL_BASE_PT: float = 8.5
+TIMES_LABEL_MIN_PT: float = 7.0
+TIMES_LABEL_H_PAD: int = 16
+
+DEFAULT_FIT_BASE_PT: float = 9.0
+DEFAULT_FIT_MIN_PT: float = 7.0
+DEFAULT_FIT_H_PAD: int = 12
+FONT_STEP_PT: float = 0.5
+MIN_MEASURE_WIDTH_PX: int = 4
+SECONDS_PER_HOUR: int = 3600
+SECONDS_PER_MINUTE: int = 60
+
 # 빌드 상태별 텍스트(배지/시간) 컬러 및 배경 테마 정의
 _STATE_THEMES: dict[str, dict[str, str]] = {
-    "waiting": {
+    STATE_WAITING: {
         "badge_bg": "#23272f",
         "badge_border": "#3c424e",
         "badge_fg": "#b0b7c3",
@@ -22,7 +57,7 @@ _STATE_THEMES: dict[str, dict[str, str]] = {
         "times_fg": "#a1a8b3",
         "bar_chunk": "#4b5563",
     },
-    "building": {
+    STATE_BUILDING: {
         "badge_bg": "#382c0e",
         "badge_border": "#8a6914",
         "badge_fg": "#fde047",
@@ -31,7 +66,7 @@ _STATE_THEMES: dict[str, dict[str, str]] = {
         "times_fg": "#f3dfa2",
         "bar_chunk": "#2563eb",
     },
-    "success": {
+    STATE_SUCCESS: {
         "badge_bg": "#122d1e",
         "badge_border": "#23643d",
         "badge_fg": "#86efac",
@@ -40,7 +75,7 @@ _STATE_THEMES: dict[str, dict[str, str]] = {
         "times_fg": "#b8e6c9",
         "bar_chunk": "#16a34a",
     },
-    "failed": {
+    STATE_FAILED: {
         "badge_bg": "#361619",
         "badge_border": "#84252d",
         "badge_fg": "#fca5a5",
@@ -52,12 +87,20 @@ _STATE_THEMES: dict[str, dict[str, str]] = {
 }
 
 
+def _clamp_percent(percent: int) -> int:
+    return max(PROGRESS_MIN, min(PROGRESS_MAX, int(percent)))
+
+
+def _format_times_text(start_time: str, elapsed_str: str, end_time: str) -> str:
+    return f"시작 {start_time} | 소요 {elapsed_str} | 종료 {end_time}"
+
+
 def format_hms(seconds: float) -> str:
     """초 단위 경과 시간을 HH:MM:SS 문자열로 변환합니다."""
     total_sec = max(0, int(seconds))
-    hours = total_sec // 3600
-    minutes = (total_sec % 3600) // 60
-    secs = total_sec % 60
+    hours = total_sec // SECONDS_PER_HOUR
+    minutes = (total_sec % SECONDS_PER_HOUR) // SECONDS_PER_MINUTE
+    secs = total_sec % SECONDS_PER_MINUTE
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
@@ -73,8 +116,8 @@ def _fit_font_to_width(
     widget: QWidget,
     text: str,
     max_width: int,
-    base_pt: float = 9.0,
-    min_pt: float = 7.0,
+    base_pt: float = DEFAULT_FIT_BASE_PT,
+    min_pt: float = DEFAULT_FIT_MIN_PT,
 ) -> tuple[str, int]:
     """
     max_width 내에서 가능한 가장 큰 폰트 크기를 찾고,
@@ -83,7 +126,7 @@ def _fit_font_to_width(
     clean_text = text or ""
     font = QFont(widget.font())
 
-    if max_width <= 4:
+    if max_width <= MIN_MEASURE_WIDTH_PX:
         font.setPointSizeF(min_pt)
         widget.setFont(font)
         fm = QFontMetrics(font)
@@ -96,7 +139,7 @@ def _fit_font_to_width(
         if _measure_text_width(clean_text, font, pt) <= max_width:
             chosen_pt = pt
             break
-        pt -= 0.5
+        pt -= FONT_STEP_PT
 
     font.setPointSizeF(chosen_pt)
     widget.setFont(font)
@@ -116,9 +159,9 @@ class _ExactFitLabel(QLabel):
     def __init__(
         self,
         text: str = "",
-        base_pt: float = 9.0,
-        min_pt: float = 7.0,
-        h_pad: int = 12,
+        base_pt: float = DEFAULT_FIT_BASE_PT,
+        min_pt: float = DEFAULT_FIT_MIN_PT,
+        h_pad: int = DEFAULT_FIT_H_PAD,
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
@@ -139,7 +182,9 @@ class _ExactFitLabel(QLabel):
         if self._custom_tooltip:
             super().setToolTip(self._custom_tooltip)
         else:
-            super().setToolTip(self._full_text if self._full_text not in ("", "-") else "")
+            super().setToolTip(
+                self._full_text if self._full_text not in ("", DEFAULT_TIME_PLACEHOLDER) else ""
+            )
 
     def estimatedWidth(self) -> int:
         """현재 텍스트 기준 권장 가로 폭(여백 포함)을 반환합니다."""
@@ -151,7 +196,9 @@ class _ExactFitLabel(QLabel):
     def setText(self, text: str) -> None:  # type: ignore[override]
         self._full_text = text or ""
         if not self._custom_tooltip:
-            super().setToolTip(self._full_text if self._full_text not in ("", "-") else "")
+            super().setToolTip(
+                self._full_text if self._full_text not in ("", DEFAULT_TIME_PLACEHOLDER) else ""
+            )
         target_w = self.width() if self.width() > 0 else self.estimatedWidth()
         self.apply_budget(target_w)
 
@@ -183,7 +230,7 @@ class BuildProgressBadge(QGroupBox):
     [빌드 상태] [시작 / 소요 / 종료] [빌드 퍼센트(최대 가용폭)]
     """
 
-    MIN_BAR_WIDTH = 70
+    MIN_BAR_WIDTH = PROGRESS_BAR_MIN_WIDTH
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -209,25 +256,30 @@ class BuildProgressBadge(QGroupBox):
         self._row_layout.setSpacing(6)
 
         # 1칸: 빌드 상태 배지 (대기중, 빌드중, 빌드완료, 빌드실패)
-        self.lbl_status = _ExactFitLabel("대기중", base_pt=9.0, min_pt=7.5, h_pad=14)
+        self.lbl_status = _ExactFitLabel(
+            STATUS_TEXT_WAITING,
+            base_pt=STATUS_LABEL_BASE_PT,
+            min_pt=STATUS_LABEL_MIN_PT,
+            h_pad=STATUS_LABEL_H_PAD,
+        )
         self.lbl_status.setAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
 
         # 2칸: 시작 / 소요 / 종료 텍스트 배지
         self.lbl_times = _ExactFitLabel(
-            "시작 - | 소요 00:00:00 | 종료 -",
-            base_pt=8.5,
-            min_pt=7.0,
-            h_pad=16,
+            _format_times_text(DEFAULT_TIME_PLACEHOLDER, DEFAULT_ELAPSED_STR, DEFAULT_TIME_PLACEHOLDER),
+            base_pt=TIMES_LABEL_BASE_PT,
+            min_pt=TIMES_LABEL_MIN_PT,
+            h_pad=TIMES_LABEL_H_PAD,
         )
         self.lbl_times.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         # 3칸: 빌드 퍼센트 프로그레스 바 (남은 공간 최대 확보)
         self.progress_bar = QProgressBar(self)
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
+        self.progress_bar.setRange(PROGRESS_MIN, PROGRESS_MAX)
+        self.progress_bar.setValue(PROGRESS_MIN)
         self.progress_bar.setTextVisible(True)
-        self.progress_bar.setFormat("%p%")
-        self.progress_bar.setFixedHeight(16)
+        self.progress_bar.setFormat(PROGRESS_FORMAT)
+        self.progress_bar.setFixedHeight(PROGRESS_BAR_HEIGHT)
         self.progress_bar.setMinimumWidth(self.MIN_BAR_WIDTH)
         self.progress_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
@@ -236,7 +288,7 @@ class BuildProgressBadge(QGroupBox):
         self._row_layout.addWidget(self.progress_bar, 1)
 
     def _apply_state_theme(self, state_key: str) -> None:
-        theme = _STATE_THEMES.get(state_key, _STATE_THEMES["waiting"])
+        theme = _STATE_THEMES.get(state_key, _STATE_THEMES[STATE_WAITING])
 
         self.lbl_status.setStyleSheet(
             f"""
@@ -297,9 +349,7 @@ class BuildProgressBadge(QGroupBox):
             self.progress_bar.setMinimumWidth(self.MIN_BAR_WIDTH)
             return
 
-        # 3개 위젯(lbl_status, lbl_times, progress_bar) 사이 간격 수: 2개
-        gap_count = 2
-        total_spacing = spacing * gap_count
+        total_spacing = spacing * ROW_GAP_COUNT
         max_text_budget = max(0, avail - total_spacing - self.MIN_BAR_WIDTH)
 
         if status_est + times_est <= max_text_budget:
@@ -320,31 +370,33 @@ class BuildProgressBadge(QGroupBox):
 
     def set_waiting(
         self,
-        start_time: str = "-",
-        elapsed_str: str = "00:00:00",
-        end_time: str = "-",
-        percent: int = 0,
+        start_time: str = DEFAULT_TIME_PLACEHOLDER,
+        elapsed_str: str = DEFAULT_ELAPSED_STR,
+        end_time: str = DEFAULT_TIME_PLACEHOLDER,
+        percent: int = PROGRESS_MIN,
     ):
-        self._apply_state_theme("waiting")
+        self._apply_state_theme(STATE_WAITING)
         self.lbl_status.setCustomTooltip("")
-        self.lbl_status.setText("대기중")
-        self.lbl_times.setText(f"시작 {start_time} | 소요 {elapsed_str} | 종료 {end_time}")
-        self.progress_bar.setValue(max(0, min(100, int(percent))))
+        self.lbl_status.setText(STATUS_TEXT_WAITING)
+        self.lbl_times.setText(_format_times_text(start_time, elapsed_str, end_time))
+        self.progress_bar.setValue(_clamp_percent(percent))
         self._recalc_widths()
 
     def set_building(
         self,
         percent: int,
         start_time: str,
-        elapsed_str: str = "00:00:00",
-        end_time: str = "-",
+        elapsed_str: str = DEFAULT_ELAPSED_STR,
+        end_time: str = DEFAULT_TIME_PLACEHOLDER,
         detail: str = "",
     ):
-        self._apply_state_theme("building")
-        self.lbl_status.setCustomTooltip(f"빌드중 ({detail})" if detail else "빌드중")
-        self.lbl_status.setText("빌드중")
-        self.lbl_times.setText(f"시작 {start_time} | 소요 {elapsed_str} | 종료 {end_time}")
-        self.progress_bar.setValue(max(0, min(100, int(percent))))
+        self._apply_state_theme(STATE_BUILDING)
+        self.lbl_status.setCustomTooltip(
+            f"{STATUS_TEXT_BUILDING} ({detail})" if detail else STATUS_TEXT_BUILDING
+        )
+        self.lbl_status.setText(STATUS_TEXT_BUILDING)
+        self.lbl_times.setText(_format_times_text(start_time, elapsed_str, end_time))
+        self.progress_bar.setValue(_clamp_percent(percent))
         self._recalc_widths()
 
     def set_completed(
@@ -353,12 +405,12 @@ class BuildProgressBadge(QGroupBox):
         start_time: str,
         elapsed_str: str,
         end_time: str,
-        percent: int = 100,
+        percent: int = PROGRESS_MAX,
     ):
-        state_key = "success" if success else "failed"
+        state_key = STATE_SUCCESS if success else STATE_FAILED
         self._apply_state_theme(state_key)
         self.lbl_status.setCustomTooltip("")
-        self.lbl_status.setText("빌드완료" if success else "빌드실패")
-        self.lbl_times.setText(f"시작 {start_time} | 소요 {elapsed_str} | 종료 {end_time}")
-        self.progress_bar.setValue(max(0, min(100, int(percent))))
+        self.lbl_status.setText(STATUS_TEXT_SUCCESS if success else STATUS_TEXT_FAILED)
+        self.lbl_times.setText(_format_times_text(start_time, elapsed_str, end_time))
+        self.progress_bar.setValue(_clamp_percent(percent))
         self._recalc_widths()

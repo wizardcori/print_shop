@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -30,29 +31,29 @@ for p in (str(PROJECT_ROOT), str(SRC_DIR), str(CURRENT_DIR)):
 from Common.log import logd, loge  # noqa: E402
 from Common.step_timer import BuildStepTimer  # noqa: E402
 from build_script.artifact_signing import inject_and_verify_exe  # noqa: E402
-from build_script.target_config import (  # noqa: E402
-    AppTargetSpec,
-    BuildDirConfig,
-    TargetConfig,
-    MAIN_APP_OVERRIDE_NAME,
-    SRC_DIR_NAME,
-    TEST_DIR_NAME,
-    UNKNOWN_ORDER_SORT_KEY,
-    get_build_target_helpers,
-    get_target_spec,
-)
+from build_script.build_archive_manager import BuildArchiveManager  # noqa: E402
 from build_script.env_ui_helper import (  # noqa: E402
     convert_ui_files,
     resolve_built_exe_path,
     resolve_python_executable,
 )
 from build_script.packaging_service import (  # noqa: E402
-    FULL_COMBO_TAG,
     MODE_PRODUCTION,
     NONE_COMBO_TAG,
     PackagingService,
 )
 from build_script.spec_builder import SpecAndPyInstallerBuilder  # noqa: E402
+from build_script.target_config import (  # noqa: E402
+    AppTargetSpec,
+    BuildDirConfig,
+    MAIN_APP_OVERRIDE_NAME,
+    SRC_DIR_NAME,
+    TEST_DIR_NAME,
+    TargetConfig,
+    UNKNOWN_ORDER_SORT_KEY,
+    get_build_target_helpers,
+    get_target_spec,
+)
 from build_script.target_config_io import (  # noqa: E402
     DEFAULT_TEXT_ENCODING,
     INSTALLER_FIELD_ONLY,
@@ -62,9 +63,10 @@ from build_script.target_config_io import (  # noqa: E402
     normalize_bump_unit,
 )
 from build_script.target_records import ensure_default_targets_injected  # noqa: E402
+from build_script.test_source_gen import generate_app_pytest_scripts  # noqa: E402
 from build_script.version_service import VersionService  # noqa: E402
 
-from build_script.test.test_source_gen import generate_app_pytest_scripts  # noqa: E402
+from Common.app_control import AppControlSender  # noqa: E402
 
 ensure_default_targets_injected()
 
@@ -118,6 +120,12 @@ DEFAULT_CMD_TIMEOUT_SEC: int = 600
 PUBKEY_REVERIFY_ATTEMPTS: int = 2
 SETUP_SUFFIX: str = "Setup"
 
+DEFAULT_SELF_CONTROL_KEYS: frozenset[str] = frozenset({
+    "BuildManagerApp",
+    "BuildManager",
+    "BUILD_MGR",
+})
+
 PUBKEY_MODULE_CANDIDATES: tuple[str, ...] = (
     "Common.Version.exe_version_public_key",
     "exe_version_public_key",
@@ -137,6 +145,7 @@ __all__ = [
     "BuildApp",
     "CRYPTO_MODULE_CANDIDATES",
     "DEFAULT_CMD_TIMEOUT_SEC",
+    "DEFAULT_SELF_CONTROL_KEYS",
     "ENV_BUILD_MODE",
     "ENV_PYTHONUNBUFFERED",
     "FILE_TAG_BUILD",
@@ -149,6 +158,7 @@ __all__ = [
     "STATUS_FAILED",
     "STATUS_SKIPPED",
     "STATUS_SUCCESS",
+    "STEP_APP_TEST",
     "STEP_BUILD",
     "STEP_ENV",
     "STEP_EOF_CRYPTO",
@@ -156,7 +166,6 @@ __all__ = [
     "STEP_PUBKEY",
     "STEP_RELEASE",
     "STEP_TEST_SYNC",
-    "STEP_APP_TEST",
     "STEP_UI",
     "STEP_VERSION",
     "parse_targets",
@@ -227,7 +236,20 @@ class BuildApp:
         cancel_token: Any | None = None,
         run_tests: bool = True,
         pytest_args: list[str] | None = None,
-        test_fail_build: bool = True,        
+        test_fail_build: bool = True,
+        keep_archive_versions: int = BuildArchiveManager.DEFAULT_KEEP_VERSIONS,
+        keep_builds_per_version: int = BuildArchiveManager.DEFAULT_KEEP_BUILDS_PER_VERSION,
+        enable_app_control: bool = True,
+        stop_before_build: bool = True,
+        restart_after_build: bool = True,
+        restart_on_failure: bool = False,
+        control_sender_key: str = "BuildManagerApp",
+        self_app_key: str | None = None,
+        exclude_control_keys: list[str] | set[str] | None = None,
+        stop_settle_sec: float = 0.5,
+        control_namespace: str = "Local",
+        control_fallback_dir: str | Path | None = None,
+        control_secret_key: bytes | str | None = None,
     ):
         self.project_root = os.path.abspath(project_root)
         self.src_dir = os.path.join(self.project_root, SRC_DIR_NAME)
@@ -307,6 +329,42 @@ class BuildApp:
             cancel_event=self.cancel_event,
             cancel_token=self.cancel_token,
         )
+        self.archive_manager = BuildArchiveManager(
+            project_root=self.project_root,
+            keep_versions=keep_archive_versions,
+            keep_builds_per_version=keep_builds_per_version,
+            dir_config=self.dir_config,
+        )
+
+        self.enable_app_control = bool(enable_app_control)
+        self.stop_before_build = bool(stop_before_build)
+        self.restart_after_build = bool(restart_after_build)
+        self.restart_on_failure = bool(restart_on_failure)
+        self.control_sender_key = (control_sender_key or "BuildManagerApp").strip()
+        self.stop_settle_sec = max(0.0, float(stop_settle_sec))
+
+        excluded: set[str] = {k.strip() for k in DEFAULT_SELF_CONTROL_KEYS if k.strip()}
+        if self_app_key and str(self_app_key).strip():
+            excluded.add(str(self_app_key).strip())
+        if self.control_sender_key:
+            excluded.add(self.control_sender_key)
+        if exclude_control_keys:
+            excluded.update(str(k).strip() for k in exclude_control_keys if str(k).strip())
+        self.excluded_control_keys: frozenset[str] = frozenset(excluded)
+
+        self._control_sender: Any | None = None
+        if self.enable_app_control and AppControlSender is not None:
+            try:
+                self._control_sender = AppControlSender(
+                    sender_app_key=self.control_sender_key,
+                    sender_role="build_manager",
+                    secret_key=control_secret_key,
+                    namespace=control_namespace,
+                    fallback_dir=control_fallback_dir,
+                )
+            except Exception as exc:
+                logd(f"  • [CtrlSignal] AppControlSender 초기화 실패 (무시하고 계속): {exc}")
+                self._control_sender = None
 
     def _init_bump_units(self, explicit_bump_units: dict[str, str | None] | None) -> dict[str, str | None]:
         resolved: dict[str, str | None] = {}
@@ -323,6 +381,37 @@ class BuildApp:
         if target_key in self.bump_units:
             return normalize_bump_unit(self.bump_units[target_key])
         return self.bump_unit
+
+    def _resolve_target_mode(self, target_key: str) -> str:
+        ov = TargetConfig.get_app_overrides().get(target_key, {})
+        raw_mode = ov.get("mode") if isinstance(ov, dict) else None
+        if isinstance(raw_mode, str) and raw_mode.strip():
+            return raw_mode.strip().lower()
+        return self.mode
+
+    def _resolve_git_commit(self) -> str | None:
+        try:
+            res = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=self.project_root,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=5,
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                return res.stdout.strip()
+        except Exception:
+            pass
+        return None
+
+    def _collect_step_timings_snapshot(self) -> dict[str, Any]:
+        timings: dict[str, Any] = {}
+        for step_key, _ in PIPELINE_STEP_WEIGHTS:
+            info = self.timer.get_step_timing(step_key)
+            if info:
+                timings[step_key] = dict(info)
+        return timings
 
     def _is_cancelled(self) -> bool:
         if self.cancel_token is not None and getattr(self.cancel_token, "is_set", False):
@@ -343,6 +432,92 @@ class BuildApp:
                 self.progress_callback(payload)
             except Exception:
                 pass
+
+    def _get_safe_control_targets(self, target_keys: list[str] | None = None) -> list[str]:
+        """제어 대상 중 자기 자신(빌드 매니저 등 제외 키)을 뺀 제어 대상 목록 반환."""
+        candidate_keys = (
+            target_keys
+            if target_keys is not None
+            else [spec.key for spec in self._iter_selected_specs()]
+        )
+        safe_targets: list[str] = []
+        seen: set[str] = set()
+        for raw_key in candidate_keys:
+            key = str(raw_key or "").strip()
+            if not key or key in seen:
+                continue
+            if key in self.excluded_control_keys or key.upper() == "ALL":
+                logd(f"  • [CtrlSignal] 자기 보호 가드로 제어 대상 제외: {key}")
+                continue
+            seen.add(key)
+            safe_targets.append(key)
+        return safe_targets
+
+    def _send_stop_to_targets(
+        self,
+        *,
+        reason: str,
+        target_keys: list[str] | None = None,
+        settle_after: bool = True,
+    ) -> None:
+        """지정된 종료 상황(reason)과 함께 제어 대상 앱에 STOP 신호를 발송하고 로그를 남깁니다."""
+        if not self.enable_app_control:
+            logd(f"[CtrlSignal] STOP 건너뜀 | 상황(reason)={reason} | enable_app_control=False")
+            return
+        if self._control_sender is None:
+            logd(f"[CtrlSignal] STOP 건너뜀 | 상황(reason)={reason} | _control_sender 미초기화")
+            return
+
+        candidate_keys = (
+            target_keys
+            if target_keys is not None
+            else [spec.key for spec in self._iter_selected_specs()]
+        )
+        targets = self._get_safe_control_targets(candidate_keys)
+        if not targets:
+            logd(f"[CtrlSignal] STOP 대상 없음 | 상황(reason)={reason} | 후보={candidate_keys}")
+            return
+
+        logd(
+            f"[CtrlSignal] 대상 앱 STOP 종료 시작 | 상황(reason)={reason} | "
+            f"대상={targets} | 발신자={self.control_sender_key}"
+        )
+        for target_key in targets:
+            try:
+                self._control_sender.clear_signals(target_key)
+                self._control_sender.stop_app(target_key)
+                logd(f"  • [CtrlSignal] STOP 발송 완료 | 상황(reason)={reason} | 대상={target_key}")
+            except Exception as exc:
+                loge(
+                    f"  ❌ [CtrlSignal] STOP 발송 실패 | 상황(reason)={reason} | "
+                    f"대상={target_key} | 오류={exc}"
+                )
+
+        if settle_after and self.stop_settle_sec > 0:
+            logd(
+                f"  • [CtrlSignal] 종료 안정화 대기 {self.stop_settle_sec:.2f}s | "
+                f"상황(reason)={reason}"
+            )
+            time.sleep(self.stop_settle_sec)
+
+    def _send_stop_to_build_targets(self) -> None:
+        if not self.stop_before_build:
+            logd("[CtrlSignal] 빌드 시작 전 STOP 건너뜀 | 상황(reason)=before_build | stop_before_build=False")
+            return
+        self._send_stop_to_targets(reason="before_build", settle_after=True)
+
+    def _send_restart_to_build_targets(self, *, reason: str = "build_success") -> None:
+        if not self.enable_app_control or self._control_sender is None:
+            return
+        targets = self._get_safe_control_targets()
+        if not targets:
+            return
+        logd(f"[CtrlSignal] 대상 RESTART 신호 발송 ({reason}): {targets}")
+        for target_key in targets:
+            try:
+                self._control_sender.restart_app(target_key)
+            except Exception as exc:
+                logd(f"  • [CtrlSignal] RESTART 발송 실패({target_key}): {exc}")
 
     def _begin_step(self, step_key: str, detail: str = "") -> float:
         self._check_cancelled()
@@ -491,6 +666,20 @@ class BuildApp:
             key=lambda s: (int(s.order) if str(s.order).isdigit() else UNKNOWN_ORDER_SORT_KEY, s.key),
         )
 
+    def get_full_combo_tag(self) -> str:
+        """등록된 전체 인스톨러 포함 대상의 ID 조합 태그를 동적으로 계산."""
+        all_includable = sorted(
+            [
+                spec
+                for spec in TargetConfig.TARGET_SPECS
+                if not spec.is_installer and spec.include_in_installer
+            ],
+            key=lambda s: (int(s.order) if str(s.order).isdigit() else UNKNOWN_ORDER_SORT_KEY, s.key),
+        )
+        if not all_includable:
+            return NONE_COMBO_TAG
+        return "_".join(str(spec.order) for spec in all_includable)
+
     def get_installer_combo_tag(self, specs: list[AppTargetSpec] | None = None) -> str:
         """ID 낮은 순 정렬 기준 조합 식별자 생성."""
         ordered_specs = specs if specs is not None else self.get_installer_specs_sorted()
@@ -507,7 +696,7 @@ class BuildApp:
         ordered_specs = specs if specs is not None else self.get_installer_specs_sorted()
         combo_tag = self.get_installer_combo_tag(ordered_specs)
         base_name = self.installer_config.name or f"{TargetConfig.PREFIX}{SETUP_SUFFIX}"
-        if combo_tag == FULL_COMBO_TAG:
+        if combo_tag == self.get_full_combo_tag():
             return f"{base_name}_v{main_app_version}"
         return f"{base_name}_{combo_tag}_v{main_app_version}"
 
@@ -578,7 +767,8 @@ class BuildApp:
             msg = (
                 f"mode={self.mode}, python={py_exe}, "
                 f"dirs=(work={self.dir_config.work_dir_name}, dist={self.dir_config.dist_dir_name}, "
-                f"release={self.dir_config.release_dir_name}, test={TEST_DIR_NAME})"
+                f"release={self.dir_config.release_dir_name}, install={self.dir_config.install_dir_name}, "
+                f"test={TEST_DIR_NAME})"
             )
             logd(f"  • {msg}")
             self._end_step(step_key, detail=msg)
@@ -611,6 +801,7 @@ class BuildApp:
                 sys.path.insert(0, gen_dir)
 
             import Common.Version.generate_public_key_module as pub_gen_mod  # type: ignore
+
             pub_gen_mod = importlib.reload(pub_gen_mod)
             info = pub_gen_mod.generate_and_verify_public_key_module(
                 project_root=self.project_root,
@@ -742,6 +933,7 @@ class BuildApp:
             for spec_obj in selected_specs:
                 self._check_cancelled()
                 app_ver = self.version_service.get_target_version(spec_obj.key, target_versions)
+                target_mode = self._resolve_target_mode(spec_obj.key) or mode
                 resolved_exe = resolve_built_exe_path(
                     project_root=self.project_root,
                     target_key=spec_obj.key,
@@ -758,7 +950,7 @@ class BuildApp:
                         exe_path=resolved_exe,
                         app_label=spec_obj.label,
                         app_version=app_ver,
-                        mode=mode,
+                        mode=target_mode,
                         cwd=self.project_root,
                         reload_fn=reload_pubkey_and_crypto_modules,
                     )
@@ -810,87 +1002,142 @@ class BuildApp:
         self,
         py_exe: str,
         target_versions: dict[str, str],
-    ) -> str | None:
-        """[Step 7-1] 현재 대상 앱의 pytest 스크립트 생성 및 실행."""
+    ) -> list[str]:
+        """[Step 7-1] 선택된 모든 대상 앱의 pytest 스크립트 생성 및 실행."""
         step_key = STEP_APP_TEST
         step_name = "Step 7-1: App Pytest Generate & Run"
         self._begin_step(step_key, detail="앱별 pytest 스크립트 생성 및 실행")
-        logd(f"[{step_name}] 앱별 pytest 스크립트 생성 및 테스트 실행...")
+        logd(f"[{step_name}] 선택된 앱별 pytest 스크립트 생성 및 테스트 실행...")
 
         try:
             self._check_cancelled()
+            selected_specs = self._iter_selected_specs()
+            testable_specs = [
+                spec
+                for spec in selected_specs
+                if not spec.is_installer
+                and spec.copy_to_test
+                and getattr(spec, "run_test", True)
+            ]
 
-            current_target_key = self.targets[0] if getattr(self, "targets", None) else None
-            target_spec = get_target_spec(current_target_key) if current_target_key else None
-
-            if (
-                target_spec is None
-                or target_spec.is_installer
-                or not target_spec.copy_to_test
-                or not getattr(target_spec, "run_test", True)
-            ):
-                msg = "현재 대상 앱이 테스트 실행 대상이 아니므로 건너뜀"
+            if not testable_specs:
+                msg = "테스트 실행 대상 앱이 없어 건너뜀"
                 logd(f"  • [{step_name}] {msg}")
                 self._end_step(step_key, detail=msg)
                 self._record_result(step_name, STATUS_SKIPPED, msg, step_key=step_key)
-                return None
+                return []
 
-            synced_exe_map: dict[str, str] = {}
-            test_dir = Path(TargetConfig.get_test_dir(target_spec.key, self.project_root))
-            candidate_exe = test_dir / target_spec.exe_name
-            if candidate_exe.is_file():
-                synced_exe_map[target_spec.key] = str(candidate_exe)
+            generated_scripts: list[str] = []
+            failed_labels: list[str] = []
+            total_tests = max(1, len(testable_specs))
 
-            generated_files = generate_app_pytest_scripts(
-                project_root=self.project_root,
-                specs=[target_spec],
-                target_versions=target_versions,
-                synced_exe_paths=synced_exe_map,
-            )
+            for idx, target_spec in enumerate(testable_specs):
+                self._check_cancelled(f"대상({target_spec.label}) pytest 전 취소되었습니다.")
+                sub_ratio = (idx + 0.2) / total_tests
+                self._emit_progress(
+                    self.timer.build_progress_payload(
+                        step_key=step_key,
+                        phase="running",
+                        detail=f"pytest 실행 중: {target_spec.label}",
+                        phase_ratio=sub_ratio,
+                        is_final=False,
+                    )
+                )
 
-            if not generated_files:
-                msg = f"[{target_spec.label}] 생성된 pytest 스크립트가 없어 건너뜀"
-                logd(f"  • [{step_name}] {msg}")
-                self._end_step(step_key, detail=msg)
-                self._record_result(step_name, STATUS_SKIPPED, msg, step_key=step_key)
-                return None
+                synced_exe_map: dict[str, str] = {}
+                test_dir = Path(TargetConfig.get_test_dir(target_spec.key, self.project_root))
+                candidate_exe = test_dir / target_spec.exe_name
+                if candidate_exe.is_file():
+                    synced_exe_map[target_spec.key] = str(candidate_exe)
 
-            generated_script = str(generated_files[0])
+                generated_files = generate_app_pytest_scripts(
+                    project_root=self.project_root,
+                    specs=[target_spec],
+                    target_versions=target_versions,
+                    synced_exe_paths=synced_exe_map,
+                )
 
-            if not getattr(self, "run_tests", False):
-                msg = f"[{target_spec.label}] pytest 스크립트 생성 완료 (run_tests=False 로 실행 생략)"
-                logd(f"  • [{step_name}] {msg}")
-                self._end_step(step_key, detail=msg)
-                self._record_result(step_name, STATUS_SUCCESS, msg, step_key=step_key)
-                return generated_script
+                if not generated_files:
+                    logd(f"  • [{step_name}] [{target_spec.label}] 생성된 pytest 스크립트가 없어 건너뜀")
+                    continue
 
-            extra_args = list(getattr(self, "pytest_args", None) or ["-v"])
-            cmd = [py_exe, "-m", "pytest", generated_script, *extra_args]
+                generated_script = str(generated_files[0])
+                generated_scripts.append(generated_script)
 
-            self._check_cancelled()
-            proc_res = self._run_cmd(cmd, cwd=self.project_root, check=False)
-            self._check_cancelled()
+                if not getattr(self, "run_tests", False):
+                    logd(f"  • [{step_name}] [{target_spec.label}] 스크립트 생성 완료 (run_tests=False)")
+                    continue
 
-            if proc_res.returncode != 0:
-                tail_lines = [ln for ln in (proc_res.stdout or "").splitlines() if ln.strip()][-5:]
-                tail_summary = " | ".join(tail_lines)
-                fail_msg = (
+                extra_args = list(getattr(self, "pytest_args", None) or ["-v"])
+                cmd = [py_exe, "-m", "pytest", generated_script, *extra_args]
+
+                # [테스트 전] 대상 앱 종료
+                self._send_stop_to_targets(
+                    reason=f"before_app_test:{target_spec.key}",
+                    target_keys=[target_spec.key],
+                    settle_after=True,
+                )
+
+                proc_res = None
+                test_exc: BaseException | None = None
+                try:
+                    self._check_cancelled()
+                    proc_res = self._run_cmd(cmd, cwd=self.project_root, check=False)
+                    self._check_cancelled()
+                except BaseException as exc:
+                    test_exc = exc
+                    raise
+                finally:
+                    # [테스트 종료 후] 테스트 성공/실패/예외/취소 여부와 무관하게 대상 앱 종료
+                    if test_exc is not None:
+                        post_reason = (
+                            f"after_app_test_cancelled:{target_spec.key}"
+                            if isinstance(test_exc, InterruptedError) or self._is_cancelled()
+                            else f"after_app_test_exception:{target_spec.key}"
+                        )
+                    elif proc_res is not None and proc_res.returncode != 0:
+                        post_reason = f"after_app_test_failed:{target_spec.key}(exit={proc_res.returncode})"
+                    else:
+                        post_reason = f"after_app_test_passed:{target_spec.key}"
+
+                    self._send_stop_to_targets(
+                        reason=post_reason,
+                        target_keys=[target_spec.key],
+                        settle_after=False,
+                    )
+
+                if proc_res is not None and proc_res.returncode != 0:
+                    tail_lines = [ln for ln in (proc_res.stdout or "").splitlines() if ln.strip()][-5:]
+                    tail_summary = " | ".join(tail_lines)
+                    fail_msg = (
                         f"[{target_spec.label}] pytest 실패 또는 미실행 (exit={proc_res.returncode})"
                         + (f" - {tail_summary}" if tail_summary else "")
-                    )                
-                loge(f"  ❌ [{step_name}] {fail_msg}")
-                if getattr(self, "test_fail_build", True):
-                    raise RuntimeError(fail_msg)
-                self._end_step(step_key, detail=fail_msg)
-                self._record_result(step_name, STATUS_FAILED, fail_msg, step_key=step_key)
-                return generated_script
+                    )
+                    loge(f"  ❌ [{step_name}] {fail_msg}")
+                    failed_labels.append(target_spec.label)
+                    if getattr(self, "test_fail_build", True):
+                        raise RuntimeError(fail_msg)
+                else:
+                    logd(f"  • [{step_name}] [{target_spec.label}] pytest 통과 완료")
 
-            msg = f"[{target_spec.label}] pytest 생성 및 통과 완료"
+            if not generated_scripts:
+                msg = "생성된 pytest 스크립트가 없어 건너뜀"
+                self._end_step(step_key, detail=msg)
+                self._record_result(step_name, STATUS_SKIPPED, msg, step_key=step_key)
+                return []
 
+            if failed_labels:
+                msg = f"pytest 완료 (일부 실패: {failed_labels}, scripts={len(generated_scripts)})"
+                self._end_step(step_key, detail=msg)
+                self._record_result(step_name, STATUS_FAILED, msg, step_key=step_key)
+                return generated_scripts
+
+            mode_note = "실행 생략(run_tests=False)" if not getattr(self, "run_tests", False) else "통과 완료"
+            msg = f"pytest 스크립트 {len(generated_scripts)}건 생성 및 {mode_note}"
             logd(f"  • [{step_name}] {msg}")
             self._end_step(step_key, detail=msg)
             self._record_result(step_name, STATUS_SUCCESS, msg, step_key=step_key)
-            return generated_script
+            return generated_scripts
 
         except Exception as e:
             msg = f"실패: {e}"
@@ -898,12 +1145,60 @@ class BuildApp:
             self._record_result(step_name, STATUS_FAILED, msg, step_key=step_key)
             raise
 
+    def _archive_selected_targets(
+        self,
+        specs: list[AppTargetSpec],
+        target_versions: dict[str, str],
+    ) -> list[str]:
+        """copy_to_archive=True인 앱의 빌드된 EXE를 BuildArchiveManager로 버전별 아카이빙."""
+        archived_paths: list[str] = []
+        git_commit = self._resolve_git_commit()
+        step_timings = self._collect_step_timings_snapshot()
+
+        for spec in specs:
+            self._check_cancelled(f"[{spec.label}] 아카이빙 중 취소되었습니다.")
+            if not getattr(spec, "copy_to_archive", True):
+                logd(f"  • [{spec.label}] copy_to_archive=False (아카이빙 건너뜀)")
+                continue
+
+            resolved_exe = resolve_built_exe_path(
+                project_root=self.project_root,
+                target_key=spec.key,
+                default_exe_name=spec.exe_name,
+            )
+            if not resolved_exe or not os.path.isfile(resolved_exe):
+                logd(f"  • [{spec.label}] 아카이빙 대상 EXE 미존재 (건너뜀): {spec.exe_name}")
+                continue
+
+            app_ver = self.version_service.get_target_version(spec.key, target_versions)
+            target_mode = self._resolve_target_mode(spec.key)
+            manifest = self.archive_manager.archive_exe_build(
+                app_key=spec.key,
+                app_name=spec.label,
+                version=app_ver,
+                exe_path=resolved_exe,
+                mode=target_mode,
+                bump_unit=self._resolve_target_bump_unit(spec.key),
+                git_commit=git_commit,
+                clean_build=self.clean_build,
+                step_timings=step_timings,
+            )
+            exe_meta = manifest.get(BuildArchiveManager.KEY_EXE, {})
+            archived_file = exe_meta.get(BuildArchiveManager.KEY_ARCHIVE_PATH)
+            if archived_file:
+                archived_paths.append(str(archived_file))
+                logd(
+                    f"  • [{spec.label}] 버전 아카이브 완료: {archived_file} "
+                    f"(v{app_ver}, sha256={str(exe_meta.get('sha256', ''))[:12]})"
+                )
+        return archived_paths
+
     def step8_create_release_artifacts(self, target_versions: dict[str, str]) -> list[str]:
-        """[Step 8] 메인 앱 및 서브 앱 동일하게 개별 버전 기준 릴리스 아카이브 및 SHA-256 생성."""
+        """[Step 8] 메인 앱 및 서브 앱 동일하게 개별 버전 릴리스 아카이브·SHA-256 생성 및 버전별 EXE 아카이빙."""
         step_key = STEP_RELEASE
         step_name = "Step 8: Release Package"
-        self._begin_step(step_key, detail="앱별 릴리스 패키지 생성")
-        logd(f"[{step_name}] 앱별 개별 버전 릴리스 패키지 생성...")
+        self._begin_step(step_key, detail="앱별 릴리스 패키지 및 아카이브 생성")
+        logd(f"[{step_name}] 앱별 개별 버전 릴리스 패키지 및 버전 아카이브 생성...")
         try:
             self._check_cancelled()
             dist_root = TargetConfig.get_dist_root(self.project_root)
@@ -914,18 +1209,27 @@ class BuildApp:
                 self._record_result(step_name, STATUS_SKIPPED, msg, step_key=step_key)
                 return []
 
+            selected_specs = self._iter_selected_specs()
             created_releases = self.packaging_service.create_update_zips(
-                specs=self._iter_selected_specs(),
+                specs=selected_specs,
                 target_versions=target_versions,
             )
-            if not created_releases:
-                msg = "생성된 앱별 릴리스 파일이 없음"
+            archived_exes = self._archive_selected_targets(
+                specs=selected_specs,
+                target_versions=target_versions,
+            )
+
+            if not created_releases and not archived_exes:
+                msg = "생성된 앱별 릴리스 파일 및 아카이브가 없음"
                 self._end_step(step_key, detail=msg)
                 self._record_result(step_name, STATUS_SKIPPED, msg, step_key=step_key)
                 return []
 
             names = ", ".join(os.path.basename(p) for p in created_releases)
-            msg = f"Created {len(created_releases)} release artifact(s): {names}"
+            msg = (
+                f"Created {len(created_releases)} release zip(s) [{names}], "
+                f"archived {len(archived_exes)} exe(s)"
+            )
             self._end_step(step_key, detail=msg)
             self._record_result(step_name, STATUS_SUCCESS, msg, step_key=step_key)
             return created_releases
@@ -973,6 +1277,7 @@ class BuildApp:
                     combo_tag=combo_tag,
                     artifact_name=artifact_name,
                     installer_config=self.installer_config,
+                    full_combo_tag=self.get_full_combo_tag(),
                 )
             except TypeError:
                 latest_installer, msg = create_fn(
@@ -1023,6 +1328,9 @@ class BuildApp:
                 self._check_cancelled()
                 return True
 
+            # [빌드 시작 전] 대상 앱 종료
+            self._send_stop_to_build_targets()
+
             self.step1_convert_ui_files()
             py_exe, mode = self.step2_setup_environment_and_config()
             self.step3_prepare_public_key_module()
@@ -1039,20 +1347,29 @@ class BuildApp:
             self.step9_create_windows_installer(py_exe, main_app_version, is_final=True)
 
             self._check_cancelled()
+            if self.restart_after_build:
+                self._send_restart_to_build_targets(reason="build_success")
+
             logd("\n=== 전체 빌드 파이프라인 성공 완료 ===")
             return True
         except InterruptedError as ie:
             logd(f"[CANCELLED] 빌드 프로세스 취소됨: {ie}")
             if previous_versions:
                 self.version_service.rollback(previous_versions)
+            if self.restart_on_failure:
+                self._send_restart_to_build_targets(reason="cancelled_rollback")
             return False
         except Exception as e:
             if self._is_cancelled():
                 logd(f"[CANCELLED] 취소 처리 중 예외 발생: {e}")
                 if previous_versions:
                     self.version_service.rollback(previous_versions)
+                if self.restart_on_failure:
+                    self._send_restart_to_build_targets(reason="cancelled_rollback")
                 return False
             loge(f"\n[FAILED] 빌드 프로세스 중 예외 발생: {e}")
             if previous_versions:
                 self.version_service.rollback(previous_versions)
+            if self.restart_on_failure:
+                self._send_restart_to_build_targets(reason="failed_rollback")
             return False

@@ -84,6 +84,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--clean-work", action="store_true", help="대상별 work_out 정리")
     parser.add_argument("--clean-dist", action="store_true", help="대상별 dist_out 정리")
     parser.add_argument("--clean-spec", action="store_true", help="대상별 .spec 파일 정리 후 필요 시 재생성")
+    parser.add_argument("--skip-tests", action="store_true", help="앱별 pytest 실행 생략 (스크립트만 생성)")
+    parser.add_argument(
+        "--pytest-args",
+        nargs="+",
+        default=None,
+        help="pytest 실행 시 전달할 추가 인자 (예: --pytest-args -v -s)",
+    )
+    parser.add_argument(
+        "--no-test-fail-build",
+        action="store_true",
+        help="pytest 실패 시에도 전체 빌드를 실패로 중단하지 않고 계속 진행",
+    )
 
     add_build_config_arguments(parser)
     return parser
@@ -110,9 +122,13 @@ def main(argv: list[str] | None = None) -> int:
         clean_spec=args.clean_spec,
         dir_config_json=cli_cfg["dir_config_json"],
         app_config_json=cli_cfg["app_config_json"],
+        installer_config_json=cli_cfg.get("installer_config_json"),
         cli_dir_overrides=cli_cfg["cli_dir_overrides"],
         cli_app_overrides=cli_cfg["cli_app_overrides"],
         cli_installer_overrides=cli_installer,
+        run_tests=not bool(args.skip_tests),
+        pytest_args=args.pytest_args,
+        test_fail_build=not bool(args.no_test_fail_build),
     )
     ok = app.run()
     return EXIT_CODE_SUCCESS if ok else EXIT_CODE_FAILURE

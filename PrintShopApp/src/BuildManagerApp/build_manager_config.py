@@ -8,26 +8,116 @@ from Common.path_mgr import PathMgr
 
 BUILD_MANAGER_INI_NAME: str = f"{PathMgr.APP_NAME}.ini"
 
+SECTION_MANAGER_CONFIG: str = "BuildManagerConfig"
+SECTION_DIRS_CONFIG: str = "BuildDirsConfig"
+SECTION_APPS_CONFIG: str = "BuildAppsConfig"
+SECTION_INSTALLER_CONFIG: str = "BuildInstallerConfig"
+
+SECTION_ORDER_MANAGER: int = 30
+SECTION_ORDER_DIRS: int = 31
+SECTION_ORDER_APPS: int = 32
+SECTION_ORDER_INSTALLER: int = 33
+
+DEFAULT_BUILD_MODE: str = "production"
+DEFAULT_WORK_DIR_NAME: str = "work"
+DEFAULT_DIST_DIR_NAME: str = "dist"
+DEFAULT_RELEASE_DIR_NAME: str = "release"
+DEFAULT_INSTALL_DIR_NAME: str = "installer"
+
+KEY_PROJECT_ROOT: str = "project_root"
+KEY_SELECTED_TARGETS: str = "selected_targets"
+KEY_MODE: str = "mode"
+KEY_BUMP_UNIT: str = "bump_unit"
+KEY_SKIP_INSTALLER: str = "skip_installer"
+KEY_INSTALLER_ONLY: str = "installer_only"
+KEY_CLEAN_BUILD: str = "clean_build"
+KEY_CLEAN_WORK_OUT: str = "clean_work_out"
+KEY_CLEAN_DIST_OUT: str = "clean_dist_out"
+KEY_CLEAN_SPEC: str = "clean_spec"
+KEY_AUTO_SCROLL_LOG: str = "auto_scroll_log"
+
+KEY_WORK_DIR_NAME: str = "work_dir_name"
+KEY_DIST_DIR_NAME: str = "dist_dir_name"
+KEY_RELEASE_DIR_NAME: str = "release_dir_name"
+KEY_INSTALL_DIR_NAME: str = "install_dir_name"
+
+KEY_APP_OVERRIDES: str = "app_overrides"
+
+KEY_TARGETS: str = "targets"
+KEY_NAME: str = "name"
+KEY_VERSION_SOURCE_ID: str = "version_source_id"
+KEY_EXTRA: str = "extra"
+
+DIR_CONFIG_KEYS: tuple[str, ...] = (
+    KEY_WORK_DIR_NAME,
+    KEY_DIST_DIR_NAME,
+    KEY_RELEASE_DIR_NAME,
+    KEY_INSTALL_DIR_NAME,
+)
+
+__all__ = [
+    "BUILD_MANAGER_INI_NAME",
+    "BuildInstallerConfig",
+    "BuildManagerConfig",
+    "BuildManagerIniStore",
+    "BuildTargetConfig",
+    "BuildDirsConfig",
+    "DEFAULT_BUILD_MODE",
+    "DEFAULT_DIST_DIR_NAME",
+    "DEFAULT_INSTALL_DIR_NAME",
+    "DEFAULT_RELEASE_DIR_NAME",
+    "DEFAULT_WORK_DIR_NAME",
+    "DIR_CONFIG_KEYS",
+    "KEY_APP_OVERRIDES",
+    "KEY_AUTO_SCROLL_LOG",
+    "KEY_BUMP_UNIT",
+    "KEY_CLEAN_BUILD",
+    "KEY_CLEAN_DIST_OUT",
+    "KEY_CLEAN_SPEC",
+    "KEY_CLEAN_WORK_OUT",
+    "KEY_DIST_DIR_NAME",
+    "KEY_EXTRA",
+    "KEY_INSTALLER_ONLY",
+    "KEY_INSTALL_DIR_NAME",
+    "KEY_MODE",
+    "KEY_NAME",
+    "KEY_PROJECT_ROOT",
+    "KEY_RELEASE_DIR_NAME",
+    "KEY_SELECTED_TARGETS",
+    "KEY_SKIP_INSTALLER",
+    "KEY_TARGETS",
+    "KEY_VERSION_SOURCE_ID",
+    "KEY_WORK_DIR_NAME",
+    "SECTION_APPS_CONFIG",
+    "SECTION_DIRS_CONFIG",
+    "SECTION_INSTALLER_CONFIG",
+    "SECTION_MANAGER_CONFIG",
+    "SECTION_ORDER_APPS",
+    "SECTION_ORDER_DIRS",
+    "SECTION_ORDER_INSTALLER",
+    "SECTION_ORDER_MANAGER",
+]
+
 
 class BuildManagerConfig(FileConfigManager):
     """[BuildManagerConfig] 섹션: 앱 기본 설정 및 메인 UI 상태 통합 관리."""
 
     file_name = BUILD_MANAGER_INI_NAME
     auto_save = False
-    section = "BuildManagerConfig"
-    section_order = 30
+    section = SECTION_MANAGER_CONFIG
+    section_order = SECTION_ORDER_MANAGER
     schema = {
-        "project_root": {"default": "", "type": ConfigType.STRING},
-        "selected_targets": {"default": [], "type": ConfigType.LIST},
-        "mode": {"default": "production", "type": ConfigType.STRING},
-        "bump_unit": {"default": "", "type": ConfigType.STRING},
-        "skip_installer": {"default": False, "type": ConfigType.BOOLEAN},
-        "installer_only": {"default": False, "type": ConfigType.BOOLEAN},
-        "clean_build": {"default": False, "type": ConfigType.BOOLEAN},
-        "clean_work_out": {"default": False, "type": ConfigType.BOOLEAN},
-        "clean_dist_out": {"default": False, "type": ConfigType.BOOLEAN},
-        "clean_spec": {"default": False, "type": ConfigType.BOOLEAN},
-        "auto_scroll_log": {"default": True, "type": ConfigType.BOOLEAN},
+        KEY_PROJECT_ROOT: {"default": "", "type": ConfigType.STRING},
+        KEY_SELECTED_TARGETS: {"default": [], "type": ConfigType.LIST},
+        KEY_MODE: {"default": DEFAULT_BUILD_MODE, "type": ConfigType.STRING},
+        KEY_BUMP_UNIT: {"default": "", "type": ConfigType.STRING},
+        KEY_SKIP_INSTALLER: {"default": False, "type": ConfigType.BOOLEAN},
+        KEY_INSTALLER_ONLY: {"default": False, "type": ConfigType.BOOLEAN},
+        KEY_CLEAN_BUILD: {"default": False, "type": ConfigType.BOOLEAN},
+        KEY_CLEAN_WORK_OUT: {"default": False, "type": ConfigType.BOOLEAN},
+        KEY_CLEAN_DIST_OUT: {"default": False, "type": ConfigType.BOOLEAN},
+        KEY_CLEAN_SPEC: {"default": False, "type": ConfigType.BOOLEAN},
+        KEY_AUTO_SCROLL_LOG: {"default": True, "type": ConfigType.BOOLEAN},
     }
 
 
@@ -36,25 +126,25 @@ class BuildDirsConfig(FileConfigManager):
 
     file_name = BUILD_MANAGER_INI_NAME
     auto_save = False
-    section = "BuildDirsConfig"
-    section_order = 31
+    section = SECTION_DIRS_CONFIG
+    section_order = SECTION_ORDER_DIRS
     schema = {
-        "work_dir_name": {"default": "work", "type": ConfigType.STRING},
-        "dist_dir_name": {"default": "dist", "type": ConfigType.STRING},
-        "release_dir_name": {"default": "release", "type": ConfigType.STRING},
-        "install_dir_name": {"default": "installer", "type": ConfigType.STRING},
+        KEY_WORK_DIR_NAME: {"default": DEFAULT_WORK_DIR_NAME, "type": ConfigType.STRING},
+        KEY_DIST_DIR_NAME: {"default": DEFAULT_DIST_DIR_NAME, "type": ConfigType.STRING},
+        KEY_RELEASE_DIR_NAME: {"default": DEFAULT_RELEASE_DIR_NAME, "type": ConfigType.STRING},
+        KEY_INSTALL_DIR_NAME: {"default": DEFAULT_INSTALL_DIR_NAME, "type": ConfigType.STRING},
     }
 
 
-class BuildAppsConfig(FileConfigManager):
+class BuildTargetConfig(FileConfigManager):
     """[BuildAppsConfig] 섹션: 개별 앱 오버라이드 설정 (apps)."""
 
     file_name = BUILD_MANAGER_INI_NAME
     auto_save = False
-    section = "BuildAppsConfig"
-    section_order = 32
+    section = SECTION_APPS_CONFIG
+    section_order = SECTION_ORDER_APPS
     schema = {
-        "app_overrides": {"default": {}, "type": ConfigType.DICT},
+        KEY_APP_OVERRIDES: {"default": {}, "type": ConfigType.DICT},
     }
 
 
@@ -63,15 +153,15 @@ class BuildInstallerConfig(FileConfigManager):
 
     file_name = BUILD_MANAGER_INI_NAME
     auto_save = False
-    section = "BuildInstallerConfig"
-    section_order = 33
+    section = SECTION_INSTALLER_CONFIG
+    section_order = SECTION_ORDER_INSTALLER
     schema = {
-        "targets": {"default": [], "type": ConfigType.LIST},
-        "name": {"default": "", "type": ConfigType.STRING},
-        "version_source_id": {"default": "", "type": ConfigType.STRING},
-        "installer_only": {"default": False, "type": ConfigType.BOOLEAN},
-        "skip_installer": {"default": False, "type": ConfigType.BOOLEAN},
-        "extra": {"default": {}, "type": ConfigType.DICT},
+        KEY_TARGETS: {"default": [], "type": ConfigType.LIST},
+        KEY_NAME: {"default": "", "type": ConfigType.STRING},
+        KEY_VERSION_SOURCE_ID: {"default": "", "type": ConfigType.STRING},
+        KEY_INSTALLER_ONLY: {"default": False, "type": ConfigType.BOOLEAN},
+        KEY_SKIP_INSTALLER: {"default": False, "type": ConfigType.BOOLEAN},
+        KEY_EXTRA: {"default": {}, "type": ConfigType.DICT},
     }
 
 
@@ -79,16 +169,31 @@ class BuildManagerIniStore:
     """각 섹션 Config 인스턴스를 통해 개별 로드/저장합니다."""
 
     def __init__(self, ini_dir: str | Path | None = None) -> None:
+        self.ini_dir: Path | None = Path(ini_dir).resolve() if ini_dir else None
         self.manager_cfg = BuildManagerConfig()
         self.dirs_cfg = BuildDirsConfig()
-        self.apps_cfg = BuildAppsConfig()
+        self.apps_cfg = BuildTargetConfig()
         self.installer_cfg = BuildInstallerConfig()
-        self.reload_all()
+        self.reload_all(self.ini_dir)
 
     def _all_managers(self) -> tuple[FileConfigManager, ...]:
         return (self.manager_cfg, self.dirs_cfg, self.apps_cfg, self.installer_cfg)
 
+    def _apply_ini_dir(self, ini_dir: str | Path | None) -> None:
+        if ini_dir is None:
+            return
+        target_dir = Path(ini_dir).resolve()
+        self.ini_dir = target_dir
+        target_file = target_dir / BUILD_MANAGER_INI_NAME
+        for mgr in self._all_managers():
+            if hasattr(mgr, "filepath"):
+                try:
+                    mgr.filepath = target_file
+                except Exception:
+                    pass
+
     def reload_all(self, ini_dir: str | Path | None = None) -> None:
+        self._apply_ini_dir(ini_dir if ini_dir is not None else self.ini_dir)
         for mgr in self._all_managers():
             mgr.auto_save = False
             if hasattr(mgr, "_create_parser") and hasattr(mgr, "_load_and_inject"):
@@ -102,46 +207,48 @@ class BuildManagerIniStore:
         ini_path = Path(self.manager_cfg.filepath)
         if not ini_path.is_file():
             return {}
-        self.reload_all()
-        bump_raw = str(self.manager_cfg.get("bump_unit") or "").strip()
+        self.reload_all(ini_path.parent)
+        bump_raw = str(self.manager_cfg.get(KEY_BUMP_UNIT) or "").strip()
+        auto_scroll_raw = self.manager_cfg.get(KEY_AUTO_SCROLL_LOG)
         return {
-            "project_root": str(self.manager_cfg.get("project_root") or "").strip(),
-            "selected_targets": list(self.manager_cfg.get("selected_targets") or []),
-            "mode": str(self.manager_cfg.get("mode") or "production").strip() or "production",
-            "bump_unit": bump_raw if bump_raw else None,
-            "skip_installer": bool(self.manager_cfg.get("skip_installer")),
-            "installer_only": bool(self.manager_cfg.get("installer_only")),
-            "clean_build": bool(self.manager_cfg.get("clean_build")),
-            "clean_work_out": bool(self.manager_cfg.get("clean_work_out")),
-            "clean_dist_out": bool(self.manager_cfg.get("clean_dist_out")),
-            "clean_spec": bool(self.manager_cfg.get("clean_spec")),
-            "auto_scroll_log": bool(self.manager_cfg.get("auto_scroll_log")),
+            KEY_PROJECT_ROOT: str(self.manager_cfg.get(KEY_PROJECT_ROOT) or "").strip(),
+            KEY_SELECTED_TARGETS: list(self.manager_cfg.get(KEY_SELECTED_TARGETS) or []),
+            KEY_MODE: str(self.manager_cfg.get(KEY_MODE) or DEFAULT_BUILD_MODE).strip()
+            or DEFAULT_BUILD_MODE,
+            KEY_BUMP_UNIT: bump_raw if bump_raw else None,
+            KEY_SKIP_INSTALLER: bool(self.manager_cfg.get(KEY_SKIP_INSTALLER)),
+            KEY_INSTALLER_ONLY: bool(self.manager_cfg.get(KEY_INSTALLER_ONLY)),
+            KEY_CLEAN_BUILD: bool(self.manager_cfg.get(KEY_CLEAN_BUILD)),
+            KEY_CLEAN_WORK_OUT: bool(self.manager_cfg.get(KEY_CLEAN_WORK_OUT)),
+            KEY_CLEAN_DIST_OUT: bool(self.manager_cfg.get(KEY_CLEAN_DIST_OUT)),
+            KEY_CLEAN_SPEC: bool(self.manager_cfg.get(KEY_CLEAN_SPEC)),
+            KEY_AUTO_SCROLL_LOG: True if auto_scroll_raw is None else bool(auto_scroll_raw),
         }
 
     def save_ui_state(self, state: dict[str, Any]) -> Path:
-        self.manager_cfg.set("project_root", str(state.get("project_root") or ""))
-        self.manager_cfg.set("selected_targets", list(state.get("selected_targets") or []))
-        self.manager_cfg.set("mode", str(state.get("mode") or "production"))
-        bump_val = state.get("bump_unit")
-        self.manager_cfg.set("bump_unit", str(bump_val) if bump_val else "")
-        self.manager_cfg.set("skip_installer", bool(state.get("skip_installer", False)))
-        self.manager_cfg.set("installer_only", bool(state.get("installer_only", False)))
-        self.manager_cfg.set("clean_build", bool(state.get("clean_build", False)))
-        self.manager_cfg.set("clean_work_out", bool(state.get("clean_work_out", False)))
-        self.manager_cfg.set("clean_dist_out", bool(state.get("clean_dist_out", False)))
-        self.manager_cfg.set("clean_spec", bool(state.get("clean_spec", False)))
-        if "auto_scroll_log" in state:
-            self.manager_cfg.set("auto_scroll_log", bool(state.get("auto_scroll_log", True)))
+        self.manager_cfg.set(KEY_PROJECT_ROOT, str(state.get(KEY_PROJECT_ROOT) or ""))
+        self.manager_cfg.set(KEY_SELECTED_TARGETS, list(state.get(KEY_SELECTED_TARGETS) or []))
+        self.manager_cfg.set(KEY_MODE, str(state.get(KEY_MODE) or DEFAULT_BUILD_MODE))
+        bump_val = state.get(KEY_BUMP_UNIT)
+        self.manager_cfg.set(KEY_BUMP_UNIT, str(bump_val) if bump_val else "")
+        self.manager_cfg.set(KEY_SKIP_INSTALLER, bool(state.get(KEY_SKIP_INSTALLER, False)))
+        self.manager_cfg.set(KEY_INSTALLER_ONLY, bool(state.get(KEY_INSTALLER_ONLY, False)))
+        self.manager_cfg.set(KEY_CLEAN_BUILD, bool(state.get(KEY_CLEAN_BUILD, False)))
+        self.manager_cfg.set(KEY_CLEAN_WORK_OUT, bool(state.get(KEY_CLEAN_WORK_OUT, False)))
+        self.manager_cfg.set(KEY_CLEAN_DIST_OUT, bool(state.get(KEY_CLEAN_DIST_OUT, False)))
+        self.manager_cfg.set(KEY_CLEAN_SPEC, bool(state.get(KEY_CLEAN_SPEC, False)))
+        if KEY_AUTO_SCROLL_LOG in state:
+            self.manager_cfg.set(KEY_AUTO_SCROLL_LOG, bool(state.get(KEY_AUTO_SCROLL_LOG, True)))
         self.manager_cfg.save()
         return Path(self.manager_cfg.filepath)
 
     def load_target_sections(self) -> dict[str, Any]:
-        self.reload_all()
+        self.reload_all(self.ini_dir)
         dirs = {
             k: str(self.dirs_cfg.get(k) or "").strip()
-            for k in ("work_dir_name", "dist_dir_name", "release_dir_name", "install_dir_name")
+            for k in DIR_CONFIG_KEYS
         }
-        raw_apps = self.apps_cfg.get("app_overrides")
+        raw_apps = self.apps_cfg.get(KEY_APP_OVERRIDES)
         app_overrides: dict[str, dict[str, Any]] = {}
         if isinstance(raw_apps, dict):
             for k, v in raw_apps.items():
@@ -149,9 +256,9 @@ class BuildManagerIniStore:
                     app_overrides[str(k)] = dict(v)
 
         has_targets_key = self.installer_cfg.config.has_option(
-            self.installer_cfg.section, "targets"
+            self.installer_cfg.section, KEY_TARGETS
         )
-        raw_targets = self.installer_cfg.get("targets")
+        raw_targets = self.installer_cfg.get(KEY_TARGETS)
         if isinstance(raw_targets, list):
             inst_targets: list[str] | None = [
                 str(x).strip() for x in raw_targets if str(x).strip()
@@ -161,16 +268,17 @@ class BuildManagerIniStore:
         else:
             inst_targets = None
 
-        raw_extra = self.installer_cfg.get("extra")
+        raw_extra = self.installer_cfg.get(KEY_EXTRA)
         inst_extra = dict(raw_extra) if isinstance(raw_extra, dict) else {}
 
         installer = {
-            "targets": inst_targets or None,
-            "name": str(self.installer_cfg.get("name") or "").strip() or None,
-            "version_source_id": str(self.installer_cfg.get("version_source_id") or "").strip() or None,
-            "installer_only": bool(self.installer_cfg.get("installer_only")),
-            "skip_installer": bool(self.installer_cfg.get("skip_installer")),
-            "extra": inst_extra,
+            KEY_TARGETS: inst_targets or None,
+            KEY_NAME: str(self.installer_cfg.get(KEY_NAME) or "").strip() or None,
+            KEY_VERSION_SOURCE_ID: str(self.installer_cfg.get(KEY_VERSION_SOURCE_ID) or "").strip()
+            or None,
+            KEY_INSTALLER_ONLY: bool(self.installer_cfg.get(KEY_INSTALLER_ONLY)),
+            KEY_SKIP_INSTALLER: bool(self.installer_cfg.get(KEY_SKIP_INSTALLER)),
+            KEY_EXTRA: inst_extra,
         }
 
         return {
@@ -187,7 +295,7 @@ class BuildManagerIniStore:
         installer_values: dict[str, Any] | None = None,
     ) -> Path:
         if dir_values is not None:
-            for k in ("work_dir_name", "dist_dir_name", "release_dir_name", "install_dir_name"):
+            for k in DIR_CONFIG_KEYS:
                 val = str(dir_values.get(k) or "").strip()
                 if val:
                     self.dirs_cfg.set(k, val)
@@ -199,30 +307,30 @@ class BuildManagerIniStore:
                 for k, v in app_overrides.items()
                 if isinstance(v, dict) and v
             }
-            self.apps_cfg.set("app_overrides", cleaned_apps)
+            self.apps_cfg.set(KEY_APP_OVERRIDES, cleaned_apps)
             self.apps_cfg.save()
 
         if installer_values is not None:
-            targets = installer_values.get("targets")
+            targets = installer_values.get(KEY_TARGETS)
             self.installer_cfg.set(
-                "targets",
+                KEY_TARGETS,
                 [str(x).strip() for x in targets if str(x).strip()]
                 if isinstance(targets, (list, tuple))
                 else [],
             )
-            self.installer_cfg.set("name", str(installer_values.get("name") or "").strip())
+            self.installer_cfg.set(KEY_NAME, str(installer_values.get(KEY_NAME) or "").strip())
             self.installer_cfg.set(
-                "version_source_id",
-                str(installer_values.get("version_source_id") or "").strip(),
+                KEY_VERSION_SOURCE_ID,
+                str(installer_values.get(KEY_VERSION_SOURCE_ID) or "").strip(),
             )
             self.installer_cfg.set(
-                "installer_only", bool(installer_values.get("installer_only", False))
+                KEY_INSTALLER_ONLY, bool(installer_values.get(KEY_INSTALLER_ONLY, False))
             )
             self.installer_cfg.set(
-                "skip_installer", bool(installer_values.get("skip_installer", False))
+                KEY_SKIP_INSTALLER, bool(installer_values.get(KEY_SKIP_INSTALLER, False))
             )
-            extra = installer_values.get("extra")
-            self.installer_cfg.set("extra", dict(extra) if isinstance(extra, dict) else {})
+            extra = installer_values.get(KEY_EXTRA)
+            self.installer_cfg.set(KEY_EXTRA, dict(extra) if isinstance(extra, dict) else {})
             self.installer_cfg.save()
 
         return Path(self.manager_cfg.filepath)

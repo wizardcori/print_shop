@@ -6,7 +6,6 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-
 APP_DIR = Path(__file__).resolve().parent
 SRC_DIR = APP_DIR.parent
 
@@ -15,22 +14,20 @@ for p in (str(APP_DIR), str(SRC_DIR)):
         sys.path.insert(0, p)
 
 from app_name import APP_NAME
+
 # 1
 from Common.path_mgr import PathMgr
+
 PathMgr.refresh_paths(app_name=APP_NAME)
 
 # 2
-from Common.config import FileConfigManager, DbConfigManager
+from Common.config import DbConfigManager, FileConfigManager  # noqa: F401
 
 # 3
-from Common.log import setup_global_log, set_file_tag, logd, loge, LogManagerRegistry, FileTagManager  # 또는 dlog
+from Common.log import FileTagManager, LogManagerRegistry, logd, loge, set_file_tag, setup_global_log  # noqa: F401
+
 setup_global_log()
-
 set_file_tag("BUILD_MGR")
-
-
-from pathlib import Path
-import sys
 
 
 def get_base_dir() -> Path:
@@ -54,33 +51,61 @@ SRC_DIR = find_dir_parent_direction(__file__, "src")
 if SRC_DIR and str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-PROJECT_ROOT = SRC_DIR.parent if SRC_DIR else Path(__file__).resolve().parent
-sys.path.insert(0, str(PROJECT_ROOT))
+PROJECT_ROOT = find_dir_parent_direction(SRC_DIR, "PrintShopApp")
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, str(APP_DIR))
+APP_DIR_STR = os.path.dirname(os.path.abspath(__file__))
+if APP_DIR_STR not in sys.path:
+    sys.path.insert(0, APP_DIR_STR)
 
-
-from Common.prio_worker_queue import TaskManager  # noqa: E402
+from Common.app_control import QtAppControlReceiver  # noqa: E402
 from BuildManagerApp.build_manager_app import BuildManagerWindow  # noqa: E402
+from Common.prio_worker_queue import TaskManager  # noqa: E402
 
 
-def run_app(argv: list[str] | None = None) -> int:
+def _cleanup_build_manager() -> None:
+    """작업 큐 취소/외부 프로세스 정리/워커 종료를 수행합니다."""
+    try:
+        TaskManager.on_about_to_quit()
+    except Exception:
+        pass
+
+
+def run_app(app_name: str | None = None, argv: list[str] | None = None) -> int:
     """PrintShopApp PySide6 빌드 매니저 애플리케이션을 실행합니다."""
-    logd("[MainApp] 애플리케이션 시작 준비")
+    resolved_app_name = (app_name or APP_NAME or "BuildManagerApp").strip()
+    logd(f"[MainApp] 애플리케이션 시작 준비 (app_name={resolved_app_name})")
+
     app = QApplication.instance() or QApplication(argv if argv is not None else sys.argv)
     # 앱 전체 종료(aboutToQuit) 시 큐 작업 취소/외부 프로세스 kill/워커 종료 연결
-    app.aboutToQuit.connect(TaskManager.on_about_to_quit)
+    app.aboutToQuit.connect(_cleanup_build_manager)
+
+    ctrl = QtAppControlReceiver(
+        resolved_app_name,
+        app,
+        cleanup_fn=_cleanup_build_manager,
+        auto_start=True,
+    )
 
     window = BuildManagerWindow(project_root=PROJECT_ROOT) if PROJECT_ROOT else BuildManagerWindow()
     window.show()
     logd("[MainApp] BuildManagerWindow 표시 완료")
-    return app.exec()
+
+    exec_code = 0
+    try:
+        exec_code = app.exec()
+        return ctrl.finalize_shutdown_or_restart(
+            cleanup_fn=_cleanup_build_manager,
+            exit_code=exec_code,
+        )
+    finally:
+        ctrl.stop()
 
 
-def main(argv: list[str] | None = None) -> int:
-    return run_app(argv)
+def main(app_name: str | None = None, argv: list[str] | None = None) -> int:
+    return run_app(app_name=app_name, argv=argv)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(APP_NAME))

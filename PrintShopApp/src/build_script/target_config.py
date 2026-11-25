@@ -1,5 +1,5 @@
 """
-앱별 빌드 대상 상수 및 스펙 정의 모듈 (build_targets.py)
+앱별 빌드 대상 상수 및 스펙 정의 모듈 (target_config.py)
 """
 
 from __future__ import annotations
@@ -70,7 +70,6 @@ __all__ = [
     "APP_OVERRIDE_FIELDS",
     "AppTargetSpec",
     "BuildDirConfig",
-    "TargetConfig",
     "DEFAULT_CONFIG_FILENAME",
     "DEFAULT_CONSOLE",
     "DEFAULT_COPY_TO_ARCHIVE",
@@ -79,6 +78,7 @@ __all__ = [
     "DEFAULT_INCLUDE_IN_INSTALLER",
     "DEFAULT_IS_INSTALLER",
     "DEFAULT_ONEFILE",
+    "DEFAULT_RUN_TEST",
     "DEFAULT_STANDALONE_INSTALLER",
     "DEFAULT_UAC_ADMIN",
     "DEFAULT_VERSION_FILENAME",
@@ -104,6 +104,7 @@ __all__ = [
     "TARGET_LABELS",
     "TARGET_SPECS",
     "TEST_DIR_NAME",
+    "TargetConfig",
     "UNKNOWN_ORDER_SORT_KEY",
     "WORK_DIR_NAME",
     "get_build_target_helpers",
@@ -166,7 +167,7 @@ class AppTargetSpec:
     console: bool = DEFAULT_CONSOLE
     version_rel_paths: tuple[str, ...] = field(default_factory=tuple)
     copy_to_test: bool = DEFAULT_COPY_TO_TEST
-    run_test: bool = DEFAULT_RUN_TEST    
+    run_test: bool = DEFAULT_RUN_TEST
     copy_to_archive: bool = DEFAULT_COPY_TO_ARCHIVE
     include_in_installer: bool = DEFAULT_INCLUDE_IN_INSTALLER
     standalone_installer: bool = DEFAULT_STANDALONE_INSTALLER
@@ -297,6 +298,7 @@ class TargetConfig(metaclass=_TargetConfigMeta):
 
         for flag_key in (
             "copy_to_test",
+            "run_test",
             "copy_to_archive",
             "include_in_installer",
             "standalone_installer",
@@ -402,6 +404,7 @@ class TargetConfig(metaclass=_TargetConfigMeta):
             ("work_dir_name", "work 루트 폴더"),
             ("dist_dir_name", "dist 루트 폴더"),
             ("release_dir_name", "release 루트 폴더"),
+            ("install_dir_name", "install 루트 폴더"),
         ):
             _validate_single_segment_name(getattr(resolved_cfg, field_name), label)
 
@@ -453,6 +456,16 @@ class TargetConfig(metaclass=_TargetConfigMeta):
         return BuildDirConfig.resolve(project_root=project_root)
 
     @classmethod
+    def get_install_root_name(cls, project_root: str | Path = PathMgr.PROJECT_ROOT) -> str:
+        """install_dir_name이 기본값('Installer')이고 명시적 변경이 없으면 release_dir_name을 유지하고,
+        별도 루트 폴더명이 지정된 경우 해당 루트 폴더명을 반환."""
+        dcfg = cls.get_dir_config(project_root)
+        inst_name = str(getattr(dcfg, "install_dir_name", "") or "").strip()
+        if inst_name and inst_name != INSTALL_DIR_NAME:
+            return _validate_single_segment_name(inst_name, "install 루트 폴더")
+        return _validate_single_segment_name(dcfg.release_dir_name, "release 루트 폴더")
+
+    @classmethod
     def _make_record(
         cls,
         order: str,
@@ -469,7 +482,7 @@ class TargetConfig(metaclass=_TargetConfigMeta):
         version_rel_paths: tuple[str, ...] | None = None,
         console: bool = DEFAULT_CONSOLE,
         copy_to_test: bool = DEFAULT_COPY_TO_TEST,
-        run_test: bool = DEFAULT_RUN_TEST,        
+        run_test: bool = DEFAULT_RUN_TEST,
         copy_to_archive: bool = DEFAULT_COPY_TO_ARCHIVE,
         include_in_installer: bool = DEFAULT_INCLUDE_IN_INSTALLER,
         standalone_installer: bool = DEFAULT_STANDALONE_INSTALLER,
@@ -534,7 +547,7 @@ class TargetConfig(metaclass=_TargetConfigMeta):
             "console": bool(console),
             "version_rel_paths": version_rel_paths or (f"{SRC_DIR_NAME}/{primary_dir}/{version_file}",),
             "copy_to_test": bool(copy_to_test),
-            "run_test": bool(run_test),            
+            "run_test": bool(run_test),
             "copy_to_archive": bool(copy_to_archive),
             "include_in_installer": bool(include_in_installer),
             "standalone_installer": bool(standalone_installer),
@@ -567,7 +580,7 @@ class TargetConfig(metaclass=_TargetConfigMeta):
             console=bool(record.get("console", DEFAULT_CONSOLE)),
             version_rel_paths=record.get("version_rel_paths", ()),
             copy_to_test=bool(record.get("copy_to_test", DEFAULT_COPY_TO_TEST)),
-            run_test=bool(record.get("run_test", DEFAULT_RUN_TEST)),            
+            run_test=bool(record.get("run_test", DEFAULT_RUN_TEST)),
             copy_to_archive=bool(record.get("copy_to_archive", DEFAULT_COPY_TO_ARCHIVE)),
             include_in_installer=bool(record.get("include_in_installer", DEFAULT_INCLUDE_IN_INSTALLER)),
             standalone_installer=bool(record.get("standalone_installer", DEFAULT_STANDALONE_INSTALLER)),
@@ -598,6 +611,7 @@ class TargetConfig(metaclass=_TargetConfigMeta):
                 console=spec.console,
                 version_rel_paths=spec.version_rel_paths,
                 copy_to_test=spec.copy_to_test,
+                run_test=spec.run_test,
                 copy_to_archive=spec.copy_to_archive,
                 include_in_installer=spec.include_in_installer,
                 standalone_installer=spec.standalone_installer,
@@ -777,6 +791,7 @@ class TargetConfig(metaclass=_TargetConfigMeta):
             _validate_single_segment_name(dcfg.work_dir_name, "work 루트 폴더"),
             _validate_single_segment_name(dcfg.dist_dir_name, "dist 루트 폴더"),
             _validate_single_segment_name(dcfg.release_dir_name, "release 루트 폴더"),
+            cls.get_install_root_name(project_root),
         ]
         if include_test:
             names.append(_validate_single_segment_name(cls.TEST_DIR_NAME, "test 루트 폴더"))
@@ -815,8 +830,8 @@ class TargetConfig(metaclass=_TargetConfigMeta):
 
     @classmethod
     def get_install_root(cls, project_root: str | Path = PathMgr.PROJECT_ROOT) -> str:
-        """인스톨러도 다른 앱과 동일하게 release 루트 기준으로 관리."""
-        return cls.get_release_root(project_root)
+        """인스톨러 저장 루트 경로 반환 (install_dir_name 오버라이드 반영)."""
+        return str(cls._resolve_root_folder_path(project_root, cls.get_install_root_name(project_root)))
 
     @classmethod
     def get_test_root(cls, project_root: str | Path = PathMgr.PROJECT_ROOT) -> str:
@@ -875,9 +890,14 @@ class TargetConfig(metaclass=_TargetConfigMeta):
         *,
         create: bool = False,
     ) -> str:
-        """인스톨러도 get_release_root 아래 레코드 폴더명으로 경로를 반환."""
+        """인스톨러 루트 아래 레코드 폴더명으로 경로를 반환."""
         key = target_key if target_key in cls.BY_KEY else INSTALLER_TARGET_KEY
-        return cls.get_release_dir(key, project_root, create=create)
+        return cls._resolve_app_folder_path(
+            project_root,
+            cls.get_install_root_name(project_root),
+            key,
+            create=create,
+        )
 
     @classmethod
     def get_installer_dist_dir(
@@ -1038,7 +1058,7 @@ def get_build_target_helpers(project_root: str | Path = PathMgr.PROJECT_ROOT) ->
         "work_dir_name": TargetConfig.get_dir_config(root).work_dir_name,
         "dist_dir_name": TargetConfig.get_dir_config(root).dist_dir_name,
         "release_dir_name": TargetConfig.get_dir_config(root).release_dir_name,
-        "install_dir_name": TargetConfig.get_dir_config(root).release_dir_name,
+        "install_dir_name": TargetConfig.get_install_root_name(root),
         "test_dir_name": TargetConfig.TEST_DIR_NAME,
         "app_overrides": TargetConfig.get_app_overrides(),
         "get_work_root": lambda: TargetConfig.get_work_root(root),

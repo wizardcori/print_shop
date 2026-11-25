@@ -24,12 +24,13 @@ from PySide6.QtWidgets import (
 )
 
 from Common.log import logd, setup_global_log
-from Common.log_settings_tab import LogSettingsTab
-from config_tab import ConfigTab
-from exe_file_record import ExeFileRecord
-from memory_zip_extractor import MemoryZipExtractor
-from settings_window import SettingsWindow
-from viewer_config import viewer_config_instance
+from VersionViewer.config_tab import ConfigTab
+from VersionViewer.exe_file_record import ExeFileRecord
+from VersionViewer.memory_zip_extractor import MemoryZipExtractor
+from VersionViewer.settings_window import SettingsWindow
+from VersionViewer.viewer_config import viewer_config_instance
+from VersionViewer.version_viewer_log_setting_tab import VersionViewerSettingsTab
+
 
 
 def _get_system_memory_stats_mb() -> tuple[float, float]:
@@ -574,7 +575,7 @@ class VersionViewerWindow(QMainWindow):
     def open_settings_window(self):
         settings_win = SettingsWindow(title="환경 설정", parent=self)
         config_tab = ConfigTab(config=self.config, parent=settings_win)
-        log_tab = LogSettingsTab(settings_win)
+        log_tab = VersionViewerSettingsTab(settings_win)
 
         settings_win.add_tab(config_tab, "일반 설정 (Config)", scrollable=True)
         settings_win.add_tab(log_tab, "로그 설정 (Log)", scrollable=True)

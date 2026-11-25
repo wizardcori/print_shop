@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import configparser
 import ctypes
 import io
 import re
@@ -12,6 +13,84 @@ from pathlib import Path
 from typing import Any
 
 from build_script.target_config import TargetConfig
+
+PLATFORM_WIN32: str = "win32"
+DEFAULT_ENCODING: str = "utf-8-sig"
+DATETIME_FORMAT_FULL: str = "%Y-%m-%d %H:%M:%S"
+
+DEFAULT_DIST_DIR_NAME: str = "dist"
+DEFAULT_RELEASE_DIR_NAME: str = "release"
+DEFAULT_SRC_DIR_NAME: str = "src"
+DEFAULT_VERSION_FILENAME: str = "version.txt"
+
+BUCKET_RELEASE: str = "release"
+BUCKET_DIST: str = "dist"
+SOURCE_VERSION_TXT: str = "version.txt"
+STATUS_ZIP_CHECKING: str = "ZIP 확인 중..."
+EMPTY_DASH: str = "-"
+
+PE_MAGIC: bytes = b"MZ"
+PE_MIN_BYTES: int = 64
+PE_MAX_STR_LEN: int = 128
+PE_CHAR_MIN: int = 32
+PE_CHAR_MAX: int = 0xFFFE
+NS_PER_SEC: int = 1_000_000_000
+
+PE_VERSION_FIELDS: tuple[str, ...] = (
+    "ProductVersion",
+    "FileVersion",
+    "ProductName",
+    "FileDescription",
+    "OriginalFilename",
+)
+
+DEFAULT_PE_CODEPAGES: tuple[str, ...] = (
+    "040904B0",
+    "040904E4",
+    "041204B0",
+    "041204E4",
+)
+
+META_ITEM_KEYS: tuple[str, ...] = (
+    "version",
+    "build_id",
+    "commit",
+    "dirty",
+    "time",
+)
+
+EMBEDDED_MODULE_CANDIDATES: tuple[str, ...] = (
+    "build_script.exe_version_desc_v2",
+    "build_script.exe_version_desc_v1",
+    "build_script.exe_version_crypto_2",
+    "exe_version_desc_v2",
+    "exe_version_desc_v1",
+    "exe_version_crypto_2",
+)
+
+EMBEDDED_FUNC_CANDIDATES: tuple[str, ...] = (
+    "inspect_exe_bytes",
+    "read_exe_bytes",
+    "decrypt_exe_bytes",
+    "decode_exe_bytes",
+    "inspect_exe_metadata",
+    "read_exe_metadata",
+    "decrypt_exe_metadata",
+    "decode_exe_metadata",
+    "parse_exe_metadata",
+    "extract_exe_metadata",
+    "verify_and_extract",
+)
+
+VERSION_PATH_LIST_ATTRS: tuple[str, ...] = (
+    "version_paths",
+    "version_files",
+    "version_rel_paths",
+)
+
+INI_SECTION_DIRS: str = "BuildDirsConfig"
+INI_KEY_DIST_DIR: str = "dist_dir_name"
+INI_KEY_RELEASE_DIR: str = "release_dir_name"
 
 _CACHE_LOCK = threading.Lock()
 _ZIP_INSPECT_CACHE: dict[tuple[str, str], tuple[tuple[int, int], dict[str, Any]]] = {}
@@ -31,7 +110,7 @@ def _file_fingerprint(path: Path) -> tuple[int, int] | None:
     """파일 변경 여부를 판별하기 위한 (st_size, st_mtime_ns) 지문을 반환합니다."""
     try:
         st = path.stat()
-        return (int(st.st_size), int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1_000_000_000))))
+        return (int(st.st_size), int(getattr(st, "st_mtime_ns", int(st.st_mtime * NS_PER_SEC))))
     except OSError:
         return None
 
@@ -45,9 +124,7 @@ def _parse_version_tuple(raw: str | None) -> tuple[int, ...]:
 
 
 def _extract_version_from_archive_name(stem_or_name: str) -> str:
-    """
-    예: PrintShopBuildManagerApp_v1.2.6.zip, App-1.2.6.4 -> '1.2.6' / '1.2.6.4' 추정
-    """
+    """예: PrintShopBuildManagerApp_v1.2.6.zip, App-1.2.6.4 -> '1.2.6' / '1.2.6.4' 추정."""
     if not stem_or_name:
         return ""
     s = Path(stem_or_name).stem
@@ -64,7 +141,7 @@ def _read_single_version_txt(path: Path) -> str:
     """version.txt가 있으면 읽어서 주석/공백을 제외한 유효 버전 문자열 하나만 반환합니다."""
     try:
         if path.is_file():
-            for line in path.read_text(encoding="utf-8-sig").splitlines():
+            for line in path.read_text(encoding=DEFAULT_ENCODING).splitlines():
                 cleaned = line.strip()
                 if cleaned and not cleaned.startswith("#") and not cleaned.startswith("//"):
                     return cleaned.split()[0]
@@ -98,6 +175,57 @@ def _iter_resolved_paths(root: Path, raw_paths: Any) -> list[Path]:
     return resolved
 
 
+def _read_ini_dir_overrides(config_path: str | Path | None) -> dict[str, str]:
+    if not config_path:
+        return {}
+    ini_file = Path(config_path).resolve()
+    if not ini_file.is_file():
+        return {}
+    parser = configparser.ConfigParser()
+    try:
+        parser.read(ini_file, encoding=DEFAULT_ENCODING)
+    except Exception:
+        return {}
+    if not parser.has_section(INI_SECTION_DIRS):
+        return {}
+    result: dict[str, str] = {}
+    for key in (INI_KEY_DIST_DIR, INI_KEY_RELEASE_DIR):
+        if parser.has_option(INI_SECTION_DIRS, key):
+            val = parser.get(INI_SECTION_DIRS, key).strip()
+            if val:
+                result[key] = val
+    return result
+
+
+def _resolve_bucket_dir_names(
+    root: Path,
+    ov: dict[str, Any],
+    config_path: str | Path | None,
+) -> tuple[str, str]:
+    ini_dirs = _read_ini_dir_overrides(config_path)
+    try:
+        dcfg = TargetConfig.get_dir_config(root)
+        cfg_dist = getattr(dcfg, INI_KEY_DIST_DIR, None)
+        cfg_release = getattr(dcfg, INI_KEY_RELEASE_DIR, None)
+    except Exception:
+        cfg_dist = None
+        cfg_release = None
+
+    dist_dir_name = str(
+        ov.get(INI_KEY_DIST_DIR)
+        or ini_dirs.get(INI_KEY_DIST_DIR)
+        or cfg_dist
+        or DEFAULT_DIST_DIR_NAME
+    )
+    release_dir_name = str(
+        ov.get(INI_KEY_RELEASE_DIR)
+        or ini_dirs.get(INI_KEY_RELEASE_DIR)
+        or cfg_release
+        or DEFAULT_RELEASE_DIR_NAME
+    )
+    return dist_dir_name, release_dir_name
+
+
 def _collect_app_version_files(
     root: Path,
     target_key: str,
@@ -111,7 +239,7 @@ def _collect_app_version_files(
     if isinstance(app_version_paths, dict):
         raw_list.extend(app_version_paths.get(target_key) or ())
 
-    for field_name in ("version_paths", "version_files", "version_rel_paths"):
+    for field_name in VERSION_PATH_LIST_ATTRS:
         val = ov.get(field_name)
         if val:
             raw_list.extend(val if isinstance(val, (list, tuple, set)) else [val])
@@ -120,7 +248,7 @@ def _collect_app_version_files(
         raw_list.append(ov["version_file"])
 
     if spec is not None:
-        for attr_name in ("version_paths", "version_files", "version_rel_paths"):
+        for attr_name in VERSION_PATH_LIST_ATTRS:
             val = getattr(spec, attr_name, None)
             if val:
                 raw_list.extend(val if isinstance(val, (list, tuple, set)) else [val])
@@ -136,8 +264,8 @@ def _collect_app_version_files(
         )
         for d in dir_hints:
             if d:
-                raw_list.append(root / "src" / str(d) / "version.txt")
-                raw_list.append(root / str(d) / "version.txt")
+                raw_list.append(root / DEFAULT_SRC_DIR_NAME / str(d) / DEFAULT_VERSION_FILENAME)
+                raw_list.append(root / str(d) / DEFAULT_VERSION_FILENAME)
 
     return _iter_resolved_paths(root, raw_list)
 
@@ -161,6 +289,44 @@ def _get_app_folder_names(target_key: str, spec: Any, ov: dict[str, Any]) -> lis
     return names
 
 
+def _collect_archive_or_exe_candidates(
+    root: Path,
+    target_key: str,
+    spec: Any,
+    ov: dict[str, Any],
+    bucket_dir_name: str,
+    extension: str,
+) -> list[Path]:
+    """지정된 출력 폴더에서 해당 앱의 대상 확장자(.zip 또는 .exe) 후보 목록을 수집합니다."""
+    app_folder_names = _get_app_folder_names(target_key, spec, ov)
+    found: list[Path] = []
+    seen: set[Path] = set()
+    base_root = root / bucket_dir_name
+    ext_lower = extension.lower()
+
+    if not base_root.is_dir():
+        return found
+
+    for folder_name in app_folder_names:
+        app_dir = base_root / folder_name
+        if not app_dir.is_dir():
+            continue
+        for candidate in app_dir.rglob(f"*{ext_lower}"):
+            rp = candidate.resolve()
+            if rp.is_file() and rp not in seen:
+                seen.add(rp)
+                found.append(rp)
+
+    if not found:
+        for candidate in base_root.rglob(f"*{ext_lower}"):
+            rp = candidate.resolve()
+            if rp.is_file() and rp not in seen and target_key.lower() in candidate.stem.lower():
+                seen.add(rp)
+                found.append(rp)
+
+    return found
+
+
 def _collect_zip_candidates(
     root: Path,
     target_key: str,
@@ -169,32 +335,14 @@ def _collect_zip_candidates(
     release_dir_name: str,
 ) -> list[Path]:
     """release 폴더에서 해당 앱의 .zip 후보 목록을 수집합니다."""
-    app_folder_names = _get_app_folder_names(target_key, spec, ov)
-    found: list[Path] = []
-    seen: set[Path] = set()
-    release_root = root / release_dir_name
-
-    if not release_root.is_dir():
-        return found
-
-    for folder_name in app_folder_names:
-        app_dir = release_root / folder_name
-        if not app_dir.is_dir():
-            continue
-        for zp in app_dir.rglob("*.zip"):
-            rp = zp.resolve()
-            if rp.is_file() and rp not in seen:
-                seen.add(rp)
-                found.append(rp)
-
-    if not found:
-        for zp in release_root.rglob("*.zip"):
-            rp = zp.resolve()
-            if rp.is_file() and rp not in seen and target_key.lower() in zp.stem.lower():
-                seen.add(rp)
-                found.append(rp)
-
-    return found
+    return _collect_archive_or_exe_candidates(
+        root=root,
+        target_key=target_key,
+        spec=spec,
+        ov=ov,
+        bucket_dir_name=release_dir_name,
+        extension=".zip",
+    )
 
 
 def _collect_exe_candidates(
@@ -205,43 +353,23 @@ def _collect_exe_candidates(
     bucket_dir_name: str,
 ) -> list[Path]:
     """지정된 출력 폴더(dist 또는 release)에서 해당 앱의 .exe 후보 목록을 수집합니다."""
-    app_folder_names = _get_app_folder_names(target_key, spec, ov)
-    found: list[Path] = []
-    seen: set[Path] = set()
-    base_root = root / bucket_dir_name
-
-    if not base_root.is_dir():
-        return found
-
-    for folder_name in app_folder_names:
-        app_dir = base_root / folder_name
-        if not app_dir.is_dir():
-            continue
-        for ep in app_dir.rglob("*.exe"):
-            rp = ep.resolve()
-            if rp.is_file() and rp not in seen:
-                seen.add(rp)
-                found.append(rp)
-
-    if not found:
-        for ep in base_root.rglob("*.exe"):
-            rp = ep.resolve()
-            if rp.is_file() and rp not in seen and target_key.lower() in ep.stem.lower():
-                seen.add(rp)
-                found.append(rp)
-
-    return found
+    return _collect_archive_or_exe_candidates(
+        root=root,
+        target_key=target_key,
+        spec=spec,
+        ov=ov,
+        bucket_dir_name=bucket_dir_name,
+        extension=".exe",
+    )
 
 
 def _parse_pe_version_from_bytes(pe_bytes: bytes) -> dict[str, str]:
     """메모리 상의 PE 바이트에서 StringFileInfo 버전 문자열을 추출합니다."""
-    if not pe_bytes or len(pe_bytes) < 64 or pe_bytes[:2] != b"MZ":
+    if not pe_bytes or len(pe_bytes) < PE_MIN_BYTES or pe_bytes[:2] != PE_MAGIC:
         return {}
 
     info: dict[str, str] = {}
-    targets = ("ProductVersion", "FileVersion", "ProductName", "FileDescription", "OriginalFilename")
-
-    for field in targets:
+    for field in PE_VERSION_FIELDS:
         needle_utf16 = field.encode("utf-16-le") + b"\x00\x00"
         idx = pe_bytes.find(needle_utf16)
         if idx == -1:
@@ -256,11 +384,11 @@ def _parse_pe_version_from_bytes(pe_bytes: bytes) -> dict[str, str]:
             pos += 2
             if ch == 0:
                 break
-            if 32 <= ch < 0xFFFE:
+            if PE_CHAR_MIN <= ch < PE_CHAR_MAX:
                 chars.append(chr(ch))
             else:
                 break
-            if len(chars) > 128:
+            if len(chars) > PE_MAX_STR_LEN:
                 break
         text = "".join(chars).strip()
         if text:
@@ -271,7 +399,7 @@ def _parse_pe_version_from_bytes(pe_bytes: bytes) -> dict[str, str]:
 
 def _extract_pe_version_info_from_file(file_path: Path) -> dict[str, str]:
     """Windows PE 파일의 버전 리소스를 추출합니다."""
-    if sys.platform != "win32" or not file_path.is_file():
+    if sys.platform != PLATFORM_WIN32 or not file_path.is_file():
         return {}
 
     info: dict[str, str] = {}
@@ -312,16 +440,15 @@ def _extract_pe_version_info_from_file(file_path: Path) -> dict[str, str]:
 
         trans_ptr = ctypes.c_void_p()
         trans_len = ctypes.c_uint(0)
-        lang_codepages: list[str] = ["040904B0", "040904E4", "041204B0", "041204E4"]
+        lang_codepages: list[str] = list(DEFAULT_PE_CODEPAGES)
         if ver_query(buf, r"\VarFileInfo\Translation", ctypes.byref(trans_ptr), ctypes.byref(trans_len)):
             if trans_len.value >= 4 and trans_ptr.value:
                 pair = ctypes.cast(trans_ptr, ctypes.POINTER(ctypes.c_ushort * 2)).contents
                 lang_codepages.insert(0, f"{pair[0]:04X}{pair[1]:04X}")
 
-        fields = ("ProductVersion", "FileVersion", "ProductName", "FileDescription", "OriginalFilename")
         for cp in lang_codepages:
             found_any = False
-            for field in fields:
+            for field in PE_VERSION_FIELDS:
                 val_ptr = ctypes.c_void_p()
                 val_len = ctypes.c_uint(0)
                 sub_block = rf"\StringFileInfo\{cp}\{field}"
@@ -347,7 +474,7 @@ def _normalize_decrypt_result(raw: Any, display_path: str, size_bytes: int | Non
         return {"error": str(raw["error"]), "_exe_path": display_path}
 
     items = dict(raw.get("items") or {})
-    for k in ("version", "build_id", "commit", "dirty", "time"):
+    for k in META_ITEM_KEYS:
         if not items.get(k) and raw.get(k) is not None:
             items[k] = raw[k]
 
@@ -370,35 +497,13 @@ def _extract_embedded_metadata_from_bytes(
     size_bytes: int | None,
 ) -> dict[str, Any] | None:
     """메모리 상의 EXE 바이트에서 임베디드 암호화 메타데이터를 복호화합니다."""
-    module_candidates = (
-        "build_script.exe_version_desc_v2",
-        "build_script.exe_version_desc_v1",
-        "build_script.exe_version_crypto_2",
-        "exe_version_desc_v2",
-        "exe_version_desc_v1",
-        "exe_version_crypto_2",
-    )
-    func_candidates = (
-        "inspect_exe_bytes",
-        "read_exe_bytes",
-        "decrypt_exe_bytes",
-        "decode_exe_bytes",
-        "inspect_exe_metadata",
-        "read_exe_metadata",
-        "decrypt_exe_metadata",
-        "decode_exe_metadata",
-        "parse_exe_metadata",
-        "extract_exe_metadata",
-        "verify_and_extract",
-    )
-
-    for mod_name in module_candidates:
+    for mod_name in EMBEDDED_MODULE_CANDIDATES:
         try:
             mod = __import__(mod_name, fromlist=["*"])
         except Exception:
             continue
 
-        for fn_name in func_candidates:
+        for fn_name in EMBEDDED_FUNC_CANDIDATES:
             fn = getattr(mod, fn_name, None)
             if not callable(fn):
                 continue
@@ -443,7 +548,7 @@ def _quick_zip_candidate(zip_path: Path, bucket_name: str) -> dict[str, Any]:
     """지연 검사 전 단계: 메모리 해제 없이 ZIP 파일명/수정시각 기준으로 후보만 구성합니다."""
     stat_info = zip_path.stat()
     mtime = stat_info.st_mtime
-    mtime_str = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+    mtime_str = datetime.fromtimestamp(mtime).strftime(DATETIME_FORMAT_FULL)
     source_label = f"zip({bucket_name})"
     zip_name_ver = _extract_version_from_archive_name(zip_path.name)
 
@@ -478,7 +583,7 @@ def _inspect_zip_candidate(zip_path: Path, bucket_name: str, target_key: str) ->
 
     stat_info = zip_path.stat()
     mtime = stat_info.st_mtime
-    mtime_str = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+    mtime_str = datetime.fromtimestamp(mtime).strftime(DATETIME_FORMAT_FULL)
     source_label = f"zip({bucket_name})"
     zip_name_ver = _extract_version_from_archive_name(zip_path.name)
 
@@ -572,7 +677,7 @@ def _inspect_exe_candidate(exe_path: Path, bucket_name: str) -> dict[str, Any]:
 
     stat_info = exe_path.stat()
     mtime = stat_info.st_mtime
-    mtime_str = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+    mtime_str = datetime.fromtimestamp(mtime).strftime(DATETIME_FORMAT_FULL)
     source_label = f"exe({bucket_name})"
 
     pe_info = _extract_pe_version_info_from_file(exe_path)
@@ -621,17 +726,17 @@ def _build_meta_from_selected(
             return {}
         return {
             "_exe_path": str(txt_source_path) if txt_source_path else "",
-            "_source_label": "version.txt",
+            "_source_label": SOURCE_VERSION_TXT,
             "_has_deferred_zip": has_deferred_zip,
             "file_size_bytes": None,
             "items": {
                 "version": txt_version,
-                "source": "version.txt",
-                "version_file": str(txt_source_path) if txt_source_path else "-",
-                "build_id": "-",
-                "commit": "-",
-                "dirty": "-",
-                "time": "-",
+                "source": SOURCE_VERSION_TXT,
+                "version_file": str(txt_source_path) if txt_source_path else EMPTY_DASH,
+                "build_id": EMPTY_DASH,
+                "commit": EMPTY_DASH,
+                "dirty": EMPTY_DASH,
+                "time": EMPTY_DASH,
             },
         }
 
@@ -640,18 +745,18 @@ def _build_meta_from_selected(
         str(dec_items.get("version") or "").strip()
         or str(selected.get("version") or "").strip()
         or txt_version
-        or "-"
+        or EMPTY_DASH
     )
 
     items: dict[str, Any] = {
         "version": final_version,
         "source": selected["source_label"],
-        "build_id": str(dec_items.get("build_id") or ("ZIP 확인 중..." if selected.get("deferred_zip") else "-")),
-        "commit": str(dec_items.get("commit") or "-"),
-        "dirty": str(dec_items.get("dirty") or "-"),
+        "build_id": str(dec_items.get("build_id") or (STATUS_ZIP_CHECKING if selected.get("deferred_zip") else EMPTY_DASH)),
+        "commit": str(dec_items.get("commit") or EMPTY_DASH),
+        "dirty": str(dec_items.get("dirty") or EMPTY_DASH),
         "time": str(dec_items.get("time") or selected["mtime_str"]),
-        "version_file": str(txt_source_path) if txt_source_path else "-",
-        "file_version": txt_version or "-",
+        "version_file": str(txt_source_path) if txt_source_path else EMPTY_DASH,
+        "file_version": txt_version or EMPTY_DASH,
     }
 
     result: dict[str, Any] = {
@@ -676,6 +781,13 @@ def _build_snapshot_sig(paths: list[Path]) -> tuple[tuple[str, int, int], ...]:
     return tuple(sig)
 
 
+def _rank_candidate(cand: dict[str, Any]) -> tuple[tuple[int, ...], int, float]:
+    ver_tuple = _parse_version_tuple(cand.get("version"))
+    bucket_rank = 1 if cand.get("bucket") == BUCKET_RELEASE else 0
+    mtime = float(cand.get("mtime") or 0.0)
+    return (ver_tuple, bucket_rank, mtime)
+
+
 def resolve_zip_prev_version_meta(
     project_root: str | Path,
     target_key: str,
@@ -685,16 +797,10 @@ def resolve_zip_prev_version_meta(
 ) -> dict[str, Any]:
     """TaskQueue 워커에서 호출: release의 .zip을 메모리에서 열어 최신 버전을 추출합니다."""
     root = Path(project_root).resolve()
+    resolved_cfg = str(Path(config_path).resolve()) if config_path else ""
     ov = app_override if isinstance(app_override, dict) else {}
     spec = TargetConfig.get_spec(target_key)
-
-    try:
-        dcfg = TargetConfig.get_dir_config(root)
-        dist_dir_name = str(ov.get("dist_dir_name") or dcfg.dist_dir_name or "dist")
-        release_dir_name = str(ov.get("release_dir_name") or dcfg.release_dir_name or "release")
-    except Exception:
-        dist_dir_name = "dist"
-        release_dir_name = "release"
+    dist_dir_name, release_dir_name = _resolve_bucket_dir_names(root, ov, config_path)
 
     version_files = _collect_app_version_files(
         root=root,
@@ -706,7 +812,7 @@ def resolve_zip_prev_version_meta(
     zip_paths = _collect_zip_candidates(root, target_key, spec, ov, release_dir_name)
     exe_paths = _collect_exe_candidates(root, target_key, spec, ov, dist_dir_name)
 
-    meta_cache_key = ("zip_meta", str(root), target_key, release_dir_name, dist_dir_name)
+    meta_cache_key = ("zip_meta", str(root), resolved_cfg, target_key, release_dir_name, dist_dir_name)
     snap_sig = _build_snapshot_sig([*version_files, *zip_paths, *exe_paths])
     with _CACHE_LOCK:
         cached_meta = _PREV_META_CACHE.get(meta_cache_key)
@@ -723,9 +829,9 @@ def resolve_zip_prev_version_meta(
             break
 
     candidates: list[dict[str, Any]] = [
-        _inspect_zip_candidate(zp, "release", target_key) for zp in zip_paths
+        _inspect_zip_candidate(zp, BUCKET_RELEASE, target_key) for zp in zip_paths
     ]
-    candidates.extend(_inspect_exe_candidate(ep, "dist") for ep in exe_paths)
+    candidates.extend(_inspect_exe_candidate(ep, BUCKET_DIST) for ep in exe_paths)
 
     if not candidates and not txt_version:
         return {}
@@ -734,13 +840,7 @@ def resolve_zip_prev_version_meta(
         if not _parse_version_tuple(cand.get("version")) and txt_version:
             cand["version"] = txt_version
 
-    def _rank_key(cand: dict[str, Any]) -> tuple[tuple[int, ...], int, float]:
-        ver_tuple = _parse_version_tuple(cand.get("version"))
-        bucket_rank = 1 if cand.get("bucket") == "release" else 0
-        mtime = float(cand.get("mtime") or 0.0)
-        return (ver_tuple, bucket_rank, mtime)
-
-    selected = max(candidates, key=_rank_key) if candidates else None
+    selected = max(candidates, key=_rank_candidate) if candidates else None
     result = _build_meta_from_selected(
         selected=selected,
         txt_version=txt_version,
@@ -770,16 +870,10 @@ def resolve_prev_version_meta(
     4) 변경되지 않은 ZIP/EXE는 캐시를 재사용해 디스크 재읽기/재검사를 피함
     """
     root = Path(project_root).resolve()
+    resolved_cfg = str(Path(config_path).resolve()) if config_path else ""
     ov = app_override if isinstance(app_override, dict) else {}
     spec = TargetConfig.get_spec(target_key)
-
-    try:
-        dcfg = TargetConfig.get_dir_config(root)
-        dist_dir_name = str(ov.get("dist_dir_name") or dcfg.dist_dir_name or "dist")
-        release_dir_name = str(ov.get("release_dir_name") or dcfg.release_dir_name or "release")
-    except Exception:
-        dist_dir_name = "dist"
-        release_dir_name = "release"
+    dist_dir_name, release_dir_name = _resolve_bucket_dir_names(root, ov, config_path)
 
     version_files = _collect_app_version_files(
         root=root,
@@ -792,7 +886,15 @@ def resolve_prev_version_meta(
     exe_paths = _collect_exe_candidates(root, target_key, spec, ov, dist_dir_name)
     has_deferred_zip = bool(defer_zip and zip_paths)
 
-    meta_cache_key = ("prev_meta", str(root), target_key, release_dir_name, dist_dir_name, bool(defer_zip))
+    meta_cache_key = (
+        "prev_meta",
+        str(root),
+        resolved_cfg,
+        target_key,
+        release_dir_name,
+        dist_dir_name,
+        bool(defer_zip),
+    )
     snap_sig = _build_snapshot_sig([*version_files, *zip_paths, *exe_paths])
     with _CACHE_LOCK:
         cached_meta = _PREV_META_CACHE.get(meta_cache_key)
@@ -811,11 +913,11 @@ def resolve_prev_version_meta(
     candidates: list[dict[str, Any]] = []
     if zip_paths:
         if defer_zip:
-            candidates.extend(_quick_zip_candidate(zp, "release") for zp in zip_paths)
+            candidates.extend(_quick_zip_candidate(zp, BUCKET_RELEASE) for zp in zip_paths)
         else:
-            candidates.extend(_inspect_zip_candidate(zp, "release", target_key) for zp in zip_paths)
+            candidates.extend(_inspect_zip_candidate(zp, BUCKET_RELEASE, target_key) for zp in zip_paths)
 
-    candidates.extend(_inspect_exe_candidate(ep, "dist") for ep in exe_paths)
+    candidates.extend(_inspect_exe_candidate(ep, BUCKET_DIST) for ep in exe_paths)
 
     if not candidates and not txt_version:
         return {}
@@ -824,13 +926,7 @@ def resolve_prev_version_meta(
         if not _parse_version_tuple(cand.get("version")) and txt_version:
             cand["version"] = txt_version
 
-    def _rank_key(cand: dict[str, Any]) -> tuple[tuple[int, ...], int, float]:
-        ver_tuple = _parse_version_tuple(cand.get("version"))
-        bucket_rank = 1 if cand.get("bucket") == "release" else 0
-        mtime = float(cand.get("mtime") or 0.0)
-        return (ver_tuple, bucket_rank, mtime)
-
-    selected = max(candidates, key=_rank_key) if candidates else None
+    selected = max(candidates, key=_rank_candidate) if candidates else None
     result = _build_meta_from_selected(
         selected=selected,
         txt_version=txt_version,

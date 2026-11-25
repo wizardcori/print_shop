@@ -53,9 +53,10 @@ if common_dir not in sys.path:
 
 from Common.log import logd, loge
 
-from upload_progress_dialog import UploadProgressDialog
+#from UpdateManager.update_manager_log_setting_tab import UpdateManagerSettingsTab
+from UpdateManager.upload_progress_dialog import UploadProgressDialog
 from UpdateManager.update_manager_config import GitHubConfigManager, DEF_VERSION_DIR
-from github_update_sync_manager import GitHubUpdateSyncManager, LocalVersionMap, LocalVersionInfo
+from UpdateManager.github_update_sync_manager import GitHubUpdateSyncManager, LocalVersionMap, LocalVersionInfo
 from UpdateManager.update_manager_settings_dialog import UpdateManagerSettingsDialog
 from Common.Version.exe_version_crypto import extract_version_from_exe, encrypt_and_append_version
 

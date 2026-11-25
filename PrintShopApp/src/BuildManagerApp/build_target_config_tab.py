@@ -1,9 +1,3 @@
-"""
-TargetConfig 세부 설정 위젯 모듈 (build_target_config_tab.py)
-- 인스톨러 조합 설정([BuildInstallerConfig]), 앱별 세부 빌드 설정([BuildAppsConfig]),
-  전역 디렉터리([BuildDirsConfig])를 BuildManager.ini 섹션에서 로드/저장
-"""
-
 from __future__ import annotations
 
 import re
@@ -37,11 +31,26 @@ from build_script.target_config_io import (
     InstallerBuildConfig,
     normalize_target_id_list,
 )
-#from build_target_general_tab import BuildTargetGeneralTab
+
+WINDOW_TITLE_TARGET_CONFIG: str = "BuildTarget 설정"
+WINDOW_DEFAULT_WIDTH: int = 760
+WINDOW_DEFAULT_HEIGHT: int = 680
+
+SRC_DIR_NAME: str = "src"
+VERSION_FILE_NAME: str = "version.txt"
+VERSION_FILE_ENCODING: str = "utf-8-sig"
+LEGACY_SETUP_NAME: str = "PrintShopSetup"
+SETUP_NAME_SUFFIX: str = "Setup"
+DEFAULT_BUMP_FALLBACK: str = "patch"
 
 DEFAULT_INSTALLER_KEYS: tuple[str, ...] = (
     "PrintShopApp",
     "PrintShopUpdateService",
+)
+
+DEFAULT_INSTALLER_SEARCH_TOKENS: tuple[str, ...] = (
+    "printshopapp",
+    "updateservice",
 )
 
 BUMP_UNIT_OPTIONS: list[tuple[str, str | None]] = [
@@ -51,20 +60,34 @@ BUMP_UNIT_OPTIONS: list[tuple[str, str | None]] = [
     ("major", "major"),
 ]
 
+VALID_BUMP_UNITS: tuple[str, ...] = ("patch", "minor", "major")
+NONE_BUMP_TOKENS: frozenset[str] = frozenset({"none", "null", "false", "0", "변경 없음"})
+
 CLEAN_OPTION_FIELDS: tuple[str, ...] = (
     "clean_work",
     "clean_dist",
     "clean_spec",
 )
 
+TEST_OPTION_FIELD: str = "run_test"
+
+LIST_FIELDS: tuple[str, ...] = (
+    "dir_hints",
+    "spec_hints",
+    "entry_hints",
+    "version_rel_paths",
+)
+
+SEMVER_PATTERN: re.Pattern[str] = re.compile(r"\b(\d+)\.(\d+)\.(\d+)\b")
+
 
 def _normalize_bump_unit(value: Any) -> str | None:
     if value is None:
         return None
     s = str(value).strip().lower()
-    if not s or s in ("none", "null", "false", "0", "변경 없음"):
+    if not s or s in NONE_BUMP_TOKENS:
         return None
-    if s in ("patch", "minor", "major"):
+    if s in VALID_BUMP_UNITS:
         return s
     return None
 
@@ -86,7 +109,7 @@ def _split_list_field(text: str) -> list[str]:
 
 
 def _parse_semver(raw_version: str) -> tuple[int, int, int] | None:
-    match = re.search(r"\b(\d+)\.(\d+)\.(\d+)\b", (raw_version or "").strip())
+    match = SEMVER_PATTERN.search((raw_version or "").strip())
     if not match:
         return None
     return int(match.group(1)), int(match.group(2)), int(match.group(3))
@@ -120,15 +143,16 @@ class BuildTargetConfigTab(QWidget):
         config_path: str | Path | None = None,
         auto_save: bool = False,
         parent: QWidget | None = None,
-        general_tab: BuildTargetGeneralTab | None = None,
+        general_tab: Any | None = None,
         as_window: bool = True,
     ) -> None:
         super().__init__(parent)
         self._allow_close: bool = False
+        self._installer_user_configured: bool = False
         if as_window:
             self.setWindowFlags(Qt.WindowType.Window)
-            self.setWindowTitle("BuildTarget 설정")
-            self.resize(760, 680)
+            self.setWindowTitle(WINDOW_TITLE_TARGET_CONFIG)
+            self.resize(WINDOW_DEFAULT_WIDTH, WINDOW_DEFAULT_HEIGHT)
 
         self.project_root = Path(project_root).resolve()
         self.config_path = (
@@ -137,12 +161,13 @@ class BuildTargetConfigTab(QWidget):
             else (self.project_root / BUILD_MANAGER_INI_NAME)
         )
         self.auto_save = auto_save
-        self.general_tab: BuildTargetGeneralTab | None = general_tab
+        self.general_tab: Any | None = general_tab
         self._ini_store = BuildManagerIniStore(self.config_path.parent)
 
         self._app_overrides: dict[str, dict[str, Any]] = {}
         self._app_bump_units: dict[str, str | None] = {}
         self._app_clean_options: dict[str, dict[str, bool]] = {}
+        self._app_test_options: dict[str, bool] = {}
         self._installer_config: InstallerBuildConfig = InstallerBuildConfig()
 
         self._app_tab_inputs: dict[str, dict[str, QWidget]] = {}
@@ -164,6 +189,20 @@ class BuildTargetConfigTab(QWidget):
         self.sync_path_fields()
         self.load_from_ini(self.config_path, show_error=False)
 
+    def mark_installer_configured(self) -> None:
+        self._installer_user_configured = True
+
+    def get_installer_overrides_dict(self) -> dict[str, Any]:
+        cfg = self._collect_installer_config()
+        return {
+            "targets": list(cfg.targets) if cfg.targets is not None else [],
+            "name": cfg.name,
+            "version_source_id": cfg.version_source_id,
+            "installer_only": bool(cfg.installer_only),
+            "skip_installer": bool(cfg.skip_installer),
+            "extra": dict(cfg.extra),
+        }
+
     def force_close_window(self) -> None:
         self._allow_close = True
         self.close()
@@ -175,7 +214,7 @@ class BuildTargetConfigTab(QWidget):
         event.ignore()
         self.hide()
 
-    def bind_general_tab(self, general_tab: BuildTargetGeneralTab) -> None:
+    def bind_general_tab(self, general_tab: Any) -> None:
         self.general_tab = general_tab
         general_tab.set_paths(self.project_root, self.config_path)
         general_tab.paths_changed.connect(self._on_general_paths_changed)
@@ -227,7 +266,7 @@ class BuildTargetConfigTab(QWidget):
         if not matched:
             for key in ordered:
                 lower = key.lower()
-                if "printshopapp" in lower or "updateservice" in lower:
+                if any(tok in lower for tok in DEFAULT_INSTALLER_SEARCH_TOKENS):
                     matched.add(key)
         return matched or set(ordered[:2])
 
@@ -270,7 +309,7 @@ class BuildTargetConfigTab(QWidget):
 
         first_key = selected_keys[0].strip()
         spec = TargetConfig.get_spec(first_key)
-        auto_name = f"{first_key}Setup" if first_key else ""
+        auto_name = f"{first_key}{SETUP_NAME_SUFFIX}" if first_key else ""
 
         spec_id = getattr(spec, "id", None) if spec else None
         auto_ver_src = str(spec_id).strip() if spec_id is not None and str(spec_id).strip() else first_key
@@ -314,7 +353,7 @@ class BuildTargetConfigTab(QWidget):
         edit_ver_src: QLineEdit = self._installer_inputs["version_source_id"]
 
         cur_name = edit_name.text().strip()
-        if force or not cur_name or cur_name == self._auto_generated_name or cur_name == "PrintShopSetup":
+        if force or not cur_name or cur_name == self._auto_generated_name or cur_name == LEGACY_SETUP_NAME:
             edit_name.setText(auto_name)
         self._auto_generated_name = auto_name
 
@@ -370,6 +409,7 @@ class BuildTargetConfigTab(QWidget):
         self._installer_all_checkbox.blockSignals(False)
 
     def _on_installer_all_targets_clicked(self) -> None:
+        self.mark_installer_configured()
         if self._installer_all_checkbox is None:
             return
         checked = self._installer_all_checkbox.isChecked()
@@ -382,6 +422,7 @@ class BuildTargetConfigTab(QWidget):
         self._sync_installer_auto_fields()
 
     def _on_installer_target_checkbox_changed(self, _state: int) -> None:
+        self.mark_installer_configured()
         self._sync_installer_all_checkbox()
         self._sync_installer_modes_when_empty()
         self._sync_installer_auto_fields()
@@ -420,7 +461,9 @@ class BuildTargetConfigTab(QWidget):
         self._auto_generated_ver_src = auto_ver_src
 
         raw_cfg_name = str(cfg.name or "").strip()
-        resolved_name = auto_name if (not raw_cfg_name or raw_cfg_name == "PrintShopSetup") else raw_cfg_name
+        resolved_name = (
+            auto_name if (not raw_cfg_name or raw_cfg_name == LEGACY_SETUP_NAME) else raw_cfg_name
+        )
         self._installer_inputs["name"].setText(resolved_name)
         self._installer_inputs["version_source_id"].setText(str(cfg.version_source_id or auto_ver_src))
         if not selected_ordered:
@@ -474,6 +517,19 @@ class BuildTargetConfigTab(QWidget):
             updated[key] = app_clean
         self._app_clean_options = updated
 
+    def _sync_test_options_from_overrides(self) -> None:
+        updated: dict[str, bool] = {}
+        for key in TargetConfig.ordered_keys():
+            spec = TargetConfig.get_spec(key)
+            ov = self._app_overrides.get(key, {})
+            if TEST_OPTION_FIELD in ov and isinstance(ov[TEST_OPTION_FIELD], bool):
+                updated[key] = bool(ov[TEST_OPTION_FIELD])
+            elif key in self._app_test_options:
+                updated[key] = bool(self._app_test_options[key])
+            else:
+                updated[key] = bool(getattr(spec, TEST_OPTION_FIELD, False)) if spec else False
+        self._app_test_options = updated
+
     def set_app_bump_units(self, bump_units: dict[str, Any] | None) -> None:
         src = bump_units or {}
         for key in TargetConfig.ordered_keys():
@@ -516,6 +572,21 @@ class BuildTargetConfigTab(QWidget):
             }
         return result
 
+    def set_app_test_options(self, test_options: dict[str, Any] | None) -> None:
+        src = test_options or {}
+        for key in TargetConfig.ordered_keys():
+            if key in src:
+                self._app_test_options[key] = bool(src[key])
+            elif key not in self._app_test_options:
+                self._app_test_options[key] = False
+            self._load_app_form(key)
+
+    def get_app_test_options(self) -> dict[str, bool]:
+        return {
+            key: bool(self._app_test_options.get(key, False))
+            for key in TargetConfig.ordered_keys()
+        }
+
     def load_from_ini(
         self,
         ini_path: str | Path | None = None,
@@ -545,6 +616,7 @@ class BuildTargetConfigTab(QWidget):
             self._app_overrides = TargetConfig.get_app_overrides()
             self._sync_bump_units_from_overrides()
             self._sync_clean_options_from_overrides()
+            self._sync_test_options_from_overrides()
 
             self._installer_config = InstallerBuildConfig(
                 targets=normalize_target_id_list(inst_dict.get("targets")) if inst_dict.get("targets") else None,
@@ -760,6 +832,7 @@ class BuildTargetConfigTab(QWidget):
         edit_entry_hints.setPlaceholderText("예: src/PrintShopApp/main_app.py")
         edit_version_rel_paths.setPlaceholderText("예: src/PrintShopApp/version.txt")
 
+        chk_run_test = QCheckBox("테스트 실행 (run_test)")
         chk_clean_work = QCheckBox("work 폴더 정리 (--clean-work)")
         chk_clean_dist = QCheckBox("dist 폴더 정리 (--clean-dist)")
         chk_clean_spec = QCheckBox(".spec 파일 정리 (--clean-spec)")
@@ -782,6 +855,7 @@ class BuildTargetConfigTab(QWidget):
             "spec_hints": edit_spec_hints,
             "entry_hints": edit_entry_hints,
             "version_rel_paths": edit_version_rel_paths,
+            TEST_OPTION_FIELD: chk_run_test,
             "clean_work": chk_clean_work,
             "clean_dist": chk_clean_dist,
             "clean_spec": chk_clean_spec,
@@ -798,6 +872,7 @@ class BuildTargetConfigTab(QWidget):
         app_form.addRow("Spec 힌트 (spec_hints)", edit_spec_hints)
         app_form.addRow("Entry 경로 (entry_hints)", edit_entry_hints)
         app_form.addRow("버전 경로 목록 (version_rel_paths)", edit_version_rel_paths)
+        app_form.addRow("빌드 테스트", chk_run_test)
         app_form.addRow("산출물 정리", clean_row)
 
         app_vbox.addLayout(app_form)
@@ -893,6 +968,16 @@ class BuildTargetConfigTab(QWidget):
             b_idx = bump_combo.findData(current_bump)
             bump_combo.setCurrentIndex(b_idx if b_idx >= 0 else 0)
 
+        chk_test = inputs.get(TEST_OPTION_FIELD)
+        if isinstance(chk_test, QCheckBox):
+            if TEST_OPTION_FIELD in ov and isinstance(ov[TEST_OPTION_FIELD], bool):
+                test_val = bool(ov[TEST_OPTION_FIELD])
+            elif target_key in self._app_test_options:
+                test_val = bool(self._app_test_options[target_key])
+            else:
+                test_val = bool(getattr(spec, TEST_OPTION_FIELD, False)) if spec else False
+            chk_test.setChecked(test_val)
+
         clean_state = self._app_clean_options.get(target_key, {})
         for field in CLEAN_OPTION_FIELDS:
             chk = inputs.get(field)
@@ -947,6 +1032,13 @@ class BuildTargetConfigTab(QWidget):
             return _normalize_bump_unit(bump_combo.currentData())
         return _normalize_bump_unit(self._app_bump_units.get(target_key))
 
+    def _collect_app_test_option(self, target_key: str) -> bool:
+        inputs = self._app_tab_inputs.get(target_key) or {}
+        chk_test = inputs.get(TEST_OPTION_FIELD)
+        if isinstance(chk_test, QCheckBox):
+            return bool(chk_test.isChecked())
+        return bool(self._app_test_options.get(target_key, False))
+
     def _collect_app_clean_options(self, target_key: str) -> dict[str, bool]:
         inputs = self._app_tab_inputs.get(target_key) or {}
         prev = self._app_clean_options.get(target_key, {})
@@ -990,7 +1082,7 @@ class BuildTargetConfigTab(QWidget):
         version_file_txt = inputs["version_file"].text().strip()
         patch["version_file"] = version_file_txt if version_file_txt else None
 
-        for list_field in ("dir_hints", "spec_hints", "entry_hints", "version_rel_paths"):
+        for list_field in LIST_FIELDS:
             items = _split_list_field(inputs[list_field].text())
             default_tuple = getattr(spec, list_field, ()) if spec else ()
             if items and tuple(items) != tuple(default_tuple):
@@ -998,8 +1090,13 @@ class BuildTargetConfigTab(QWidget):
             elif not items and list_field in self._app_overrides.get(target_key, {}):
                 patch[list_field] = None
 
-        allowed = set(APP_OVERRIDE_FIELDS) | set(CLEAN_OPTION_FIELDS)
+        allowed = set(APP_OVERRIDE_FIELDS) | set(CLEAN_OPTION_FIELDS) | {TEST_OPTION_FIELD}
         filtered = {k: v for k, v in patch.items() if k in allowed}
+
+        default_test = bool(getattr(spec, TEST_OPTION_FIELD, False)) if spec else False
+        test_val = self._collect_app_test_option(target_key)
+        if test_val != default_test or TEST_OPTION_FIELD in self._app_overrides.get(target_key, {}):
+            filtered[TEST_OPTION_FIELD] = test_val
 
         clean_opts = self._collect_app_clean_options(target_key)
         for field in CLEAN_OPTION_FIELDS:
@@ -1013,6 +1110,9 @@ class BuildTargetConfigTab(QWidget):
     def _stage_app_state(self, target_key: str) -> None:
         bump_unit = self._collect_app_bump_unit(target_key)
         self._app_bump_units[target_key] = bump_unit
+
+        test_val = self._collect_app_test_option(target_key)
+        self._app_test_options[target_key] = test_val
 
         clean_opts = self._collect_app_clean_options(target_key)
         self._app_clean_options[target_key] = clean_opts
@@ -1028,6 +1128,7 @@ class BuildTargetConfigTab(QWidget):
             bucket["bump_unit"] = bump_unit
         else:
             bucket.pop("bump_unit", None)
+        bucket[TEST_OPTION_FIELD] = test_val
 
         if bucket:
             self._app_overrides[target_key] = bucket
@@ -1051,6 +1152,7 @@ class BuildTargetConfigTab(QWidget):
         )
         self._sync_bump_units_from_overrides()
         self._sync_clean_options_from_overrides()
+        self._sync_test_options_from_overrides()
         self._refresh_app_tab_titles()
         for key in TargetConfig.ordered_keys():
             self._load_app_form(key)
@@ -1062,6 +1164,7 @@ class BuildTargetConfigTab(QWidget):
         self._refresh_app_tab_titles()
 
     def _on_apply_installer(self) -> None:
+        self.mark_installer_configured()
         self._installer_config = self._collect_installer_config()
         self.save_to_ini(self.config_path, silent=True, emit_signal=True)
 
@@ -1075,6 +1178,7 @@ class BuildTargetConfigTab(QWidget):
     def _on_reset_app(self, target_key: str) -> None:
         self._app_overrides.pop(target_key, None)
         self._app_bump_units[target_key] = None
+        self._app_test_options[target_key] = False
         self._app_clean_options[target_key] = {
             field: False for field in CLEAN_OPTION_FIELDS
         }
@@ -1084,8 +1188,10 @@ class BuildTargetConfigTab(QWidget):
         self.load_from_ini(self.config_path, show_error=False)
 
     def reset_all_defaults(self) -> None:
+        self._installer_user_configured = False
         self._app_overrides = {}
         self._app_bump_units = {key: None for key in TargetConfig.ordered_keys()}
+        self._app_test_options = {key: False for key in TargetConfig.ordered_keys()}
         self._app_clean_options = {
             key: {field: False for field in CLEAN_OPTION_FIELDS}
             for key in TargetConfig.ordered_keys()
@@ -1107,6 +1213,7 @@ class BuildTargetConfigTab(QWidget):
             "dir_overrides": self._collect_dir_overrides(),
             "app_overrides": {k: dict(v) for k, v in self._app_overrides.items()},
             "app_bump_units": self.get_app_bump_units(),
+            "app_test_options": self.get_app_test_options(),
             "app_clean_options": self.get_app_clean_options(),
             "installer_config": self._collect_installer_config().to_dict(),
         }
@@ -1176,7 +1283,7 @@ class BuildTargetConfigTab(QWidget):
         if not target_keys or not field_patch:
             return
 
-        allowed = {"mode", "bump_unit"}
+        allowed = {"mode", "bump_unit", TEST_OPTION_FIELD}
         normalized_patch: dict[str, Any] = {}
         for k, v in field_patch.items():
             if k not in allowed:
@@ -1187,6 +1294,8 @@ class BuildTargetConfigTab(QWidget):
                 m = str(v or "").strip()
                 if m:
                     normalized_patch[k] = m
+            elif k == TEST_OPTION_FIELD:
+                normalized_patch[k] = bool(v)
             else:
                 normalized_patch[k] = v
 
@@ -1207,6 +1316,8 @@ class BuildTargetConfigTab(QWidget):
 
             if "bump_unit" in normalized_patch:
                 self._app_bump_units[key] = normalized_patch["bump_unit"]
+            if TEST_OPTION_FIELD in normalized_patch:
+                self._app_test_options[key] = bool(normalized_patch[TEST_OPTION_FIELD])
 
             inputs = self._app_tab_inputs.get(key)
             if inputs:
@@ -1218,6 +1329,12 @@ class BuildTargetConfigTab(QWidget):
                             combo.blockSignals(True)
                             combo.setCurrentIndex(idx)
                             combo.blockSignals(False)
+                if TEST_OPTION_FIELD in normalized_patch:
+                    chk_test = inputs.get(TEST_OPTION_FIELD)
+                    if isinstance(chk_test, QCheckBox):
+                        chk_test.blockSignals(True)
+                        chk_test.setChecked(bool(normalized_patch[TEST_OPTION_FIELD]))
+                        chk_test.blockSignals(False)
                 if "mode" in normalized_patch:
                     mode_widget = inputs.get("mode")
                     if isinstance(mode_widget, QComboBox):
@@ -1261,8 +1378,8 @@ class BuildTargetConfigTab(QWidget):
                 candidates.append(p if p.is_absolute() else (self.project_root / p))
 
         candidates.extend([
-            self.project_root / "src" / target_key / "version.txt",
-            self.project_root / target_key / "version.txt",
+            self.project_root / SRC_DIR_NAME / target_key / VERSION_FILE_NAME,
+            self.project_root / target_key / VERSION_FILE_NAME,
         ])
 
         seen: set[Path] = set()
@@ -1273,7 +1390,7 @@ class BuildTargetConfigTab(QWidget):
             seen.add(resolved)
             if resolved.is_file():
                 try:
-                    content = resolved.read_text(encoding="utf-8-sig").strip()
+                    content = resolved.read_text(encoding=VERSION_FILE_ENCODING).strip()
                 except OSError:
                     continue
                 parsed = _parse_semver(content)

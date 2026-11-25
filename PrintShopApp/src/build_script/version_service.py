@@ -7,6 +7,13 @@ from build_script.target_config import TargetConfig, MAIN_APP_OVERRIDE_NAME, get
 from Common.log import logd, loge
 from Common.Version.exe_version_crypto import generate_win_version_info
 
+DEFAULT_VERSION: str = "1.0.0"
+VERSION_INFO_FILENAME: str = "version_info.txt"
+BUMP_UNIT_MAJOR: str = "major"
+BUMP_UNIT_MINOR: str = "minor"
+BUMP_UNIT_PATCH: str = "patch"
+VERSION_PART_COUNT: int = 3
+INITIAL_MINOR_PATCH: int = 0
 
 class VersionService:
     def __init__(self, project_root: str, target_helpers: dict[str, Any] | None = None):

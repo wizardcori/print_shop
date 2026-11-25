@@ -19,8 +19,18 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from build_manager_config import BuildManagerConfig
+from BuildManagerApp.build_manager_config import BuildManagerConfig
 from Common.config import ConfigType, FileConfigManager
+
+SPINBOX_MIN_INT: int = -1_000_000
+SPINBOX_MAX_INT: int = 1_000_000
+SPINBOX_MIN_FLOAT: float = -1_000_000.0
+SPINBOX_MAX_FLOAT: float = 1_000_000.0
+DEFAULT_FLOAT_VALUE: float = 0.0
+DEFAULT_INT_VALUE: int = 0
+LIST_COMMA_SEPARATOR: str = ","
+OUTER_MARGINS_PX: int = 8
+FORM_SPACING_PX: int = 10
 
 
 class ConfigTab(QWidget):
@@ -53,8 +63,8 @@ class ConfigTab(QWidget):
             min_v = meta.get("min")
             max_v = meta.get("max")
             spin.setRange(
-                int(min_v) if min_v is not None else -1_000_000,
-                int(max_v) if max_v is not None else 1_000_000,
+                int(min_v) if min_v is not None else SPINBOX_MIN_INT,
+                int(max_v) if max_v is not None else SPINBOX_MAX_INT,
             )
             return spin
         if cfg_type == ConfigType.FLOAT:
@@ -62,8 +72,8 @@ class ConfigTab(QWidget):
             min_v = meta.get("min")
             max_v = meta.get("max")
             dspin.setRange(
-                float(min_v) if min_v is not None else -1_000_000.0,
-                float(max_v) if max_v is not None else 1_000_000.0,
+                float(min_v) if min_v is not None else SPINBOX_MIN_FLOAT,
+                float(max_v) if max_v is not None else SPINBOX_MAX_FLOAT,
             )
             return dspin
         return QLineEdit()
@@ -72,9 +82,9 @@ class ConfigTab(QWidget):
         if isinstance(editor, QCheckBox):
             editor.setChecked(bool(value))
         elif isinstance(editor, QSpinBox):
-            editor.setValue(int(value or 0))
+            editor.setValue(int(value or DEFAULT_INT_VALUE))
         elif isinstance(editor, QDoubleSpinBox):
-            editor.setValue(float(value or 0.0))
+            editor.setValue(float(value or DEFAULT_FLOAT_VALUE))
         elif isinstance(editor, QLineEdit):
             if cfg_type in (ConfigType.LIST, ConfigType.DICT) and not isinstance(value, str):
                 editor.setText(json.dumps(value, ensure_ascii=False))
@@ -97,7 +107,7 @@ class ConfigTab(QWidget):
                     parsed = json.loads(txt)
                     return parsed if isinstance(parsed, list) else [parsed]
                 except Exception:
-                    return [x.strip() for x in txt.split(",") if x.strip()]
+                    return [x.strip() for x in txt.split(LIST_COMMA_SEPARATOR) if x.strip()]
             if cfg_type == ConfigType.DICT:
                 if not txt:
                     return {}
@@ -110,7 +120,7 @@ class ConfigTab(QWidget):
 
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setContentsMargins(OUTER_MARGINS_PX, OUTER_MARGINS_PX, OUTER_MARGINS_PX, OUTER_MARGINS_PX)
 
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
@@ -118,7 +128,7 @@ class ConfigTab(QWidget):
 
         container = QWidget()
         layout = QVBoxLayout(container)
-        layout.setSpacing(10)
+        layout.setSpacing(FORM_SPACING_PX)
 
         filepath_text = getattr(self.config_mgr, "filepath", "")
         section_text = getattr(self.config_mgr, "section", "")
