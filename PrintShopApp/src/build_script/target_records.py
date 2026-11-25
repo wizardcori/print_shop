@@ -4,8 +4,8 @@
 
 from __future__ import annotations
 
-from build_script.build_targets import (
-    BuildTargets,
+from build_script.target_config import (
+    TargetConfig,
     INSTALLER_DEFAULT_LABEL,
     INSTALLER_TARGET_KEY,
     MAIN_APP_ORDER,
@@ -86,35 +86,35 @@ __all__ = [
 
 def build_default_records() -> list[dict]:
     return [
-        BuildTargets._make_record(
+        TargetConfig._make_record(
             ORDER_MAIN_APP,
             NAME_MAIN_APP,
             dir_hints=DIR_HINTS_MAIN_APP,
             run_test=True,            
         ),
-        BuildTargets._make_record(
+        TargetConfig._make_record(
             ORDER_UPDATE_SERVICE,
             NAME_UPDATE_SERVICE,
             run_test=True,            
         ),
-        BuildTargets._make_record(
+        TargetConfig._make_record(
             ORDER_UPDATE_MANAGER,
             NAME_UPDATE_MANAGER,
             run_test=True,            
         ),
-        BuildTargets._make_record(
+        TargetConfig._make_record(
             ORDER_VERSION_VIEWER,
             NAME_VERSION_VIEWER,
             run_test=True,            
         ),
-        BuildTargets._make_record(
+        TargetConfig._make_record(
             ORDER_BUILD_MANAGER_APP,
             NAME_BUILD_MANAGER_APP,
             run_test=True,            
             extra_pathex=BUILD_MANAGER_EXTRA_PATHEX,
             hidden_imports=BUILD_MANAGER_HIDDEN_IMPORTS,
         ),
-        BuildTargets._make_record(
+        TargetConfig._make_record(
             ORDER_INSTALLER,
             NAME_INSTALLER,
             label=INSTALLER_LABEL,
@@ -127,7 +127,7 @@ def build_default_records() -> list[dict]:
     ]
 
 
-def ensure_default_targets_injected() -> type[BuildTargets]:
-    if not BuildTargets.RECORDS:
+def ensure_default_targets_injected() -> type[TargetConfig]:
+    if not TargetConfig.RECORDS:
         return inject_target_records(build_default_records())
-    return BuildTargets
+    return TargetConfig

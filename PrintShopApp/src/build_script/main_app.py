@@ -11,7 +11,7 @@ from pathlib import Path
 from Common.log import set_file_tag
 from build_script.build import BuildApp, FILE_TAG_BUILD, parse_targets
 from build_script.build_archive_manager import MODE_DEVELOPMENT, MODE_PRODUCTION
-from build_script.build_targets import BuildTargets
+from build_script.target_config import TargetConfig
 from build_script.target_config_io import (
     INSTALLER_FIELD_ONLY,
     INSTALLER_FIELD_SKIP,
@@ -54,8 +54,8 @@ __all__ = [
 
 def build_arg_parser() -> argparse.ArgumentParser:
     ensure_default_targets_injected()
-    allowed_keys = ", ".join(BuildTargets.ALL_TARGETS.keys())
-    allowed_names = ", ".join(BuildTargets.ALL_TARGETS.values())
+    allowed_keys = ", ".join(TargetConfig.ALL_TARGETS.keys())
+    allowed_names = ", ".join(TargetConfig.ALL_TARGETS.values())
 
     parser = argparse.ArgumentParser(description=CLI_DESCRIPTION)
     parser.add_argument(

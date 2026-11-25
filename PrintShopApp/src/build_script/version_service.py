@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from build_targets import BuildTargets, MAIN_APP_OVERRIDE_NAME, get_target_spec
+from build_script.target_config import TargetConfig, MAIN_APP_OVERRIDE_NAME, get_target_spec
 from Common.log import logd, loge
 from Common.Version.exe_version_crypto import generate_win_version_info
 
@@ -17,7 +17,7 @@ class VersionService:
         fn = self.target_helpers.get("get_version_files")
         if callable(fn):
             return list(fn(target_key))
-        return BuildTargets.get_version_files(target_key, project_root=self.project_root)
+        return TargetConfig.get_version_files(target_key, project_root=self.project_root)
 
     @staticmethod
     def read_version(ver_file: str) -> str:
@@ -58,7 +58,7 @@ class VersionService:
 
     @staticmethod
     def resolve_main_target_key() -> str:
-        ordered = BuildTargets.ordered_keys()
+        ordered = TargetConfig.ordered_keys()
         for candidate in (MAIN_APP_OVERRIDE_NAME, "PrintShopApp", "App", "main_app"):
             if candidate in ordered:
                 return candidate

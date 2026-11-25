@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from build_script.build_targets import BuildTargets
+from build_script.target_config import TargetConfig
 
 _CACHE_LOCK = threading.Lock()
 _ZIP_INSPECT_CACHE: dict[tuple[str, str], tuple[tuple[int, int], dict[str, Any]]] = {}
@@ -686,10 +686,10 @@ def resolve_zip_prev_version_meta(
     """TaskQueue 워커에서 호출: release의 .zip을 메모리에서 열어 최신 버전을 추출합니다."""
     root = Path(project_root).resolve()
     ov = app_override if isinstance(app_override, dict) else {}
-    spec = BuildTargets.get_spec(target_key)
+    spec = TargetConfig.get_spec(target_key)
 
     try:
-        dcfg = BuildTargets.get_dir_config(root)
+        dcfg = TargetConfig.get_dir_config(root)
         dist_dir_name = str(ov.get("dist_dir_name") or dcfg.dist_dir_name or "dist")
         release_dir_name = str(ov.get("release_dir_name") or dcfg.release_dir_name or "release")
     except Exception:
@@ -771,10 +771,10 @@ def resolve_prev_version_meta(
     """
     root = Path(project_root).resolve()
     ov = app_override if isinstance(app_override, dict) else {}
-    spec = BuildTargets.get_spec(target_key)
+    spec = TargetConfig.get_spec(target_key)
 
     try:
-        dcfg = BuildTargets.get_dir_config(root)
+        dcfg = TargetConfig.get_dir_config(root)
         dist_dir_name = str(ov.get("dist_dir_name") or dcfg.dist_dir_name or "dist")
         release_dir_name = str(ov.get("release_dir_name") or dcfg.release_dir_name or "release")
     except Exception:

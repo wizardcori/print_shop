@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Callable
 
 from Common.log import logd
-from build_script.build_targets import BuildTargets, EXE_EXTENSION
+from build_script.target_config import TargetConfig, EXE_EXTENSION
 from build_script.target_config_io import DIST_DIR_NAME, WORK_DIR_NAME
 
 VENV_DIR_NAMES: tuple[str, ...] = (".venv", "venv")
@@ -142,9 +142,9 @@ def convert_ui_files(
 
 
 def resolve_built_exe_path(project_root: str, target_key: str, default_exe_name: str) -> str | None:
-    label = BuildTargets.get_label(target_key)
-    app_dist_dir = BuildTargets.get_dist_dir(target_key, project_root)
-    dist_root = BuildTargets.get_dist_root(project_root)
+    label = TargetConfig.get_label(target_key)
+    app_dist_dir = TargetConfig.get_dist_dir(target_key, project_root)
+    dist_root = TargetConfig.get_dist_root(project_root)
 
     candidates = [
         os.path.join(app_dist_dir, default_exe_name),

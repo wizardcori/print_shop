@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from build_script.artifact_signing import HASH_CHUNK_SIZE
-from build_script.build_targets import BuildDirConfig, BuildTargets, EXE_EXTENSION
+from build_script.target_config import BuildDirConfig, TargetConfig, EXE_EXTENSION
 from build_script.packaging_service import MODE_PRODUCTION
 from build_script.target_config_io import (
     DEFAULT_JSON_INDENT,
@@ -349,7 +349,7 @@ class BuildArchiveManager:
 
         app_key = manifest.get(self.KEY_APP_KEY)
         if app_key and self.dir_config is not None:
-            dist_app_dir = Path(BuildTargets.get_dist_dir(str(app_key), str(self.project_root), create=True))
+            dist_app_dir = Path(TargetConfig.get_dist_dir(str(app_key), str(self.project_root), create=True))
         else:
             dist_app_dir = self.dist_root / app_name
             dist_app_dir.mkdir(parents=True, exist_ok=True)

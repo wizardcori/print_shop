@@ -30,10 +30,10 @@ for p in (str(PROJECT_ROOT), str(SRC_DIR), str(CURRENT_DIR)):
 from Common.log import logd, loge  # noqa: E402
 from Common.step_timer import BuildStepTimer  # noqa: E402
 from build_script.artifact_signing import inject_and_verify_exe  # noqa: E402
-from build_script.build_targets import (  # noqa: E402
+from build_script.target_config import (  # noqa: E402
     AppTargetSpec,
     BuildDirConfig,
-    BuildTargets,
+    TargetConfig,
     MAIN_APP_OVERRIDE_NAME,
     SRC_DIR_NAME,
     TEST_DIR_NAME,
@@ -194,7 +194,7 @@ def reload_pubkey_and_crypto_modules() -> dict[str, list[str]]:
 def parse_targets(raw_targets: list[str] | str | None) -> list[str]:
     """번호 또는 대상 이름을 정규화된 target 목록으로 변환."""
     ensure_default_targets_injected()
-    return BuildTargets.parse_targets(raw_targets)
+    return TargetConfig.parse_targets(raw_targets)
 
 
 class BuildApp:
@@ -242,7 +242,7 @@ class BuildApp:
 
         ensure_default_targets_injected()
 
-        self.dir_config: BuildDirConfig = BuildTargets.configure(
+        self.dir_config: BuildDirConfig = TargetConfig.configure(
             project_root=self.project_root,
             json_path=dir_config_json,
             app_config_json=app_config_json,
@@ -269,7 +269,7 @@ class BuildApp:
             cli_overrides=merged_cli_installer,
         )
 
-        self.targets = targets or BuildTargets.ordered_keys(include_installer=False)
+        self.targets = targets or TargetConfig.ordered_keys(include_installer=False)
         self.bump_unit = normalize_bump_unit(bump_unit)
         self.bump_units: dict[str, str | None] = self._init_bump_units(bump_units)
         self.mode = mode or MODE_PRODUCTION
@@ -310,7 +310,7 @@ class BuildApp:
 
     def _init_bump_units(self, explicit_bump_units: dict[str, str | None] | None) -> dict[str, str | None]:
         resolved: dict[str, str | None] = {}
-        app_overrides_map = BuildTargets.get_app_overrides()
+        app_overrides_map = TargetConfig.get_app_overrides()
         for app_key, ov in app_overrides_map.items():
             if isinstance(ov, dict) and "bump_unit" in ov:
                 resolved[app_key] = normalize_bump_unit(ov.get("bump_unit"))
@@ -454,7 +454,7 @@ class BuildApp:
 
     def _iter_selected_specs(self) -> list[AppTargetSpec]:
         """선택된 대상 순서대로 일반 앱 AppTargetSpec 목록을 반환."""
-        spec_by_key = {spec.key: spec for spec in BuildTargets.TARGET_SPECS}
+        spec_by_key = {spec.key: spec for spec in TargetConfig.TARGET_SPECS}
         ordered: list[AppTargetSpec] = []
         for target_key in self.targets:
             spec = spec_by_key.get(target_key) or get_target_spec(target_key)
@@ -470,9 +470,9 @@ class BuildApp:
         elif len(raw_targets) == 0:
             return []
         else:
-            keys = BuildTargets.parse_targets(raw_targets)
+            keys = TargetConfig.parse_targets(raw_targets)
 
-        spec_by_key = {spec.key: spec for spec in BuildTargets.TARGET_SPECS}
+        spec_by_key = {spec.key: spec for spec in TargetConfig.TARGET_SPECS}
         matched: list[AppTargetSpec] = []
         seen_keys: set[str] = set()
         for key in keys:
@@ -506,7 +506,7 @@ class BuildApp:
         """조합 식별자 및 버전을 반영한 인스톨러 파일명(확장자 제외) 반환."""
         ordered_specs = specs if specs is not None else self.get_installer_specs_sorted()
         combo_tag = self.get_installer_combo_tag(ordered_specs)
-        base_name = self.installer_config.name or f"{BuildTargets.PREFIX}{SETUP_SUFFIX}"
+        base_name = self.installer_config.name or f"{TargetConfig.PREFIX}{SETUP_SUFFIX}"
         if combo_tag == FULL_COMBO_TAG:
             return f"{base_name}_v{main_app_version}"
         return f"{base_name}_{combo_tag}_v{main_app_version}"
@@ -522,8 +522,8 @@ class BuildApp:
             logd(f"  • [{spec.label}] test 동기화 대상 EXE 미존재 (건너뜀): {spec.exe_name}")
             return None
 
-        test_app_dir = Path(BuildTargets.get_test_dir(spec.key, self.project_root, create=True))
-        BuildTargets.validate_app_artifact_layout(
+        test_app_dir = Path(TargetConfig.get_test_dir(spec.key, self.project_root, create=True))
+        TargetConfig.validate_app_artifact_layout(
             self.project_root,
             TEST_DIR_NAME,
             spec.key,
@@ -570,11 +570,11 @@ class BuildApp:
             os.environ[ENV_BUILD_MODE] = self.mode
 
             if self.clean_build:
-                removed = BuildTargets.clean_output_dirs(self.project_root, include_test=True)
+                removed = TargetConfig.clean_output_dirs(self.project_root, include_test=True)
                 for target_dir in removed:
                     logd(f"  • 기존 디렉터리 정리: {target_dir}")
 
-            BuildTargets.ensure_all_app_dirs(self.project_root, targets=self.targets)
+            TargetConfig.ensure_all_app_dirs(self.project_root, targets=self.targets)
             msg = (
                 f"mode={self.mode}, python={py_exe}, "
                 f"dirs=(work={self.dir_config.work_dir_name}, dist={self.dir_config.dist_dir_name}, "
@@ -748,7 +748,7 @@ class BuildApp:
                     default_exe_name=spec_obj.exe_name,
                 )
                 if resolved_exe and os.path.isfile(resolved_exe):
-                    BuildTargets.validate_app_artifact_layout(
+                    TargetConfig.validate_app_artifact_layout(
                         self.project_root,
                         self.dir_config.dist_dir_name,
                         spec_obj.key,
@@ -765,7 +765,7 @@ class BuildApp:
                     injected_count += 1
                 else:
                     expected_fallback = os.path.join(
-                        BuildTargets.get_dist_dir(spec_obj.key, self.project_root),
+                        TargetConfig.get_dist_dir(spec_obj.key, self.project_root),
                         spec_obj.exe_name,
                     )
                     logd(f"  • [{spec_obj.label}] EXE 미존재 (건너뜀): {expected_fallback}")
@@ -836,7 +836,7 @@ class BuildApp:
                 return None
 
             synced_exe_map: dict[str, str] = {}
-            test_dir = Path(BuildTargets.get_test_dir(target_spec.key, self.project_root))
+            test_dir = Path(TargetConfig.get_test_dir(target_spec.key, self.project_root))
             candidate_exe = test_dir / target_spec.exe_name
             if candidate_exe.is_file():
                 synced_exe_map[target_spec.key] = str(candidate_exe)
@@ -906,7 +906,7 @@ class BuildApp:
         logd(f"[{step_name}] 앱별 개별 버전 릴리스 패키지 생성...")
         try:
             self._check_cancelled()
-            dist_root = BuildTargets.get_dist_root(self.project_root)
+            dist_root = TargetConfig.get_dist_root(self.project_root)
             if not os.path.isdir(dist_root):
                 msg = f"{self.dir_config.dist_dir_name} 디렉터리가 없어 릴리스 생성을 건너뜀"
                 logd(f"  • {msg}")
@@ -1002,7 +1002,7 @@ class BuildApp:
                 logd("=== [--installer-only] 인스톨러 단독 생성 모드 시작 ===")
                 py_exe = resolve_python_executable(self.project_root)
                 installer_specs = self.get_installer_specs_sorted()
-                fallback_specs = [s for s in BuildTargets.TARGET_SPECS if not s.is_installer]
+                fallback_specs = [s for s in TargetConfig.TARGET_SPECS if not s.is_installer]
                 version_source_key = (
                     self.installer_config.version_source_id
                     or (

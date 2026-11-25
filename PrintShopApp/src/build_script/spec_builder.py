@@ -12,10 +12,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from Common.log import logd
-from build_script.build_targets import (
+from build_script.target_config import (
     AppTargetSpec,
     BuildDirConfig,
-    BuildTargets,
+    TargetConfig,
     DEFAULT_CONSOLE,
     DEFAULT_ENTRY_FILENAME,
     EXE_EXTENSION,
@@ -305,8 +305,8 @@ class SpecAndPyInstallerBuilder:
 
     def build_target(self, target_key: str, py_exe: str, run_cmd_fn: Callable[..., Any]) -> bool:
         self._check_cancelled(f"대상({target_key}) 빌드 시작 전 취소되었습니다.")
-        work_out = BuildTargets.get_work_dir(target_key, self.project_root, create=True)
-        dist_out = BuildTargets.get_dist_dir(target_key, self.project_root, create=True)
+        work_out = TargetConfig.get_work_dir(target_key, self.project_root, create=True)
+        dist_out = TargetConfig.get_dist_dir(target_key, self.project_root, create=True)
         self.clean_target_outputs(target_key, work_out, dist_out)
         self._check_cancelled(f"대상({target_key}) 산출물 정리 후 취소되었습니다.")
 

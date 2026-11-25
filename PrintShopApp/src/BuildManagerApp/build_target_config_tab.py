@@ -1,5 +1,5 @@
 """
-BuildTargets 세부 설정 위젯 모듈 (build_target_config_tab.py)
+TargetConfig 세부 설정 위젯 모듈 (build_target_config_tab.py)
 - 인스톨러 조합 설정([BuildInstallerConfig]), 앱별 세부 빌드 설정([BuildAppsConfig]),
   전역 디렉터리([BuildDirsConfig])를 BuildManager.ini 섹션에서 로드/저장
 """
@@ -28,10 +28,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from build_manager_config import BUILD_MANAGER_INI_NAME, BuildManagerIniStore
-from build_script.build_targets import (
+from BuildManagerApp.build_manager_config import BUILD_MANAGER_INI_NAME, BuildManagerIniStore
+from build_script.target_config import (
     APP_OVERRIDE_FIELDS,
-    BuildTargets,
+    TargetConfig,
 )
 from build_script.target_config_io import (
     InstallerBuildConfig,
@@ -232,7 +232,7 @@ class BuildTargetConfigTab(QWidget):
         return matched or set(ordered[:2])
 
     def _resolve_selected_installer_keys(self, raw_targets: Any) -> set[str]:
-        ordered = list(BuildTargets.ordered_keys())
+        ordered = list(TargetConfig.ordered_keys())
         default_keys = self._get_default_installer_keys(ordered)
         if not raw_targets:
             return default_keys
@@ -256,7 +256,7 @@ class BuildTargetConfigTab(QWidget):
                     resolved.add(ordered[pos])
                     continue
             for key in ordered:
-                spec = BuildTargets.get_spec(key)
+                spec = TargetConfig.get_spec(key)
                 spec_id = getattr(spec, "id", None) if spec else None
                 if spec_id is not None and str(spec_id).strip() == tok:
                     resolved.add(key)
@@ -269,7 +269,7 @@ class BuildTargetConfigTab(QWidget):
             return "", ""
 
         first_key = selected_keys[0].strip()
-        spec = BuildTargets.get_spec(first_key)
+        spec = TargetConfig.get_spec(first_key)
         auto_name = f"{first_key}Setup" if first_key else ""
 
         spec_id = getattr(spec, "id", None) if spec else None
@@ -279,7 +279,7 @@ class BuildTargetConfigTab(QWidget):
     def _sync_installer_modes_when_empty(self) -> None:
         if not self._installer_inputs:
             return
-        ordered = list(BuildTargets.ordered_keys())
+        ordered = list(TargetConfig.ordered_keys())
         has_selected = any(
             key in self._installer_target_checkboxes
             and self._installer_target_checkboxes[key].isChecked()
@@ -301,7 +301,7 @@ class BuildTargetConfigTab(QWidget):
         if not self._installer_inputs:
             return
 
-        ordered = list(BuildTargets.ordered_keys())
+        ordered = list(TargetConfig.ordered_keys())
         selected = [
             key
             for key in ordered
@@ -341,11 +341,11 @@ class BuildTargetConfigTab(QWidget):
         self._installer_all_checkbox = chk_all
         self._installer_targets_layout.addWidget(chk_all)
 
-        ordered = list(BuildTargets.ordered_keys())
+        ordered = list(TargetConfig.ordered_keys())
         selected_keys = self._resolve_selected_installer_keys(selected_raw)
 
         for idx, key in enumerate(ordered, start=1):
-            spec = BuildTargets.get_spec(key)
+            spec = TargetConfig.get_spec(key)
             label = f"{idx}. {key}"
             chk = QCheckBox(label)
             tip_detail = f" ({spec.label})" if spec and getattr(spec, "label", None) else ""
@@ -389,7 +389,7 @@ class BuildTargetConfigTab(QWidget):
     def _get_checked_installer_targets(self) -> list[str] | None:
         if not self._installer_target_checkboxes:
             return None
-        ordered = list(BuildTargets.ordered_keys())
+        ordered = list(TargetConfig.ordered_keys())
         selected = [
             key
             for key in ordered
@@ -411,7 +411,7 @@ class BuildTargetConfigTab(QWidget):
 
         selected_ordered = [
             key
-            for key in BuildTargets.ordered_keys()
+            for key in TargetConfig.ordered_keys()
             if key in self._installer_target_checkboxes
             and self._installer_target_checkboxes[key].isChecked()
         ]
@@ -449,7 +449,7 @@ class BuildTargetConfigTab(QWidget):
 
     def _sync_bump_units_from_overrides(self) -> None:
         updated: dict[str, str | None] = {}
-        for key in BuildTargets.ordered_keys():
+        for key in TargetConfig.ordered_keys():
             ov = self._app_overrides.get(key, {})
             if "bump_unit" in ov:
                 updated[key] = _normalize_bump_unit(ov.get("bump_unit"))
@@ -459,8 +459,8 @@ class BuildTargetConfigTab(QWidget):
 
     def _sync_clean_options_from_overrides(self) -> None:
         updated: dict[str, dict[str, bool]] = {}
-        for key in BuildTargets.ordered_keys():
-            spec = BuildTargets.get_spec(key)
+        for key in TargetConfig.ordered_keys():
+            spec = TargetConfig.get_spec(key)
             ov = self._app_overrides.get(key, {})
             prev = self._app_clean_options.get(key, {})
             app_clean: dict[str, bool] = {}
@@ -476,24 +476,24 @@ class BuildTargetConfigTab(QWidget):
 
     def set_app_bump_units(self, bump_units: dict[str, Any] | None) -> None:
         src = bump_units or {}
-        for key in BuildTargets.ordered_keys():
+        for key in TargetConfig.ordered_keys():
             if key in src:
                 self._app_bump_units[key] = _normalize_bump_unit(src.get(key))
             elif key not in self._app_bump_units:
                 self._app_bump_units[key] = None
         self._refresh_app_tab_titles()
-        for key in BuildTargets.ordered_keys():
+        for key in TargetConfig.ordered_keys():
             self._load_app_form(key)
 
     def get_app_bump_units(self) -> dict[str, str | None]:
         result: dict[str, str | None] = {}
-        for key in BuildTargets.ordered_keys():
+        for key in TargetConfig.ordered_keys():
             result[key] = _normalize_bump_unit(self._app_bump_units.get(key))
         return result
 
     def set_app_clean_options(self, clean_options: dict[str, dict[str, Any]] | None) -> None:
         src = clean_options or {}
-        for key in BuildTargets.ordered_keys():
+        for key in TargetConfig.ordered_keys():
             current = dict(
                 self._app_clean_options.get(
                     key, {field: False for field in CLEAN_OPTION_FIELDS}
@@ -509,7 +509,7 @@ class BuildTargetConfigTab(QWidget):
 
     def get_app_clean_options(self) -> dict[str, dict[str, bool]]:
         result: dict[str, dict[str, bool]] = {}
-        for key in BuildTargets.ordered_keys():
+        for key in TargetConfig.ordered_keys():
             current = self._app_clean_options.get(key, {})
             result[key] = {
                 field: bool(current.get(field, False)) for field in CLEAN_OPTION_FIELDS
@@ -532,17 +532,17 @@ class BuildTargetConfigTab(QWidget):
             app_ov = sections["app_overrides"]
             inst_dict = sections["installer"]
 
-            BuildTargets.configure(
+            TargetConfig.configure(
                 project_root=self.project_root,
                 code_overrides=dir_ov or None,
                 app_overrides=app_ov or None,
             )
 
-            dcfg = BuildTargets.get_dir_config(self.project_root)
+            dcfg = TargetConfig.get_dir_config(self.project_root)
             if self.general_tab is not None:
                 self.general_tab.set_dir_values(dcfg)
 
-            self._app_overrides = BuildTargets.get_app_overrides()
+            self._app_overrides = TargetConfig.get_app_overrides()
             self._sync_bump_units_from_overrides()
             self._sync_clean_options_from_overrides()
 
@@ -557,7 +557,7 @@ class BuildTargetConfigTab(QWidget):
 
             self._rebuild_app_tabs()
             self._load_installer_form(self._installer_config)
-            for key in BuildTargets.ordered_keys():
+            for key in TargetConfig.ordered_keys():
                 self._load_app_form(key)
             self.config_changed.emit(self.get_current_config_payload())
             return True
@@ -585,7 +585,7 @@ class BuildTargetConfigTab(QWidget):
         should_emit = (not self.auto_save) if emit_signal is None else emit_signal
         self._apply_all_to_targets(emit_signal=should_emit)
         try:
-            dcfg = BuildTargets.get_dir_config(self.project_root)
+            dcfg = TargetConfig.get_dir_config(self.project_root)
             dir_dict = {
                 "work_dir_name": dcfg.work_dir_name,
                 "dist_dir_name": dcfg.dist_dir_name,
@@ -724,7 +724,7 @@ class BuildTargetConfigTab(QWidget):
         layout = QVBoxLayout(content)
         layout.setSpacing(10)
 
-        spec = BuildTargets.get_spec(target_key)
+        spec = TargetConfig.get_spec(target_key)
         header_title = (
             f"{spec.label} ({target_key}) 세부 빌드 설정"
             if spec and spec.label
@@ -840,7 +840,7 @@ class BuildTargetConfigTab(QWidget):
         self._app_tab_index_to_key.clear()
         self._app_key_to_tab_index.clear()
 
-        for key in BuildTargets.ordered_keys():
+        for key in TargetConfig.ordered_keys():
             tab_widget = self._create_single_app_tab(key)
             idx = self.sub_tabs.addTab(tab_widget, self._format_app_tab_title(key))
             self._app_tab_index_to_key[idx] = key
@@ -882,7 +882,7 @@ class BuildTargetConfigTab(QWidget):
         if not inputs:
             return
 
-        spec = BuildTargets.get_spec(target_key)
+        spec = TargetConfig.get_spec(target_key)
         ov = self._app_overrides.get(target_key, {})
 
         bump_combo = inputs.get("bump_unit")
@@ -963,7 +963,7 @@ class BuildTargetConfigTab(QWidget):
         inputs = self._app_tab_inputs.get(target_key)
         if not inputs:
             return {}
-        spec = BuildTargets.get_spec(target_key)
+        spec = TargetConfig.get_spec(target_key)
         patch: dict[str, Any] = {}
 
         label_txt = inputs["label"].text().strip()
@@ -1037,14 +1037,14 @@ class BuildTargetConfigTab(QWidget):
     def _stage_all_tabs_state(self) -> None:
         if self._installer_inputs:
             self._installer_config = self._collect_installer_config()
-        for key in BuildTargets.ordered_keys():
+        for key in TargetConfig.ordered_keys():
             if key in self._app_tab_inputs:
                 self._stage_app_state(key)
 
     def _apply_all_to_targets(self, *, emit_signal: bool = True) -> None:
         dir_ov = self._collect_dir_overrides()
         self._stage_all_tabs_state()
-        BuildTargets.configure(
+        TargetConfig.configure(
             project_root=self.project_root,
             code_overrides=dir_ov,
             app_overrides=self._app_overrides,
@@ -1052,7 +1052,7 @@ class BuildTargetConfigTab(QWidget):
         self._sync_bump_units_from_overrides()
         self._sync_clean_options_from_overrides()
         self._refresh_app_tab_titles()
-        for key in BuildTargets.ordered_keys():
+        for key in TargetConfig.ordered_keys():
             self._load_app_form(key)
         if emit_signal:
             self.config_changed.emit(self.get_current_config_payload())
@@ -1085,19 +1085,19 @@ class BuildTargetConfigTab(QWidget):
 
     def reset_all_defaults(self) -> None:
         self._app_overrides = {}
-        self._app_bump_units = {key: None for key in BuildTargets.ordered_keys()}
+        self._app_bump_units = {key: None for key in TargetConfig.ordered_keys()}
         self._app_clean_options = {
             key: {field: False for field in CLEAN_OPTION_FIELDS}
-            for key in BuildTargets.ordered_keys()
+            for key in TargetConfig.ordered_keys()
         }
         self._installer_config = InstallerBuildConfig()
-        BuildTargets.configure(project_root=self.project_root, reset=True)
-        dcfg = BuildTargets.get_dir_config(self.project_root)
+        TargetConfig.configure(project_root=self.project_root, reset=True)
+        dcfg = TargetConfig.get_dir_config(self.project_root)
         if self.general_tab is not None:
             self.general_tab.set_dir_values(dcfg)
         self._rebuild_app_tabs()
         self._load_installer_form(self._installer_config)
-        for key in BuildTargets.ordered_keys():
+        for key in TargetConfig.ordered_keys():
             self._load_app_form(key)
         self.save_to_ini(self.config_path, silent=True, emit_signal=True)
 
@@ -1130,7 +1130,7 @@ class BuildTargetConfigTab(QWidget):
             return
 
         for key in target_keys:
-            if key not in self._app_tab_inputs and key not in BuildTargets.BY_KEY:
+            if key not in self._app_tab_inputs and key not in TargetConfig.BY_KEY:
                 continue
 
             cur_clean = dict(
@@ -1152,7 +1152,7 @@ class BuildTargetConfigTab(QWidget):
                         chk.setChecked(bool(val))
                         chk.blockSignals(False)
 
-        BuildTargets.configure(
+        TargetConfig.configure(
             project_root=self.project_root,
             code_overrides=self._collect_dir_overrides(),
             app_overrides=self._app_overrides,
@@ -1194,7 +1194,7 @@ class BuildTargetConfigTab(QWidget):
             return
 
         for key in target_keys:
-            if key not in self._app_tab_inputs and key not in BuildTargets.BY_KEY:
+            if key not in self._app_tab_inputs and key not in TargetConfig.BY_KEY:
                 continue
 
             bucket = dict(self._app_overrides.get(key, {}))
@@ -1227,7 +1227,7 @@ class BuildTargetConfigTab(QWidget):
                             mode_widget.setCurrentIndex(idx)
                             mode_widget.blockSignals(False)
 
-        BuildTargets.configure(
+        TargetConfig.configure(
             project_root=self.project_root,
             code_overrides=self._collect_dir_overrides(),
             app_overrides=self._app_overrides,
@@ -1240,7 +1240,7 @@ class BuildTargetConfigTab(QWidget):
             self.config_changed.emit(self.get_current_config_payload())
 
     def _resolve_app_current_version(self, target_key: str) -> str | None:
-        spec = BuildTargets.get_spec(target_key)
+        spec = TargetConfig.get_spec(target_key)
         ov = self._app_overrides.get(target_key, {})
 
         candidates: list[Path] = []

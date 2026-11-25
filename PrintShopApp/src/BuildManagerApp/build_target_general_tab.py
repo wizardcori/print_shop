@@ -1,5 +1,5 @@
 """
-BuildTargets 일반 설정 탭 위젯 모듈 (build_target_general_tab.py)
+TargetConfig 일반 설정 탭 위젯 모듈 (build_target_general_tab.py)
 - 프로젝트 루트 / 통합 설정 파일(BuildManager.ini) 경로 관리 및 불러오기·저장 요청
 - 전역 빌드 디렉터리 설정 ([BuildDirsConfig]) 입력 및 수집/동기화 제공
 """

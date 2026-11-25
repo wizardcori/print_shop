@@ -42,7 +42,7 @@ set_file_tag("BUILD_MGR")
 from build_app_tabs_group import BuildAppTabGroupBox, INSTALLER_TAB_KEY  # noqa: E402
 from build_manager_config import BUILD_MANAGER_INI_NAME, BuildManagerIniStore  # noqa: E402
 from build_script.build import BuildApp, PrintShopBuildStepTimer, parse_targets  # noqa: E402
-from build_script.build_targets import BuildTargets  # noqa: E402
+from build_script.target_config import TargetConfig  # noqa: E402
 from build_target_config_tab import BuildTargetConfigTab  # noqa: E402
 from BuildManagerApp.settings_window import SettingsWindow  # noqa: E402
 from Common.prio_worker_queue import CancelToken, TaskListenerBase, TaskManager, TaskPriority  # noqa: E402
@@ -112,7 +112,7 @@ BUILD_APP_ACCEPTED_KEYS: set[str] = {
 
 
 def _resolve_default_installer_targets() -> list[str]:
-    ordered = list(BuildTargets.ordered_keys())
+    ordered = list(TargetConfig.ordered_keys())
     resolved: list[str] = []
     for alias in DEFAULT_INSTALLER_TARGET_ALIASES:
         if alias in ordered and alias not in resolved:
@@ -312,7 +312,7 @@ def run_build_job(
 ) -> dict[str, Any]:
     """
     PriorityWorkerThread에서 실행되는 작업 래퍼 함수.
-    - job_type == "clean": BuildTargets 단일 기준 빌드 출력 디렉터리 정리 전용 작업 수행
+    - job_type == "clean": TargetConfig 단일 기준 빌드 출력 디렉터리 정리 전용 작업 수행
     - job_type == "app" / "installer": BuildApp 파이프라인 실행
     """
     active_event = cancel_token.event if cancel_token is not None else cancel_event
@@ -327,7 +327,7 @@ def run_build_job(
         if callable(progress_cb):
             progress_cb(10, "빌드 출력 디렉터리 정리 중...")
 
-        BuildTargets.configure(
+        TargetConfig.configure(
             project_root=project_root,
             json_path=build_kwargs.get("dir_config_json"),
             code_overrides=build_kwargs.get("dir_overrides"),
@@ -336,7 +336,7 @@ def run_build_job(
         if active_event and active_event.is_set():
             raise InterruptedError("디렉터리 정리 중 취소되었습니다.")
 
-        removed_dirs = BuildTargets.clean_output_dirs(project_root, include_test=True)
+        removed_dirs = TargetConfig.clean_output_dirs(project_root, include_test=True)
         for removed in removed_dirs:
             logd(f"[CleanJob] 디렉터리 정리 완료: {removed}")
 
@@ -807,7 +807,7 @@ class BuildManagerWindow(QMainWindow):
                 "prev_meta": None,
             }
 
-        spec = BuildTargets.get_spec(key)
+        spec = TargetConfig.get_spec(key)
         ov = self._app_overrides.get(key, {}) if isinstance(self._app_overrides, dict) else {}
         label_text = self._format_target_label(key, spec)
         display_name = str(ov.get("display_name") or getattr(spec, "display_name", None) or key)
@@ -850,9 +850,9 @@ class BuildManagerWindow(QMainWindow):
     def _get_app_zip_sig(self, key: str) -> tuple[tuple[str, int, int], ...]:
         """해당 앱의 release .zip 파일 목록과 (경로, 크기, 수정시각_ns) 스냅샷을 반환합니다."""
         ov = self._app_overrides.get(key, {}) if isinstance(self._app_overrides, dict) else {}
-        spec = BuildTargets.get_spec(key)
+        spec = TargetConfig.get_spec(key)
         try:
-            dcfg = BuildTargets.get_dir_config(self.project_root)
+            dcfg = TargetConfig.get_dir_config(self.project_root)
             release_dir_name = str(ov.get("release_dir_name") or dcfg.release_dir_name or "release")
         except Exception:
             release_dir_name = "release"
@@ -913,7 +913,7 @@ class BuildManagerWindow(QMainWindow):
             return
         selected_keys = [
             key
-            for key in BuildTargets.ordered_keys()
+            for key in TargetConfig.ordered_keys()
             if key in self._target_checks and self._target_checks[key].isChecked()
         ]
         include_inst = self._should_show_installer_tab()
@@ -1052,7 +1052,7 @@ class BuildManagerWindow(QMainWindow):
         self.setWindowTitle(f"PrintShop Build Manager - {self.project_root.name}")
 
     def _sync_overrides_from_targets(self) -> None:
-        dcfg = BuildTargets.get_dir_config(self.project_root)
+        dcfg = TargetConfig.get_dir_config(self.project_root)
         self._dir_overrides = {
             "work_dir_name": dcfg.work_dir_name,
             "dist_dir_name": dcfg.dist_dir_name,
@@ -1060,7 +1060,7 @@ class BuildManagerWindow(QMainWindow):
             "install_dir_name": dcfg.install_dir_name,
         }
         self._app_overrides = {
-            k: dict(v) for k, v in BuildTargets.get_app_overrides().items()
+            k: dict(v) for k, v in TargetConfig.get_app_overrides().items()
         }
 
         raw_targets = self._installer_overrides.get("targets")
@@ -1198,11 +1198,11 @@ class BuildManagerWindow(QMainWindow):
                 w.deleteLater()
         self._target_checks.clear()
 
-        keys = BuildTargets.ordered_keys()
+        keys = TargetConfig.ordered_keys()
         for idx, key in enumerate(keys):
             if idx > 0:
                 self.targets_row_layout.addWidget(_create_v_separator(self.targets_group))
-            spec = BuildTargets.get_spec(key)
+            spec = TargetConfig.get_spec(key)
             label = self._format_target_label(key, spec)
             chk = QCheckBox(label)
             chk.setToolTip(label)
@@ -1249,7 +1249,7 @@ class BuildManagerWindow(QMainWindow):
 
     def _get_selected_targets(self) -> list[str]:
         selected = [key for key, chk in self._target_checks.items() if chk.isChecked()]
-        return selected or BuildTargets.ordered_keys()
+        return selected or TargetConfig.ordered_keys()
 
     def _get_selected_bump(self) -> str | None:
         data = self.combo_bump.currentData()
@@ -1333,13 +1333,13 @@ class BuildManagerWindow(QMainWindow):
         app_ov = sections["app_overrides"]
         inst_dict = sections["installer"]
 
-        BuildTargets.configure(
+        TargetConfig.configure(
             project_root=self.project_root,
             code_overrides=dir_ov or None,
             app_overrides=app_ov or None,
         )
 
-        dcfg = BuildTargets.get_dir_config(self.project_root)
+        dcfg = TargetConfig.get_dir_config(self.project_root)
         self._dir_overrides = {
             "work_dir_name": dcfg.work_dir_name,
             "dist_dir_name": dcfg.dist_dir_name,
@@ -1347,7 +1347,7 @@ class BuildManagerWindow(QMainWindow):
             "install_dir_name": dcfg.install_dir_name,
         }
         self._app_overrides = {
-            k: dict(v) for k, v in BuildTargets.get_app_overrides().items()
+            k: dict(v) for k, v in TargetConfig.get_app_overrides().items()
         }
 
         raw_targets = inst_dict.get("targets")
@@ -1395,7 +1395,7 @@ class BuildManagerWindow(QMainWindow):
 
     def _save_build_config_ini_now(self) -> None:
         self.ini_store.reload_all(self.config_path.parent)
-        dcfg = BuildTargets.get_dir_config(self.project_root)
+        dcfg = TargetConfig.get_dir_config(self.project_root)
         dir_dict = {
             "work_dir_name": dcfg.work_dir_name,
             "dist_dir_name": dcfg.dist_dir_name,
@@ -1442,7 +1442,7 @@ class BuildManagerWindow(QMainWindow):
             bucket.update(clean_patch)
             self._app_overrides[key] = bucket
 
-        BuildTargets.configure(
+        TargetConfig.configure(
             project_root=self.project_root,
             code_overrides=self._dir_overrides or None,
             app_overrides=self._app_overrides,
@@ -1498,7 +1498,7 @@ class BuildManagerWindow(QMainWindow):
                     bucket[k] = v
             self._app_overrides[key] = bucket
 
-        BuildTargets.configure(
+        TargetConfig.configure(
             project_root=self.project_root,
             code_overrides=self._dir_overrides or None,
             app_overrides=self._app_overrides,
@@ -1532,7 +1532,7 @@ class BuildManagerWindow(QMainWindow):
             return
 
         checked_apps = [key for key, chk in self._target_checks.items() if chk.isChecked()]
-        app_keys = checked_apps or list(BuildTargets.ordered_keys())
+        app_keys = checked_apps or list(TargetConfig.ordered_keys())
 
         clean_build_opt = bool(self.chk_clean_build.isChecked())
         skip_installer_opt = bool(self.chk_skip_installer.isChecked())

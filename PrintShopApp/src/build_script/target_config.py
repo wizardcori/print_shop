@@ -70,7 +70,7 @@ __all__ = [
     "APP_OVERRIDE_FIELDS",
     "AppTargetSpec",
     "BuildDirConfig",
-    "BuildTargets",
+    "TargetConfig",
     "DEFAULT_CONFIG_FILENAME",
     "DEFAULT_CONSOLE",
     "DEFAULT_COPY_TO_ARCHIVE",
@@ -178,7 +178,7 @@ class AppTargetSpec:
     extra: dict[str, Any] = field(default_factory=dict)
 
 
-class _BuildTargetsMeta(type):
+class _TargetConfigMeta(type):
     """RECORDS 변경 시 클래스 변수(TARGET_CLASSES, TARGET_SPECS, ALL_TARGETS, LABELS 등)를 갱신."""
 
     def __setattr__(cls, name: str, value: Any) -> None:
@@ -187,7 +187,7 @@ class _BuildTargetsMeta(type):
             cls._rebuild_target_mappings(value)
 
 
-class BuildTargets(metaclass=_BuildTargetsMeta):
+class TargetConfig(metaclass=_TargetConfigMeta):
     """앱 및 인스톨러 대상 레코드, 설정 및 경로 헬퍼를 관리하는 클래스."""
 
     PREFIX: str = PREFIX
@@ -997,11 +997,11 @@ class BuildTargets(metaclass=_BuildTargetsMeta):
         return None
 
 
-TARGET_CLASSES: tuple[type[AppTargetSpec], ...] = BuildTargets.TARGET_CLASSES
-TARGET_SPECS: tuple[AppTargetSpec, ...] = BuildTargets.TARGET_SPECS
-ALL_TARGETS: dict[str, str] = BuildTargets.ALL_TARGETS
-LABELS: dict[str, str] = BuildTargets.LABELS
-TARGET_LABELS: dict[str, str] = BuildTargets.TARGET_LABELS
+TARGET_CLASSES: tuple[type[AppTargetSpec], ...] = TargetConfig.TARGET_CLASSES
+TARGET_SPECS: tuple[AppTargetSpec, ...] = TargetConfig.TARGET_SPECS
+ALL_TARGETS: dict[str, str] = TargetConfig.ALL_TARGETS
+LABELS: dict[str, str] = TargetConfig.LABELS
+TARGET_LABELS: dict[str, str] = TargetConfig.TARGET_LABELS
 
 
 def inject_target_records(
@@ -1009,55 +1009,55 @@ def inject_target_records(
     *,
     dir_config: BuildDirConfig | None = None,
     app_overrides: dict[str, dict[str, Any]] | None = None,
-) -> type[BuildTargets]:
-    """외부에서 정의한 레코드 목록을 BuildTargets 클래스 변수에 주입."""
+) -> type[TargetConfig]:
+    """외부에서 정의한 레코드 목록을 TargetConfig 클래스 변수에 주입."""
     global TARGET_CLASSES, TARGET_SPECS, ALL_TARGETS, LABELS, TARGET_LABELS
 
     if dir_config is not None:
-        BuildTargets._dir_config = dir_config
+        TargetConfig._dir_config = dir_config
     if app_overrides is not None:
-        BuildTargets.set_app_overrides(app_overrides, replace=True)
-    BuildTargets.set_base_records(records)
+        TargetConfig.set_app_overrides(app_overrides, replace=True)
+    TargetConfig.set_base_records(records)
 
-    TARGET_CLASSES = BuildTargets.TARGET_CLASSES
-    TARGET_SPECS = BuildTargets.TARGET_SPECS
-    ALL_TARGETS = BuildTargets.ALL_TARGETS
-    LABELS = BuildTargets.LABELS
-    TARGET_LABELS = BuildTargets.TARGET_LABELS
-    return BuildTargets
+    TARGET_CLASSES = TargetConfig.TARGET_CLASSES
+    TARGET_SPECS = TargetConfig.TARGET_SPECS
+    ALL_TARGETS = TargetConfig.ALL_TARGETS
+    LABELS = TargetConfig.LABELS
+    TARGET_LABELS = TargetConfig.TARGET_LABELS
+    return TargetConfig
 
 
 def get_target_spec(target_key: str) -> AppTargetSpec | None:
-    return BuildTargets.get_spec(target_key)
+    return TargetConfig.get_spec(target_key)
 
 
 def get_build_target_helpers(project_root: str | Path = PathMgr.PROJECT_ROOT) -> dict[str, Any]:
     root = Path(project_root)
     return {
-        "prefix": BuildTargets.PREFIX,
-        "work_dir_name": BuildTargets.get_dir_config(root).work_dir_name,
-        "dist_dir_name": BuildTargets.get_dir_config(root).dist_dir_name,
-        "release_dir_name": BuildTargets.get_dir_config(root).release_dir_name,
-        "install_dir_name": BuildTargets.get_dir_config(root).release_dir_name,
-        "test_dir_name": BuildTargets.TEST_DIR_NAME,
-        "app_overrides": BuildTargets.get_app_overrides(),
-        "get_work_root": lambda: BuildTargets.get_work_root(root),
-        "get_dist_root": lambda: BuildTargets.get_dist_root(root),
-        "get_release_root": lambda: BuildTargets.get_release_root(root),
-        "get_install_root": lambda: BuildTargets.get_install_root(root),
-        "get_test_root": lambda: BuildTargets.get_test_root(root),
-        "get_work_dir": lambda k, create=False: BuildTargets.get_work_dir(k, root, create=create),
-        "get_dist_dir": lambda k, create=False: BuildTargets.get_dist_dir(k, root, create=create),
-        "get_release_dir": lambda k, create=False: BuildTargets.get_release_dir(k, root, create=create),
-        "get_install_dir": lambda k=INSTALLER_TARGET_KEY, create=False: BuildTargets.get_install_dir(
+        "prefix": TargetConfig.PREFIX,
+        "work_dir_name": TargetConfig.get_dir_config(root).work_dir_name,
+        "dist_dir_name": TargetConfig.get_dir_config(root).dist_dir_name,
+        "release_dir_name": TargetConfig.get_dir_config(root).release_dir_name,
+        "install_dir_name": TargetConfig.get_dir_config(root).release_dir_name,
+        "test_dir_name": TargetConfig.TEST_DIR_NAME,
+        "app_overrides": TargetConfig.get_app_overrides(),
+        "get_work_root": lambda: TargetConfig.get_work_root(root),
+        "get_dist_root": lambda: TargetConfig.get_dist_root(root),
+        "get_release_root": lambda: TargetConfig.get_release_root(root),
+        "get_install_root": lambda: TargetConfig.get_install_root(root),
+        "get_test_root": lambda: TargetConfig.get_test_root(root),
+        "get_work_dir": lambda k, create=False: TargetConfig.get_work_dir(k, root, create=create),
+        "get_dist_dir": lambda k, create=False: TargetConfig.get_dist_dir(k, root, create=create),
+        "get_release_dir": lambda k, create=False: TargetConfig.get_release_dir(k, root, create=create),
+        "get_install_dir": lambda k=INSTALLER_TARGET_KEY, create=False: TargetConfig.get_install_dir(
             k, root, create=create
         ),
-        "get_installer_dist_dir": lambda k=INSTALLER_TARGET_KEY, create=False: BuildTargets.get_installer_dist_dir(
+        "get_installer_dist_dir": lambda k=INSTALLER_TARGET_KEY, create=False: TargetConfig.get_installer_dist_dir(
             k, root, create=create
         ),
-        "get_test_dir": lambda k, create=False: BuildTargets.get_test_dir(k, root, create=create),
-        "get_app_dirs": lambda k, create=False: BuildTargets.get_app_dirs(k, root, create=create),
-        "get_version_files": lambda k: BuildTargets.get_version_files(k, root),
-        "get_version_fullpath": lambda k: BuildTargets.get_version_fullpath(k, root),
-        "get_version_dir": lambda k: BuildTargets.get_version_dir(k, root),
+        "get_test_dir": lambda k, create=False: TargetConfig.get_test_dir(k, root, create=create),
+        "get_app_dirs": lambda k, create=False: TargetConfig.get_app_dirs(k, root, create=create),
+        "get_version_files": lambda k: TargetConfig.get_version_files(k, root),
+        "get_version_fullpath": lambda k: TargetConfig.get_version_fullpath(k, root),
+        "get_version_dir": lambda k: TargetConfig.get_version_dir(k, root),
     }

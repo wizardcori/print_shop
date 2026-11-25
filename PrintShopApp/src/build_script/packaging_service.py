@@ -14,10 +14,10 @@ from typing import Any, Callable
 from Common.Version.exe_version_crypto import sign_exe_authenticode
 from Common.log import logd
 from build_script.artifact_signing import write_sha256_file
-from build_script.build_targets import (
+from build_script.target_config import (
     AppTargetSpec,
     BuildDirConfig,
-    BuildTargets,
+    TargetConfig,
     EXE_EXTENSION,
     INSTALLER_TARGET_KEY,
 )
@@ -111,15 +111,15 @@ class PackagingService:
         target_versions: dict[str, str],
     ) -> list[str]:
         self._check_cancelled("릴리스 패키지 생성 시작 전 취소되었습니다.")
-        dist_root = BuildTargets.get_dist_root(self.project_root)
+        dist_root = TargetConfig.get_dist_root(self.project_root)
         if not os.path.isdir(dist_root):
             return []
 
         created_releases: list[str] = []
         for spec in specs:
             self._check_cancelled(f"[{spec.label}] 릴리스 패키지 생성 중 취소되었습니다.")
-            app_dist_dir = BuildTargets.get_dist_dir(spec.key, self.project_root)
-            BuildTargets.validate_app_artifact_layout(
+            app_dist_dir = TargetConfig.get_dist_dir(spec.key, self.project_root)
+            TargetConfig.validate_app_artifact_layout(
                 self.project_root,
                 self.dir_config.dist_dir_name,
                 spec.key,
@@ -129,12 +129,12 @@ class PackagingService:
             if not os.path.isdir(app_dist_dir):
                 logd(
                     f"  • [{spec.label}] {self.dir_config.dist_dir_name}/"
-                    f"{BuildTargets.get_folder_name(spec.key)} 폴더가 없어 릴리스 생성을 건너뜀"
+                    f"{TargetConfig.get_folder_name(spec.key)} 폴더가 없어 릴리스 생성을 건너뜀"
                 )
                 continue
 
-            app_release_dir = BuildTargets.get_release_dir(spec.key, self.project_root, create=True)
-            BuildTargets.validate_app_artifact_layout(
+            app_release_dir = TargetConfig.get_release_dir(spec.key, self.project_root, create=True)
+            TargetConfig.validate_app_artifact_layout(
                 self.project_root,
                 self.dir_config.release_dir_name,
                 spec.key,
@@ -148,7 +148,7 @@ class PackagingService:
                 else f"{spec.label}_v{app_ver}{ARCHIVE_EXTENSION}"
             )
             release_zip_path = os.path.join(app_release_dir, archive_name)
-            BuildTargets.validate_app_artifact_layout(
+            TargetConfig.validate_app_artifact_layout(
                 self.project_root,
                 self.dir_config.release_dir_name,
                 spec.key,
@@ -210,7 +210,7 @@ class PackagingService:
         return None
 
     def find_iss_script(self, installer_dir: str) -> str | None:
-        release_root = BuildTargets.get_release_root(self.project_root)
+        release_root = TargetConfig.get_release_root(self.project_root)
         search_dirs: list[str] = [self.project_root, installer_dir]
         if release_root not in search_dirs:
             search_dirs.append(release_root)
@@ -238,16 +238,16 @@ class PackagingService:
         installer_exe_path: str,
     ) -> tuple[str, str]:
         """인스톨러 EXE 및 SHA-256 파일을 release와 dist 인스톨러 폴더 양쪽에 저장."""
-        release_dir = BuildTargets.get_install_dir(installer_key, self.project_root, create=True)
-        dist_dir = BuildTargets.get_installer_dist_dir(installer_key, self.project_root, create=True)
+        release_dir = TargetConfig.get_install_dir(installer_key, self.project_root, create=True)
+        dist_dir = TargetConfig.get_installer_dist_dir(installer_key, self.project_root, create=True)
 
-        BuildTargets.validate_app_artifact_layout(
+        TargetConfig.validate_app_artifact_layout(
             self.project_root,
             self.dir_config.release_dir_name,
             installer_key,
             release_dir,
         )
-        BuildTargets.validate_app_artifact_layout(
+        TargetConfig.validate_app_artifact_layout(
             self.project_root,
             self.dir_config.dist_dir_name,
             installer_key,
@@ -285,20 +285,20 @@ class PackagingService:
     ) -> tuple[str | None, str]:
         self._check_cancelled("인스톨러 생성 시작 전 취소되었습니다.")
         main_key = self.version_service.resolve_main_target_key()
-        main_label = BuildTargets.get_label(main_key)
-        main_dist_dir = BuildTargets.get_dist_dir(main_key, self.project_root)
+        main_label = TargetConfig.get_label(main_key)
+        main_dist_dir = TargetConfig.get_dist_dir(main_key, self.project_root)
 
-        installer_key = INSTALLER_TARGET_KEY if INSTALLER_TARGET_KEY in BuildTargets.BY_KEY else main_key
-        installer_dir = BuildTargets.get_install_dir(installer_key, self.project_root, create=True)
-        installer_folder_name = BuildTargets.get_folder_name(installer_key)
+        installer_key = INSTALLER_TARGET_KEY if INSTALLER_TARGET_KEY in TargetConfig.BY_KEY else main_key
+        installer_dir = TargetConfig.get_install_dir(installer_key, self.project_root, create=True)
+        installer_folder_name = TargetConfig.get_folder_name(installer_key)
 
-        BuildTargets.validate_app_artifact_layout(
+        TargetConfig.validate_app_artifact_layout(
             self.project_root,
             self.dir_config.dist_dir_name,
             main_key,
             main_dist_dir,
         )
-        BuildTargets.validate_app_artifact_layout(
+        TargetConfig.validate_app_artifact_layout(
             self.project_root,
             self.dir_config.release_dir_name,
             installer_key,
@@ -332,7 +332,7 @@ class PackagingService:
                 iscc,
                 f"/DSourceDir={self.project_root}",
                 f"/DAppDistDir={main_dist_dir}",
-                f"/DDistRoot={BuildTargets.get_dist_root(self.project_root)}",
+                f"/DDistRoot={TargetConfig.get_dist_root(self.project_root)}",
                 f"/DAppVersion={main_app_version}",
                 f"/DOutputDir={installer_dir}",
                 f"/DOutputBaseFilename={out_base_name}",
@@ -358,7 +358,7 @@ class PackagingService:
         ]
         latest_installer = max(created_installers, key=os.path.getmtime) if created_installers else None
         if latest_installer:
-            BuildTargets.validate_app_artifact_layout(
+            TargetConfig.validate_app_artifact_layout(
                 self.project_root,
                 self.dir_config.release_dir_name,
                 installer_key,
