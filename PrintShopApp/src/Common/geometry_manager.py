@@ -3,17 +3,21 @@ from Common.path_mgr import PathMgr
 from Common.config import FileConfigManager, ConfigType
 from Common.log import logd, loge
 
-from Common.log import set_file_tag ;set_file_tag("GEO")
+from Common.log import set_file_tag
+
+set_file_tag("GEO")
 
 try:
-    from PyQt6.QtWidgets import QWidget, QSplitter, QApplication, QMainWindow
-    from PyQt6.QtCore import QRect
+    from PySide6.QtWidgets import (
+        QWidget,
+        QDialog,
+        QSplitter,
+        QApplication,
+        QMainWindow,
+    )
+    from PySide6.QtCore import QRect
 except ImportError:
-    try:
-        from PySide6.QtWidgets import QWidget, QSplitter, QApplication, QMainWindow
-        from PySide6.QtCore import QRect
-    except ImportError:
-        QWidget = QSplitter = QApplication = QMainWindow = QRect = None
+    QWidget = QDialog = QSplitter = QApplication = QMainWindow = QRect = None
 
 
 class GeometryConfig(FileConfigManager):
@@ -24,10 +28,7 @@ class GeometryConfig(FileConfigManager):
 
     def _ensure_schema_key(self, key: str, data_type: Any, default_value: Any):
         if key not in self.schema:
-            self.schema[key] = {
-                "type": data_type,
-                "default": default_value
-            }
+            self.schema[key] = {"type": data_type, "default": default_value}
             if not self.config.has_option(self.section, key):
                 self.config.set(self.section, key, str(default_value))
             logd(f"[{self.section}] Added new schema key '{key}' with default: {default_value}")
@@ -39,15 +40,17 @@ class GeometryConfig(FileConfigManager):
 class GeometryManager:
     def __init__(self, section_name: Optional[str] = None):
         self._section_name = section_name or self.__class__.__name__
-        
+
         class DynamicGeometryConfig(GeometryConfig):
             section = self._section_name
-            
+
         self.geometry_config = DynamicGeometryConfig()
 
     def save_window_geometry(self, window: QWidget):
         if window is None:
-            loge(f"[{self.geometry_config.section}] Cannot save window geometry: Provided window is None.")
+            loge(
+                f"[{self.geometry_config.section}] Cannot save window geometry: Provided window is None."
+            )
             return
 
         geom = window.geometry()
@@ -55,20 +58,31 @@ class GeometryManager:
         key = "window_geometry"
         self.geometry_config._ensure_schema_key(key, ConfigType.LIST, val)
         self.geometry_config.set(key, val)
-        logd(f"[{self.geometry_config.section}] Saved window geometry: x={geom.x()}, y={geom.y()}, w={geom.width()}, h={geom.height()}")
+        logd(
+            f"[{self.geometry_config.section}] Saved window geometry: x={geom.x()}, y={geom.y()}, w={geom.width()}, h={geom.height()}"
+        )
 
     def load_window_geometry(self, window: QWidget, default_geometry: Optional[List[int]] = None):
         if window is None:
-            loge(f"[{self.geometry_config.section}] Cannot load window geometry: Provided window is None.")
+            loge(
+                f"[{self.geometry_config.section}] Cannot load window geometry: Provided window is None."
+            )
             return
 
         key = "window_geometry"
         if key not in self.geometry_config.schema:
-            logd(f"[{self.geometry_config.section}] '{key}' not found in schema. Skipping geometry load.")
-            return
+            if default_geometry and len(default_geometry) == 4:
+                self.geometry_config._ensure_schema_key(
+                    key, ConfigType.LIST, list(default_geometry)
+                )
+            else:
+                logd(
+                    f"[{self.geometry_config.section}] '{key}' not found in schema. Skipping geometry load."
+                )
+                return
 
         val = self.geometry_config.get(key)
-        # 💡 튜플 반환 대비 안전한 list 캐스팅 추가
+        # 튜플 반환 대비 안전한 list 캐스팅 추가
         if isinstance(val, tuple):
             val = list(val)
 
@@ -80,18 +94,24 @@ class GeometryManager:
 
         # 1. 기존 화면 가시성 검증
         if not self._is_window_visible_on_screen(x, y, w, h):
-            default_val = default_geometry or self.geometry_config.schema[key].get("default", [100, 100, 1200, 800])
+            default_val = default_geometry or self.geometry_config.schema[key].get(
+                "default", [100, 100, 1200, 800]
+            )
             if isinstance(default_val, tuple):
                 default_val = list(default_val)
             if isinstance(default_val, list) and len(default_val) == 4:
-                logd(f"[{self.geometry_config.section}] Window position off-screen. Fallback to default: {default_val}")
+                logd(
+                    f"[{self.geometry_config.section}] Window position off-screen. Fallback to default: {default_val}"
+                )
                 x, y, w, h = default_val
                 self.geometry_config.set(key, [x, y, w, h])
 
         # 2. 타이틀바가 화면 위쪽 밖으로 나간 경우 강제 보정
         if QApplication is not None:
             target_rect = QRect(x, y, w, h)
-            current_screen = QApplication.screenAt(target_rect.center()) or QApplication.primaryScreen()
+            current_screen = (
+                QApplication.screenAt(target_rect.center()) or QApplication.primaryScreen()
+            )
             if current_screen:
                 screen_geom = current_screen.availableGeometry()
 
@@ -111,18 +131,22 @@ class GeometryManager:
             desktop_rect = QRect()
             for screen in QApplication.screens():
                 desktop_rect = desktop_rect.united(screen.availableGeometry())
-            
+
             if not desktop_rect.contains(x, y + 20):
-                logd(f"[{self.geometry_config.section}] Saved geometry [{x}, {y}, {w}, {h}] is out of active screen bounds. Resetting to default.")
+                logd(
+                    f"[{self.geometry_config.section}] Saved geometry [{x}, {y}, {w}, {h}] is out of active screen bounds. Resetting to default."
+                )
                 default_val = default_geometry or [100, 100, 640, 480]
                 if isinstance(default_val, tuple):
                     default_val = list(default_val)
                 if isinstance(default_val, list) and len(default_val) == 4:
                     x, y, w, h = default_val
-                    self.geometry_config.set(key, [x, y, w, h])                    
+                    self.geometry_config.set(key, [x, y, w, h])
 
         window.setGeometry(x, y, w, h)
-        logd(f"[{self.geometry_config.section}] Applied window geometry: x={x}, y={y}, w={w}, h={h}")
+        logd(
+            f"[{self.geometry_config.section}] Applied window geometry: x={x}, y={y}, w={w}, h={h}"
+        )
 
     def _is_window_visible_on_screen(self, x: int, y: int, w: int, h: int) -> bool:
         if QApplication is None:
@@ -153,27 +177,29 @@ class GeometryManager:
 class SplitterManager:
     def __init__(self, section_name: Optional[str] = None):
         self._section_name = section_name or self.__class__.__name__
-        
+
         class DynamicSplitterConfig(GeometryConfig):
             section = self._section_name
-            
+
         self.geometry_config = DynamicSplitterConfig()
 
     def clean_unused_splitters(self, parent_widget: QWidget, suffix: str = "_sizes"):
         if parent_widget is None:
             return
 
-        splitters = [c for c in parent_widget.findChildren(QSplitter) if c.parent() == parent_widget]
+        splitters = [
+            c for c in parent_widget.findChildren(QSplitter) if c.parent() == parent_widget
+        ]
         valid_names = {s.objectName() for s in splitters if s.objectName()}
-        
+
         cfg = self.geometry_config
         section = cfg.section
         if not cfg.config.has_section(section):
             return
-            
+
         for option in list(cfg.config.options(section)):
             if option.endswith(suffix):
-                base_name = option[:-len(suffix)]
+                base_name = option[: -len(suffix)]
                 if base_name not in valid_names:
                     if option in cfg.schema:
                         del cfg.schema[option]
@@ -184,18 +210,22 @@ class SplitterManager:
         if parent_widget is None:
             return
 
-        splitters = [c for c in parent_widget.findChildren(QSplitter) if c.parent() == parent_widget]
-        
+        splitters = [
+            c for c in parent_widget.findChildren(QSplitter) if c.parent() == parent_widget
+        ]
+
         for splitter in splitters:
             name = splitter.objectName()
             if not name:
                 continue
-                
+
             sizes = splitter.sizes()
             if not sizes or any(s <= 0 for s in sizes):
-                logd(f"[{self.geometry_config.section}] Skipping save for splitter '{name}' due to invalid sizes: {sizes}")
+                logd(
+                    f"[{self.geometry_config.section}] Skipping save for splitter '{name}' due to invalid sizes: {sizes}"
+                )
                 continue
-                
+
             key = f"{name}_sizes"
             self.geometry_config._ensure_schema_key(key, ConfigType.LIST, sizes)
             self.geometry_config.set(key, sizes)
@@ -205,27 +235,33 @@ class SplitterManager:
         if parent_widget is None:
             return
 
-        self.clean_unused_splitters(parent_widget)        
+        self.clean_unused_splitters(parent_widget)
 
-        splitters = [c for c in parent_widget.findChildren(QSplitter) if c.parent() == parent_widget]
-        
+        splitters = [
+            c for c in parent_widget.findChildren(QSplitter) if c.parent() == parent_widget
+        ]
+
         for splitter in splitters:
             name = splitter.objectName()
             if not name:
                 continue
-                
+
             key = f"{name}_sizes"
             if key in self.geometry_config.schema:
                 sizes = self.geometry_config.get(key)
-                # 💡 튜플 반환 대비 list 캐스팅 추가
+                # 튜플 반환 대비 안전한 list 캐스팅 추가
                 if isinstance(sizes, tuple):
                     sizes = list(sizes)
 
                 if isinstance(sizes, list) and len(sizes) > 0 and all(s > 0 for s in sizes):
                     splitter.setSizes(sizes)
-                    logd(f"[{self.geometry_config.section}] Loaded named splitter '{name}': {sizes}")
+                    logd(
+                        f"[{self.geometry_config.section}] Loaded named splitter '{name}': {sizes}"
+                    )
                 else:
-                    loge(f"[{self.geometry_config.section}] Ignored zero-sized or invalid splitter data for '{key}': {sizes}")
+                    loge(
+                        f"[{self.geometry_config.section}] Ignored zero-sized or invalid splitter data for '{key}': {sizes}"
+                    )
 
 
 #################################################################################
@@ -234,21 +270,21 @@ class SplitterManager:
 class TableColumnManager:
     def __init__(self, section_name: Optional[str] = None):
         self._section_name = section_name or self.__class__.__name__
-        
+
         class DynamicTableConfig(GeometryConfig):
             section = self._section_name
-            
+
         self.geometry_config = DynamicTableConfig()
         self._table_defaults: Dict[str, Dict[str, Any]] = {}
 
     def set_table_default_from_info(self, table_name: str, header_info_def: dict):
-        if not hasattr(self, '_table_defaults') or self._table_defaults is None:
+        if not hasattr(self, "_table_defaults") or self._table_defaults is None:
             self._table_defaults = {}
 
         keys = list(header_info_def.keys())
         visible_cols = []
         widths = []
-        
+
         for idx, key in enumerate(keys):
             info = header_info_def[key]
             if info.get("default", True):
@@ -258,24 +294,29 @@ class TableColumnManager:
         self._table_defaults[table_name] = {
             "visible": visible_cols,
             "order": list(range(len(keys))),
-            "widths": widths
+            "widths": widths,
         }
 
-        if hasattr(self, 'findChildren'):
-            tables = [c for c in self.findChildren(QWidget) if hasattr(c, 'horizontalHeader')]
+        if hasattr(self, "findChildren"):
+            tables = [c for c in self.findChildren(QWidget) if hasattr(c, "horizontalHeader")]
             for table in tables:
-                if table.objectName() == table_name and hasattr(table, 'set_header_info_definition'):
+                if table.objectName() == table_name and hasattr(
+                    table, "set_header_info_definition"
+                ):
                     table.set_header_info_definition(header_info_def)
-                    
+
     def save_table_columns_by_name(self, parent_widget: QWidget):
         if parent_widget is None:
             return
-        
+
         tables = [
-            c for c in parent_widget.findChildren(QWidget) 
-            if hasattr(c, 'horizontalHeader') and c.parent() == parent_widget and c.objectName().strip()
+            c
+            for c in parent_widget.findChildren(QWidget)
+            if hasattr(c, "horizontalHeader")
+            and c.parent() == parent_widget
+            and c.objectName().strip()
         ]
-        
+
         for table in tables:
             name = table.objectName()
             header = table.horizontalHeader()
@@ -301,12 +342,15 @@ class TableColumnManager:
     def load_table_columns_by_name(self, parent_widget: QWidget):
         if parent_widget is None:
             return
-            
+
         tables = [
-            c for c in parent_widget.findChildren(QWidget) 
-            if hasattr(c, 'horizontalHeader') and c.parent() == parent_widget and c.objectName().strip()
+            c
+            for c in parent_widget.findChildren(QWidget)
+            if hasattr(c, "horizontalHeader")
+            and c.parent() == parent_widget
+            and c.objectName().strip()
         ]
-        
+
         for table in tables:
             name = table.objectName()
             header = table.horizontalHeader()
@@ -316,7 +360,7 @@ class TableColumnManager:
 
             defaults = self._table_defaults.get(name, {})
 
-            # 💡 튜플 반환 대비 안전한 list 캐스팅 추가
+            # 튜플 반환 대비 안전한 list 캐스팅 추가
             order_key = f"{name}_column_order"
             if order_key in self.geometry_config.schema:
                 visual_order = self.geometry_config.get(order_key)
@@ -359,32 +403,31 @@ class TableColumnManager:
                 for i, w in enumerate(widths):
                     if w > 0:
                         table.setColumnWidth(i, w)
-                            
-            if hasattr(table, 'update_visible_columns'):
+
+            if hasattr(table, "update_visible_columns"):
                 table.update_visible_columns()
 
 
 #################################################################################
-# 4. GeometrySplitterManager 및 공통 위젯 베이스 클래스들
+# 4. GeometrySplitterManager 및 공통 위젯/다이얼로그 베이스 클래스들
 #################################################################################
 class GeometrySplitterManager(GeometryManager, SplitterManager):
     def __init__(self, section_name: Optional[str] = None):
         GeometryManager.__init__(self, section_name)
-        self.geometry_config = self.geometry_config
 
 
 class AutoGeometryWidget(QWidget, GeometryManager):
     title = "DefaultWindow"
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        if not hasattr(self, 'title'):
+        if not hasattr(self, "title"):
             self.title = "DefaultWindow"
         GeometryManager.__init__(self, self.__class__.__name__)
-    
+
     def getTitle(self):
         return self.title
-    
+
     def showEvent(self, event):
         super().showEvent(event)
         self.load_window_geometry(self)
@@ -400,16 +443,16 @@ class AutoGeometryWidget(QWidget, GeometryManager):
 
 class AutoSplitterWidget(QWidget, SplitterManager):
     title = "DefaultComponent"
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        if not hasattr(self, 'title'):
+        if not hasattr(self, "title"):
             self.title = "DefaultComponent"
         SplitterManager.__init__(self, self.__class__.__name__)
-    
+
     def getTitle(self):
         return self.title
-    
+
     def showEvent(self, event):
         super().showEvent(event)
         self.load_splitters_by_name(self)
@@ -425,16 +468,16 @@ class AutoSplitterWidget(QWidget, SplitterManager):
 
 class AutoGeometrySplitterWidget(QWidget, GeometrySplitterManager):
     title = "DefaultWindow"
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        if not hasattr(self, 'title'):
+        if not hasattr(self, "title"):
             self.title = "DefaultWindow"
         GeometrySplitterManager.__init__(self, self.__class__.__name__)
-    
+
     def getTitle(self):
         return self.title
-    
+
     def showEvent(self, event):
         super().showEvent(event)
         self.load_window_geometry(self)
@@ -454,21 +497,20 @@ class AutoGeometrySplitterWidget(QWidget, GeometrySplitterManager):
 class GeometrySplitterTableManager(GeometryManager, SplitterManager, TableColumnManager):
     def __init__(self, section_name: Optional[str] = None):
         GeometryManager.__init__(self, section_name)
-        self.geometry_config = self.geometry_config
 
 
 class AutoGeometrySplitterTableWidget(QWidget, GeometrySplitterTableManager):
     title = "DefaultWindow"
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        if not hasattr(self, 'title'):
+        if not hasattr(self, "title"):
             self.title = "DefaultWindow"
         GeometrySplitterTableManager.__init__(self, self.__class__.__name__)
-    
+
     def getTitle(self):
         return self.title
-    
+
     def showEvent(self, event):
         super().showEvent(event)
         self.load_window_geometry(self)
@@ -488,70 +530,92 @@ class AutoGeometrySplitterTableWidget(QWidget, GeometrySplitterTableManager):
         super().closeEvent(event)
 
 
-from PySide6.QtWidgets import QDialog
-
 class AutoGeometryDialog(QDialog, GeometryManager):
-    def __init__(self, parent=None):
+    title = "DefaultDialog"
+    default_geometry: List[int] = [100, 100, 640, 480]
+
+    def __init__(self, parent=None, default_geometry: Optional[List[int]] = None):
         QDialog.__init__(self, parent)
+        if not hasattr(self, "title"):
+            self.title = "DefaultDialog"
         GeometryManager.__init__(self, self.__class__.__name__)
+        self._default_geometry = default_geometry or list(self.default_geometry)
+        self.geometry_config._ensure_schema_key(
+            "window_geometry", ConfigType.LIST, list(self._default_geometry)
+        )
+
+    def getTitle(self):
+        return self.title
 
     def showEvent(self, event):
         super().showEvent(event)
-        self.load_window_geometry(self)
+        self.load_window_geometry(self, default_geometry=self._default_geometry)
+
+    def hideEvent(self, event):
+        self.save_window_geometry(self)
+        super().hideEvent(event)
 
     def closeEvent(self, event):
         self.save_window_geometry(self)
         super().closeEvent(event)
 
-    def hideEvent(self, event):
-        self.save_window_geometry(self)
-        super().hideEvent(event)        
+
+import inspect
 
 
-class SingletonAutoGeometryDialog(QDialog, GeometryManager):
+class SingletonAutoGeometryDialog(AutoGeometryDialog):
     _instances = {}
 
-    def __init__(self, parent=None):
-        QDialog.__init__(self, parent)
-        GeometryManager.__init__(self, self.__class__.__name__)
+    def __init__(self, parent=None, default_geometry: Optional[List[int]] = None):
+        if getattr(self, "_initialized", False):
+            return
+        if default_geometry is not None:
+            super().__init__(parent, default_geometry=default_geometry)
+        else:
+            super().__init__(parent)
         self._initialized = True
 
     @classmethod
-    def get_instance(cls, parent=None):
+    def get_instance(cls, parent=None, default_geometry: Optional[List[int]] = None):
         if cls not in cls._instances or cls._instances[cls] is None:
-            cls._instances[cls] = cls(parent)
+            if default_geometry is not None:
+                cls._instances[cls] = cls(parent, default_geometry=default_geometry)
+            else:
+                cls._instances[cls] = cls(parent)
+
             app = QApplication.instance()
             if app:
-                app.aboutToQuit.connect(lambda: cls.cleanup_instance(cls))
+                try:
+                    app.aboutToQuit.connect(cls.cleanup_instance)
+                except Exception:
+                    pass
         return cls._instances[cls]
 
     @classmethod
-    def cleanup_instance(cls, target_cls=None):
-        target = target_cls or cls
-        if target in cls._instances and cls._instances[target] is not None:
-            logd(f"[{target.__name__}] Cleaning up singleton instance on app quit.")
-            cls._instances[target].deleteLater()
-            cls._instances[target] = None
+    def cleanup_instance(cls):
+        dialog = cls._instances.get(cls)
+        if dialog is not None:
+            try:
+                logd(f"[{cls.__name__}] Cleaning up singleton instance on app quit.")
+                dialog.deleteLater()
+            except RuntimeError:
+                pass
+            finally:
+                cls._instances[cls] = None
 
     @classmethod
-    def show_unique_dialog(cls, parent=None, session_data=None):
-        dialog = cls.get_instance(parent)
+    def show_unique_dialog(
+        cls, parent=None, session_data=None, default_geometry: Optional[List[int]] = None
+    ):
+        dialog = cls.get_instance(parent, default_geometry=default_geometry)
         if hasattr(dialog, "slot_load_request"):
             dialog.slot_load_request(session_data)
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
-        return dialog    
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        self.load_window_geometry(self)
+        return dialog
 
     def closeEvent(self, event):
         self.save_window_geometry(self)
         event.ignore()
         self.hide()
-
-    def hideEvent(self, event):
-        self.save_window_geometry(self)
-        super().hideEvent(event)

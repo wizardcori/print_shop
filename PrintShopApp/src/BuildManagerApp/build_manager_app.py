@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 import sys
 import threading
 import time
-from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Qt
@@ -40,7 +40,10 @@ from Common.log import WindowLogColorHandlerBase, logd, loge, set_file_tag  # no
 LOG_FILE_TAG: str = "BUILD_MGR"
 set_file_tag(LOG_FILE_TAG)
 
-from BuildManagerApp.build_app_tabs_group import BuildAppTabGroupBox, INSTALLER_TAB_KEY  # noqa: E402
+from BuildManagerApp.build_app_tabs_group import (
+    BuildAppTabGroupBox,
+    INSTALLER_TAB_KEY,
+)  # noqa: E402
 from BuildManagerApp.build_manager_config import (  # noqa: E402
     BUILD_MANAGER_INI_NAME,
     BuildManagerIniStore,
@@ -52,6 +55,8 @@ from BuildManagerApp.build_target_config_tab import BuildTargetConfigTab  # noqa
 from BuildManagerApp.prev_version_resolver import (  # noqa: E402
     _build_snapshot_sig,
     _collect_zip_candidates,
+    _get_app_folder_names,
+    _resolve_bucket_dir_names,
     clear_prev_version_cache,
     resolve_prev_version_meta,
     resolve_zip_prev_version_meta,
@@ -108,6 +113,10 @@ DEFAULT_CLEAN_PROGRESS_START: int = 10
 DEFAULT_ZIP_PROGRESS_STEP: int = 20
 DEFAULT_MS_PER_SEC: int = 1000
 
+DEFAULT_AUTO_INSTALL_LIBS: bool = True
+DEFAULT_LIB_VENV_DIR_NAME: str = ".venv"
+DEFAULT_LIB_CONFIRM: bool = False
+
 STATUS_SUCCESS: str = "SUCCESS"
 STATUS_ERROR: str = "ERROR"
 STATUS_CANCELLED: str = "CANCELLED"
@@ -118,9 +127,12 @@ JOB_TYPE_APP: str = "app"
 JOB_TYPE_INSTALLER: str = "installer"
 JOB_TYPE_PREV_ZIP_INSPECT: str = "prev_zip_inspect"
 
+STEP_LIB_INSTALL: str = "step2_1_lib_install"
+
 SHARED_PRE_STEPS: tuple[str, ...] = (
     STEP_UI,
     STEP_ENV,
+    STEP_LIB_INSTALL,
     STEP_PUBKEY,
 )
 
@@ -227,6 +239,10 @@ BUILD_APP_ACCEPTED_KEYS: set[str] = {
     "cli_app_overrides",
     "installer_overrides",
     "cli_installer_overrides",
+    "auto_install_libs",
+    "lib_venv_root",
+    "lib_venv_dir_name",
+    "lib_confirm",
 }
 
 
@@ -266,6 +282,19 @@ def _resolve_default_installer_targets() -> list[str]:
 
 def _get_low_task_priority() -> TaskPriority:
     return getattr(TaskPriority, "LOW", TaskPriority.NORMAL)
+
+
+def _has_valid_prev_version(prev_meta: dict[str, Any] | None) -> bool:
+    if not isinstance(prev_meta, dict) or not prev_meta:
+        return False
+    if prev_meta.get("error"):
+        return False
+    exe_path = str(prev_meta.get("_exe_path") or "").strip()
+    source_label = str(prev_meta.get("_source_label") or "").strip().lower()
+    items = prev_meta.get("items") if isinstance(prev_meta.get("items"), dict) else {}
+    ver = str(items.get("version") or "").strip()
+    has_artifact_source = source_label.startswith("zip(") or source_label.startswith("exe(")
+    return bool(exe_path and has_artifact_source and ver and ver not in ("-", "없음"))
 
 
 def play_task_completion_sound(
@@ -327,8 +356,7 @@ def _apply_button_emphasis(
     btn.setCursor(Qt.CursorShape.PointingHandCursor)
 
     if variant == "primary":
-        btn.setStyleSheet(
-            """
+        btn.setStyleSheet("""
             QPushButton {
                 font-weight: bold;
                 padding: 3px 12px;
@@ -350,11 +378,9 @@ def _apply_button_emphasis(
                 background-color: #262626;
                 color: #888888;
             }
-            """
-        )
+            """)
     elif variant == "danger":
-        btn.setStyleSheet(
-            """
+        btn.setStyleSheet("""
             QPushButton {
                 font-weight: bold;
                 padding: 3px 10px;
@@ -377,11 +403,9 @@ def _apply_button_emphasis(
                 background-color: transparent;
                 color: #777777;
             }
-            """
-        )
+            """)
     else:
-        btn.setStyleSheet(
-            """
+        btn.setStyleSheet("""
             QPushButton {
                 padding: 2px 9px;
                 border: 1px solid #6b6b6b;
@@ -401,8 +425,7 @@ def _apply_button_emphasis(
                 background-color: transparent;
                 color: #777777;
             }
-            """
-        )
+            """)
 
 
 def run_prev_zip_inspect_job(
@@ -460,6 +483,13 @@ def _run_single_build_step(
         resolved_py, resolved_mode = app.step2_setup_environment_and_config()
         state["py_exe"] = resolved_py
         state["mode"] = resolved_mode
+    elif step_key == STEP_LIB_INSTALL:
+        install_fn = getattr(app, "install_python_libraries", None)
+        if not callable(install_fn):
+            raise AttributeError(
+                "BuildApp에 install_python_libraries() 메서드가 정의되어 있지 않습니다."
+            )
+        install_fn()
     elif step_key == STEP_PUBKEY:
         app.step3_prepare_public_key_module()
     elif step_key == STEP_VERSION:
@@ -563,7 +593,7 @@ def run_build_job(
         f"[BuildJob] BuildApp 실행 준비 (job_type={job_type}, step_key={step_key or '-'}, "
         f"target_app={target_app}, targets={kwargs.get('targets')}, "
         f"bump_unit={kwargs.get('bump_unit')}, installer_only={kwargs.get('installer_only')}, "
-        f"mode={kwargs.get('mode')})"
+        f"mode={kwargs.get('mode')}, auto_install_libs={kwargs.get('auto_install_libs')})"
     )
     try:
         app = BuildApp(**kwargs, cancel_event=active_event, cancel_token=cancel_token)
@@ -601,7 +631,9 @@ def run_build_job(
         raise InterruptedError("사용자에 의해 빌드가 취소되었습니다.")
 
     if not ok:
-        raise RuntimeError(f"빌드 파이프라인이 실패했습니다. (job_type={job_type}, target_app={target_app})")
+        raise RuntimeError(
+            f"빌드 파이프라인이 실패했습니다. (job_type={job_type}, target_app={target_app})"
+        )
 
     label = (
         str(target_app)
@@ -675,7 +707,7 @@ class BuildTaskListener(TaskListenerBase):
 
         timing = TaskManager().get_timing(task_key)
         if timing is not None:
-            logd(f"[BuildManager] 작업 시점 요약 ({task_name}) -> {timing.format_summary()}")
+            logd(f"[BuildManager] 작업 시점 요약 ({task_name}) ->" f" {timing.format_summary()}")
 
         was_tracked = task_key in self._window._active_build_keys
         self._window._active_build_keys.discard(task_key)
@@ -719,7 +751,7 @@ class BuildTaskListener(TaskListenerBase):
                 self._window.build_app_tabs_group.notify_target_finished(
                     app_key,
                     success=ok,
-                    percent=DEFAULT_PROGRESS_MAX if ok else self._window.progress_bar.value(),
+                    percent=(DEFAULT_PROGRESS_MAX if ok else self._window.progress_bar.value()),
                 )
 
         if has_more_steps:
@@ -747,6 +779,7 @@ class BuildTaskListener(TaskListenerBase):
         self._window._completed_step_count = 0
         self._window._on_build_finished(ok, msg)
 
+
 def _normalize_project_root(raw_root: str | Path) -> Path:
     resolved = Path(raw_root).resolve()
     if resolved.name.lower() == SRC_SUBDIR_NAME and (
@@ -757,6 +790,7 @@ def _normalize_project_root(raw_root: str | Path) -> Path:
         return resolved.parent
     return resolved
 
+
 class BuildManagerWindow(QMainWindow):
     """PrintShopApp 빌드 관리 메인 윈도우."""
 
@@ -765,10 +799,14 @@ class BuildManagerWindow(QMainWindow):
         project_root: str | Path = PROJECT_ROOT,
         config_path: str | Path | None = None,
         app_version_paths: dict[str, list[str | Path]] | None = None,
+        auto_install_libs: bool = DEFAULT_AUTO_INSTALL_LIBS,
+        lib_venv_root: str | Path | None = None,
+        lib_venv_dir_name: str = DEFAULT_LIB_VENV_DIR_NAME,
+        lib_confirm: bool = DEFAULT_LIB_CONFIRM,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.project_root = _normalize_project_root(project_root)        
+        self.project_root = _normalize_project_root(project_root)
         self.config_path = (
             Path(config_path).resolve()
             if config_path
@@ -779,9 +817,17 @@ class BuildManagerWindow(QMainWindow):
             k: list(v) for k, v in (app_version_paths or APP_VERSION_PATHS).items()
         }
 
+        self.auto_install_libs: bool = bool(auto_install_libs)
+        self.lib_venv_root: str | None = (
+            str(Path(lib_venv_root).resolve()) if lib_venv_root is not None else None
+        )
+        self.lib_venv_dir_name: str = (
+            str(lib_venv_dir_name or DEFAULT_LIB_VENV_DIR_NAME).strip() or DEFAULT_LIB_VENV_DIR_NAME
+        )
+        self.lib_confirm: bool = bool(lib_confirm)
+
         self._target_checks: dict[str, QCheckBox] = {}
         self._dir_overrides: dict[str, Any] = {}
-        self._app_overrides: dict[str, dict[str, Any]] = {}
         self._installer_overrides: dict[str, Any] = {}
         self._installer_user_configured: bool = False
         self._auto_scroll_log: bool = True
@@ -808,11 +854,18 @@ class BuildManagerWindow(QMainWindow):
 
         self._init_ui()
         self._setup_logging()
+        self._init_build_target_window()
         self._load_saved_state()
         self._init_settings_window()
-        self._init_build_target_window()
         self._ensure_default_installer_targets()
         self._sync_build_app_tabs()
+
+    def _get_app_overrides(self) -> dict[str, dict[str, Any]]:
+        """_app_overrides의 단일 원본인 BuildTargetConfigTab 또는 TargetConfig에서 조회합니다."""
+        win = getattr(self, "_build_target_window", None)
+        if win is not None and isinstance(getattr(win, "_app_overrides", None), dict):
+            return win._app_overrides
+        return TargetConfig.get_app_overrides()
 
     def _on_destroyed_cleanup(self, *_args: Any) -> None:
         TaskManager().on_window_closing(self._build_listener)
@@ -1049,9 +1102,7 @@ class BuildManagerWindow(QMainWindow):
         self.progress_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.progress_bar.setMinimumWidth(PROGRESS_BAR_MIN_WIDTH_PX)
         self.progress_bar.setMinimumHeight(PROGRESS_BAR_HEIGHT_PX)
-        self.progress_bar.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
-        )
+        self.progress_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         run_row.addWidget(self.btn_start_build)
         run_row.addWidget(self.btn_cancel_build)
@@ -1066,9 +1117,11 @@ class BuildManagerWindow(QMainWindow):
         self.build_app_tabs_group.target_selection_changed.connect(
             self._on_tab_card_selection_changed
         )
-        self.build_app_tabs_group.target_bump_changed.connect(
-            self._on_tab_card_bump_changed
-        )
+
+        self.build_app_tabs_group.target_bump_changed.connect(self._on_tab_card_bump_changed)
+
+        self.build_app_tabs_group.prev_log_emitted.connect(lambda _key, msg: logd(msg))
+
         layout.addWidget(self.build_app_tabs_group, stretch=0)
 
         log_group = QGroupBox("빌드 로그")
@@ -1096,6 +1149,20 @@ class BuildManagerWindow(QMainWindow):
             self.chk_skip_installer.isChecked()
         )
 
+    def _resolve_release_app_dir(self, key: str, spec: Any, ov: dict[str, Any]) -> Path:
+        _, release_dir_name = _resolve_bucket_dir_names(self.project_root, ov, self.config_path)
+        release_root = (self.project_root / release_dir_name).resolve()
+        folder_names = _get_app_folder_names(key, spec, ov)
+
+        for folder_name in folder_names:
+            candidate = (release_root / folder_name).resolve()
+            if candidate.is_dir():
+                return candidate
+
+        if folder_names:
+            return (release_root / folder_names[0]).resolve()
+        return release_root
+
     def _build_target_tab_meta(self, key: str) -> dict[str, Any]:
         if key == INSTALLER_TAB_KEY:
             inst_targets = self._ensure_default_installer_targets()
@@ -1107,18 +1174,20 @@ class BuildManagerWindow(QMainWindow):
                 "target_name": INSTALLER_TAB_KEY,
                 "label_text": f"{INSTALLER_TAB_KEY} ({targets_text})",
                 "display_name": INSTALLER_TAB_KEY,
-                "location_path": install_dir if install_dir.exists() else self.project_root,
+                "location_path": (install_dir if install_dir.exists() else self.project_root),
                 "bump_checked": False,
                 "prev_meta": None,
             }
 
         spec = TargetConfig.get_spec(key)
-        ov = self._app_overrides.get(key, {}) if isinstance(self._app_overrides, dict) else {}
-        label_text = self._format_target_label(key, spec)
+        app_overrides = self._get_app_overrides()
+        ov = app_overrides.get(key, {}) if isinstance(app_overrides, dict) else {}
         display_name = str(ov.get("display_name") or getattr(spec, "display_name", None) or key)
 
         loc_path: Path | None = None
-        dir_hints = ov.get("dir_hints") or (getattr(spec, "dir_hints", None) if spec else None) or ()
+        dir_hints = (
+            ov.get("dir_hints") or (getattr(spec, "dir_hints", None) if spec else None) or ()
+        )
         for d in dir_hints:
             cand = self.project_root / SRC_SUBDIR_NAME / str(d)
             if cand.exists():
@@ -1134,11 +1203,18 @@ class BuildManagerWindow(QMainWindow):
             app_version_paths=self.app_version_paths,
             defer_zip=True,
         )
+        has_prev = _has_valid_prev_version(prev_meta)
+        base_label = self._format_target_label(key, spec)
+        label_text = base_label if has_prev else key
+
+        release_app_dir = self._resolve_release_app_dir(key, spec, ov)
+        resolved_loc_path = release_app_dir if not has_prev else (loc_path or release_app_dir)
+
         return {
             "target_name": key,
             "label_text": label_text,
             "display_name": display_name,
-            "location_path": loc_path,
+            "location_path": resolved_loc_path,
             "bump_checked": bool(bump_unit),
             "prev_meta": prev_meta,
         }
@@ -1151,10 +1227,22 @@ class BuildManagerWindow(QMainWindow):
             card = cards_by_key.get(app_key)
             if card is not None and hasattr(card, "set_prev_meta"):
                 card.set_prev_meta(prev_meta)
+                if hasattr(card, "btn_open_prev_dir"):
+                    spec = TargetConfig.get_spec(app_key)
+                    app_overrides = self._get_app_overrides()
+                    ov = app_overrides.get(app_key, {}) if isinstance(app_overrides, dict) else {}
+                    has_prev = _has_valid_prev_version(prev_meta)
+                    base_label = self._format_target_label(app_key, spec)
+                    card.btn_open_prev_dir.setText(base_label if has_prev else app_key)
+                    if not has_prev:
+                        release_app_dir = self._resolve_release_app_dir(app_key, spec, ov)
+                        card.set_location_tooltip(str(release_app_dir))
+                        card.setProperty("_location_path", str(release_app_dir))
 
     def _get_app_zip_sig(self, key: str) -> tuple[tuple[str, int, int], ...]:
         """해당 앱의 release .zip 파일 목록과 (경로, 크기, 수정시각_ns) 스냅샷을 반환합니다."""
-        ov = self._app_overrides.get(key, {}) if isinstance(self._app_overrides, dict) else {}
+        app_overrides = self._get_app_overrides()
+        ov = app_overrides.get(key, {}) if isinstance(app_overrides, dict) else {}
         spec = TargetConfig.get_spec(key)
         try:
             dcfg = TargetConfig.get_dir_config(self.project_root)
@@ -1179,6 +1267,7 @@ class BuildManagerWindow(QMainWindow):
         """ZIP 후보가 있고 이전과 변경된 앱만 TaskQueue에 등록합니다."""
         low_prio = _get_low_task_priority()
         active_apps = set(self._deferred_zip_tasks.values())
+        app_overrides = self._get_app_overrides()
 
         for key in app_keys:
             if key in active_apps:
@@ -1192,11 +1281,11 @@ class BuildManagerWindow(QMainWindow):
                 continue
 
             task_key = f"{TASK_PREFIX_PREV_ZIP}{key}"
-            ov = self._app_overrides.get(key, {}) if isinstance(self._app_overrides, dict) else {}
+            ov = app_overrides.get(key, {}) if isinstance(app_overrides, dict) else {}
             payload = {
                 "project_root": str(self.project_root),
                 "target_key": key,
-                "config_path": str(self.config_path) if self.config_path.is_file() else None,
+                "config_path": (str(self.config_path) if self.config_path.is_file() else None),
                 "app_override": dict(ov),
                 "app_version_paths": self.app_version_paths,
                 "_zip_sig": zip_sig,
@@ -1234,7 +1323,10 @@ class BuildManagerWindow(QMainWindow):
 
     def _on_tab_card_selection_changed(self, target_key: str, checked: bool) -> None:
         if target_key == INSTALLER_TAB_KEY:
-            if hasattr(self, "chk_installer_target") and self.chk_installer_target.isChecked() != checked:
+            if (
+                hasattr(self, "chk_installer_target")
+                and self.chk_installer_target.isChecked() != checked
+            ):
                 self.chk_installer_target.setChecked(checked)
             return
         chk = self._target_checks.get(target_key)
@@ -1244,12 +1336,13 @@ class BuildManagerWindow(QMainWindow):
     def _on_tab_card_bump_changed(self, target_key: str, checked: bool) -> None:
         default_unit = self._get_selected_bump() or DEFAULT_BUMP_UNIT
         new_unit = default_unit if checked else None
-        bucket = dict(self._app_overrides.get(target_key, {}))
+        app_ov = self._get_app_overrides()
+        bucket = dict(app_ov.get(target_key, {}))
         if new_unit is None:
             bucket.pop(KEY_BUMP_UNIT, None)
         else:
             bucket[KEY_BUMP_UNIT] = new_unit
-        self._app_overrides[target_key] = bucket
+        app_ov[target_key] = bucket
         self._save_build_config_ini_now()
 
     def _init_build_target_window(self) -> None:
@@ -1274,7 +1367,6 @@ class BuildManagerWindow(QMainWindow):
         if self._build_target_window is None:
             return
         self._build_target_window.set_paths(self.project_root, self.config_path)
-        self._build_target_window.load_from_ini(self.config_path, show_error=False)
         self._build_target_window.show()
         self._build_target_window.raise_()
         self._build_target_window.activateWindow()
@@ -1317,8 +1409,6 @@ class BuildManagerWindow(QMainWindow):
         if self._settings_window is None:
             return
         self.project_root = _normalize_project_root(self._settings_window.project_root)
-        if self._settings_window.config_path is not None:
-            self.config_path = Path(self._settings_window.config_path).resolve()
         if self._settings_window.config_path is not None:
             self.config_path = Path(self._settings_window.config_path).resolve()
         self.ini_store.reload_all(self.config_path.parent)
@@ -1367,9 +1457,6 @@ class BuildManagerWindow(QMainWindow):
             "release_dir_name": dcfg.release_dir_name,
             "install_dir_name": dcfg.install_dir_name,
         }
-        self._app_overrides = {
-            k: dict(v) for k, v in TargetConfig.get_app_overrides().items()
-        }
 
         raw_targets = self._installer_overrides.get("targets")
         resolved_targets = (
@@ -1380,7 +1467,9 @@ class BuildManagerWindow(QMainWindow):
         self._installer_overrides = {
             "targets": resolved_targets,
             "name": str(self._installer_overrides.get("name") or "").strip() or None,
-            "version_source_id": str(self._installer_overrides.get("version_source_id") or "").strip()
+            "version_source_id": str(
+                self._installer_overrides.get("version_source_id") or ""
+            ).strip()
             or None,
             "extra": dict(self._installer_overrides.get("extra") or {}),
         }
@@ -1388,7 +1477,8 @@ class BuildManagerWindow(QMainWindow):
     def _resolve_target_version(self, key: str, spec: Any) -> str:
         """대상 앱의 버전 문자열(예: 1.2.3)을 조회합니다."""
         candidates: list[Path] = []
-        ov = self._app_overrides.get(key, {}) if hasattr(self, "_app_overrides") else {}
+        app_overrides = self._get_app_overrides()
+        ov = app_overrides.get(key, {}) if isinstance(app_overrides, dict) else {}
 
         for raw in (
             ov.get("version_file"),
@@ -1410,9 +1500,7 @@ class BuildManagerWindow(QMainWindow):
                 candidates.append(p if p.is_absolute() else (self.project_root / p))
 
         dir_hints = (
-            ov.get("dir_hints")
-            or (getattr(spec, "dir_hints", None) if spec else None)
-            or ()
+            ov.get("dir_hints") or (getattr(spec, "dir_hints", None) if spec else None) or ()
         )
         for d in dir_hints:
             if d:
@@ -1495,9 +1583,7 @@ class BuildManagerWindow(QMainWindow):
         self.chk_all_targets.blockSignals(False)
 
     def _refresh_target_checkboxes(self) -> None:
-        previously_checked = {
-            key for key, chk in self._target_checks.items() if chk.isChecked()
-        }
+        previously_checked = {key for key, chk in self._target_checks.items() if chk.isChecked()}
         has_previous = len(self._target_checks) > 0
 
         while self.targets_row_layout.count():
@@ -1570,7 +1656,9 @@ class BuildManagerWindow(QMainWindow):
     def _collect_ui_state(self) -> dict[str, Any]:
         return {
             "project_root": str(self.project_root),
-            "selected_targets": [key for key, chk in self._target_checks.items() if chk.isChecked()],
+            "selected_targets": [
+                key for key, chk in self._target_checks.items() if chk.isChecked()
+            ],
             KEY_MODE: self._get_selected_mode(),
             KEY_BUMP_UNIT: self._get_selected_bump(),
             "skip_installer": bool(self.chk_skip_installer.isChecked()),
@@ -1580,6 +1668,10 @@ class BuildManagerWindow(QMainWindow):
             "clean_dist_out": bool(self.chk_clean_dist.isChecked()),
             "clean_spec": bool(self.chk_clean_spec.isChecked()),
             "auto_scroll_log": bool(self._auto_scroll_log),
+            "auto_install_libs": bool(self.auto_install_libs),
+            "lib_venv_root": self.lib_venv_root,
+            "lib_venv_dir_name": self.lib_venv_dir_name,
+            "lib_confirm": bool(self.lib_confirm),
         }
 
     def _apply_ui_state(self, state: dict[str, Any]) -> None:
@@ -1636,6 +1728,20 @@ class BuildManagerWindow(QMainWindow):
         auto_scroll = bool(state.get("auto_scroll_log", True))
         self._apply_auto_scroll_policy(auto_scroll)
 
+        if "auto_install_libs" in state:
+            self.auto_install_libs = bool(state.get("auto_install_libs"))
+        if "lib_venv_root" in state:
+            raw_venv_root = state.get("lib_venv_root")
+            self.lib_venv_root = (
+                str(Path(str(raw_venv_root)).resolve())
+                if isinstance(raw_venv_root, str) and raw_venv_root.strip()
+                else None
+            )
+        if "lib_venv_dir_name" in state and state.get("lib_venv_dir_name"):
+            self.lib_venv_dir_name = str(state.get("lib_venv_dir_name")).strip()
+        if "lib_confirm" in state:
+            self.lib_confirm = bool(state.get("lib_confirm"))
+
         self._sync_all_target_checkbox_state()
         self._sync_build_app_tabs()
 
@@ -1651,15 +1757,16 @@ class BuildManagerWindow(QMainWindow):
             app_overrides=app_ov or None,
         )
 
+        if self._build_target_window is not None:
+            self._build_target_window.set_paths(self.project_root, self.config_path)
+            self._build_target_window.load_from_ini(self.config_path, show_error=False)
+
         dcfg = TargetConfig.get_dir_config(self.project_root)
         self._dir_overrides = {
             "work_dir_name": dcfg.work_dir_name,
             "dist_dir_name": dcfg.dist_dir_name,
             "release_dir_name": dcfg.release_dir_name,
             "install_dir_name": dcfg.install_dir_name,
-        }
-        self._app_overrides = {
-            k: dict(v) for k, v in TargetConfig.get_app_overrides().items()
         }
 
         raw_targets = inst_dict.get("targets")
@@ -1703,12 +1810,15 @@ class BuildManagerWindow(QMainWindow):
         self._sync_build_app_tabs()
 
     def _save_all_state(self) -> None:
-        self.ini_store.reload_all(self.config_path.parent)
         self.ini_store.save_ui_state(self._collect_ui_state())
         self._save_build_config_ini_now()
 
     def _save_build_config_ini_now(self) -> None:
-        self.ini_store.reload_all(self.config_path.parent)
+        win = self._build_target_window
+        if win is not None and hasattr(win, "_stage_all_tabs_state"):
+            win._stage_all_tabs_state()
+
+        app_ov = {k: dict(v) for k, v in self._get_app_overrides().items()}
         dcfg = TargetConfig.get_dir_config(self.project_root)
         dir_dict = {
             "work_dir_name": dcfg.work_dir_name,
@@ -1726,7 +1836,7 @@ class BuildManagerWindow(QMainWindow):
         }
         self.ini_store.save_target_sections(
             dir_values=dir_dict,
-            app_overrides=self._app_overrides,
+            app_overrides=app_ov,
             installer_values=inst_payload,
         )
 
@@ -1751,15 +1861,16 @@ class BuildManagerWindow(QMainWindow):
             KEY_CLEAN_SPEC: clean_all or bool(self.chk_clean_spec.isChecked()),
         }
 
+        app_ov = self._get_app_overrides()
         for key in selected_apps:
-            bucket = dict(self._app_overrides.get(key, {}))
+            bucket = dict(app_ov.get(key, {}))
             bucket.update(clean_patch)
-            self._app_overrides[key] = bucket
+            app_ov[key] = bucket
 
         TargetConfig.configure(
             project_root=self.project_root,
             code_overrides=self._dir_overrides or None,
-            app_overrides=self._app_overrides,
+            app_overrides=app_ov,
         )
 
         if self._build_target_window is not None and hasattr(
@@ -1776,13 +1887,15 @@ class BuildManagerWindow(QMainWindow):
             self._save_build_config_ini_now()
 
     def _resolve_app_clean_flag(self, target_key: str, field_name: str, fallback: bool) -> bool:
-        ov = self._app_overrides.get(target_key, {}) if isinstance(self._app_overrides, dict) else {}
+        app_overrides = self._get_app_overrides()
+        ov = app_overrides.get(target_key, {}) if isinstance(app_overrides, dict) else {}
         if field_name in ov and isinstance(ov[field_name], bool):
             return bool(ov[field_name])
         return bool(fallback)
 
     def _resolve_app_bump_unit(self, target_key: str, default_bump: str | None) -> str | None:
-        ov = self._app_overrides.get(target_key, {}) if isinstance(self._app_overrides, dict) else {}
+        app_overrides = self._get_app_overrides()
+        ov = app_overrides.get(target_key, {}) if isinstance(app_overrides, dict) else {}
         if KEY_BUMP_UNIT in ov and ov[KEY_BUMP_UNIT] is not None:
             s = str(ov[KEY_BUMP_UNIT]).strip().lower()
             if not s or s in NONE_BUMP_TOKENS:
@@ -1792,14 +1905,16 @@ class BuildManagerWindow(QMainWindow):
         return default_bump
 
     def _resolve_app_mode(self, target_key: str, default_mode: str) -> str:
-        ov = self._app_overrides.get(target_key, {}) if isinstance(self._app_overrides, dict) else {}
+        app_overrides = self._get_app_overrides()
+        ov = app_overrides.get(target_key, {}) if isinstance(app_overrides, dict) else {}
         raw_mode = ov.get(KEY_MODE)
         if isinstance(raw_mode, str) and raw_mode.strip():
             return raw_mode.strip()
         return default_mode
 
     def _resolve_app_run_test(self, target_key: str) -> bool:
-        ov = self._app_overrides.get(target_key, {}) if isinstance(self._app_overrides, dict) else {}
+        app_overrides = self._get_app_overrides()
+        ov = app_overrides.get(target_key, {}) if isinstance(app_overrides, dict) else {}
         if KEY_RUN_TEST in ov:
             return bool(ov[KEY_RUN_TEST])
         spec = TargetConfig.get_spec(target_key)
@@ -1810,19 +1925,20 @@ class BuildManagerWindow(QMainWindow):
         if not selected_apps or not patch:
             return
 
+        app_ov = self._get_app_overrides()
         for key in selected_apps:
-            bucket = dict(self._app_overrides.get(key, {}))
+            bucket = dict(app_ov.get(key, {}))
             for k, v in patch.items():
                 if v is None:
                     bucket.pop(k, None)
                 else:
                     bucket[k] = v
-            self._app_overrides[key] = bucket
+            app_ov[key] = bucket
 
         TargetConfig.configure(
             project_root=self.project_root,
             code_overrides=self._dir_overrides or None,
-            app_overrides=self._app_overrides,
+            app_overrides=app_ov,
         )
 
         if self._build_target_window is not None and hasattr(
@@ -1998,6 +2114,8 @@ class BuildManagerWindow(QMainWindow):
             )
         )
 
+        app_ov_copy = {k: dict(v) for k, v in self._get_app_overrides().items()}
+
         build_kwargs: dict[str, Any] = {
             "project_root": str(self.project_root),
             "job_type": kind,
@@ -2017,10 +2135,14 @@ class BuildManagerWindow(QMainWindow):
             "timer": None,
             "dir_config_json": None,
             "dir_overrides": dict(self._dir_overrides),
-            "app_overrides": {k: dict(v) for k, v in self._app_overrides.items()},
+            "app_overrides": app_ov_copy,
             "installer_targets": list(job_targets) if is_installer else None,
             "installer_overrides": dict(self._installer_overrides),
             "pipeline_state": dict(self._pipeline_state),
+            "auto_install_libs": bool(self.auto_install_libs),
+            "lib_venv_root": self.lib_venv_root,
+            "lib_venv_dir_name": self.lib_venv_dir_name,
+            "lib_confirm": bool(self.lib_confirm),
         }
 
         ts_ms = int(time.time() * DEFAULT_MS_PER_SEC)
@@ -2070,7 +2192,9 @@ class BuildManagerWindow(QMainWindow):
 
     def _on_start_build(self) -> None:
         if self._active_build_keys or self._pending_step_specs:
-            QMessageBox.information(self, "빌드 진행 중", "이미 빌드가 실행 중이거나 대기열에 있습니다.")
+            QMessageBox.information(
+                self, "빌드 진행 중", "이미 빌드가 실행 중이거나 대기열에 있습니다."
+            )
             return
 
         checked_apps = [key for key, chk in self._target_checks.items() if chk.isChecked()]
@@ -2083,9 +2207,7 @@ class BuildManagerWindow(QMainWindow):
             not skip_installer_opt or installer_only_opt
         )
 
-        installer_targets = (
-            self._ensure_default_installer_targets() if include_installer else []
-        )
+        installer_targets = self._ensure_default_installer_targets() if include_installer else []
 
         parsed_apps: dict[str, list[str]] = {}
         try:
@@ -2094,7 +2216,11 @@ class BuildManagerWindow(QMainWindow):
             if include_installer and installer_targets:
                 _ = parse_targets(installer_targets)
         except Exception as exc:
-            QMessageBox.warning(self, "대상 오류", f"빌드 대상 확인 중 오류가 발생했습니다:\n{exc}")
+            QMessageBox.warning(
+                self,
+                "대상 오류",
+                f"빌드 대상 확인 중 오류가 발생했습니다:\n{exc}",
+            )
             return
 
         mode = self._get_selected_mode()
@@ -2122,7 +2248,9 @@ class BuildManagerWindow(QMainWindow):
         self._completed_step_count = 0
 
         self.progress_bar.setValue(DEFAULT_PROGRESS_MIN)
-        self.lbl_progress_detail.setText(f"단계별 빌드 대기열 등록 중... (총 {len(step_specs)}개 단계)")
+        self.lbl_progress_detail.setText(
+            f"단계별 빌드 대기열 등록 중... (총 {len(step_specs)}개 단계)"
+        )
         self.btn_start_build.setEnabled(False)
         self.btn_cancel_build.setEnabled(True)
 
@@ -2244,7 +2372,10 @@ class BuildManagerWindow(QMainWindow):
         if isinstance(current_targets, (list, tuple)):
             return [str(x).strip() for x in current_targets if str(x).strip()]
 
-        if getattr(self, "_installer_user_configured", False) or self._has_custom_installer_config():
+        if (
+            getattr(self, "_installer_user_configured", False)
+            or self._has_custom_installer_config()
+        ):
             return []
 
         defaults = _resolve_default_installer_targets()

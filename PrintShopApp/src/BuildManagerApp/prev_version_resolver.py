@@ -27,6 +27,8 @@ BUCKET_RELEASE: str = "release"
 BUCKET_DIST: str = "dist"
 SOURCE_VERSION_TXT: str = "version.txt"
 STATUS_ZIP_CHECKING: str = "ZIP 확인 중..."
+STATUS_NO_EXE_IN_ZIP: str = "ZIP 내 EXE 없음"
+STATUS_NONE: str = "없음"
 EMPTY_DASH: str = "-"
 
 PE_MAGIC: bytes = b"MZ"
@@ -558,6 +560,7 @@ def _quick_zip_candidate(zip_path: Path, bucket_name: str) -> dict[str, Any]:
         "source_label": source_label,
         "path": zip_path,
         "display_path": str(zip_path),
+        "has_exe": True,
         "mtime": mtime,
         "mtime_str": mtime_str,
         "file_size_bytes": stat_info.st_size,
@@ -571,7 +574,8 @@ def _quick_zip_candidate(zip_path: Path, bucket_name: str) -> dict[str, Any]:
 def _inspect_zip_candidate(zip_path: Path, bucket_name: str, target_key: str) -> dict[str, Any]:
     """
     release 폴더의 .zip 후보를 메모리에서 열어 내부 .exe 메타데이터와 버전을 추출합니다.
-    파일 크기와 수정 시각이 이전과 같으면 캐시된 결과를 반환해 재해제를 피합니다.
+    - ZIP 파일 읽기/해제 실패 시 error 및 has_exe=False 처리
+    - ZIP 내부에 .exe가 없을 시 error 및 has_exe=False 처리
     """
     fp = _file_fingerprint(zip_path)
     cache_key = (str(zip_path), target_key.lower())
@@ -592,6 +596,7 @@ def _inspect_zip_candidate(zip_path: Path, bucket_name: str, target_key: str) ->
     best_size = stat_info.st_size
     best_display_path = str(zip_path)
     best_error: Any = None
+    has_exe = False
 
     try:
         zip_bytes = zip_path.read_bytes()
@@ -604,38 +609,49 @@ def _inspect_zip_candidate(zip_path: Path, bucket_name: str, target_key: str) ->
                 key=lambda n: (0 if target_key.lower() in Path(n).stem.lower() else 1, len(n))
             )
 
-            for inner_name in exe_names:
-                info = zf.getinfo(inner_name)
-                exe_bytes = zf.read(inner_name)
-                display_path = f"{zip_path}::{inner_name}"
+            if not exe_names:
+                best_error = STATUS_NO_EXE_IN_ZIP
+                best_display_path = ""
+            else:
+                for inner_name in exe_names:
+                    info = zf.getinfo(inner_name)
+                    exe_bytes = zf.read(inner_name)
+                    display_path = f"{zip_path}::{inner_name}"
 
-                pe_info = _parse_pe_version_from_bytes(exe_bytes)
-                embedded = _extract_embedded_metadata_from_bytes(
-                    exe_bytes=exe_bytes,
-                    display_path=display_path,
-                    size_bytes=info.file_size,
-                )
-                dec_items = dict((embedded or {}).get("items") or {})
-                pe_ver = (pe_info.get("ProductVersion") or pe_info.get("FileVersion") or "").strip()
-                inner_name_ver = _extract_version_from_archive_name(inner_name)
+                    pe_info = _parse_pe_version_from_bytes(exe_bytes)
+                    embedded = _extract_embedded_metadata_from_bytes(
+                        exe_bytes=exe_bytes,
+                        display_path=display_path,
+                        size_bytes=info.file_size,
+                    )
+                    dec_items = dict((embedded or {}).get("items") or {})
+                    pe_ver = (pe_info.get("ProductVersion") or pe_info.get("FileVersion") or "").strip()
+                    inner_name_ver = _extract_version_from_archive_name(inner_name)
 
-                ver = (
-                    str(dec_items.get("version") or "").strip()
-                    or pe_ver
-                    or zip_name_ver
-                    or inner_name_ver
-                    or ""
-                )
-                if ver or dec_items:
-                    best_version = ver
-                    best_items = dec_items
-                    best_size = info.file_size
-                    best_display_path = display_path
-                    if embedded and "error" in embedded:
-                        best_error = embedded["error"]
-                    break
+                    ver = (
+                        str(dec_items.get("version") or "").strip()
+                        or pe_ver
+                        or zip_name_ver
+                        or inner_name_ver
+                        or ""
+                    )
+                    if ver or dec_items or exe_bytes[:2] == PE_MAGIC:
+                        has_exe = True
+                        best_version = ver
+                        best_items = dec_items
+                        best_size = info.file_size
+                        best_display_path = str(zip_path)
+                        if embedded and "error" in embedded:
+                            best_error = embedded["error"]
+                        break
+
+                if not has_exe:
+                    best_error = STATUS_NO_EXE_IN_ZIP
+                    best_display_path = ""
     except Exception as exc:
-        best_error = str(exc)
+        best_error = f"ZIP 오류: {exc}"
+        best_display_path = ""
+        has_exe = False
 
     if not best_version:
         best_version = zip_name_ver or zip_path.stem
@@ -646,6 +662,7 @@ def _inspect_zip_candidate(zip_path: Path, bucket_name: str, target_key: str) ->
         "source_label": source_label,
         "path": zip_path,
         "display_path": best_display_path,
+        "has_exe": has_exe,
         "mtime": mtime,
         "mtime_str": mtime_str,
         "file_size_bytes": best_size,
@@ -699,6 +716,7 @@ def _inspect_exe_candidate(exe_path: Path, bucket_name: str) -> dict[str, Any]:
         "source_label": source_label,
         "path": exe_path,
         "display_path": str(exe_path),
+        "has_exe": True,
         "mtime": mtime,
         "mtime_str": mtime_str,
         "file_size_bytes": stat_info.st_size,
@@ -714,7 +732,6 @@ def _inspect_exe_candidate(exe_path: Path, bucket_name: str) -> dict[str, Any]:
 
     return result
 
-
 def _build_meta_from_selected(
     selected: dict[str, Any] | None,
     txt_version: str,
@@ -722,21 +739,20 @@ def _build_meta_from_selected(
     has_deferred_zip: bool,
 ) -> dict[str, Any]:
     if selected is None:
-        if not txt_version:
-            return {}
         return {
-            "_exe_path": str(txt_source_path) if txt_source_path else "",
-            "_source_label": SOURCE_VERSION_TXT,
-            "_has_deferred_zip": has_deferred_zip,
+            "_exe_path": "",
+            "_source_label": STATUS_NONE,
+            "_has_deferred_zip": False,
             "file_size_bytes": None,
             "items": {
-                "version": txt_version,
-                "source": SOURCE_VERSION_TXT,
-                "version_file": str(txt_source_path) if txt_source_path else EMPTY_DASH,
-                "build_id": EMPTY_DASH,
-                "commit": EMPTY_DASH,
-                "dirty": EMPTY_DASH,
-                "time": EMPTY_DASH,
+                "exe": STATUS_NONE,
+                "version": STATUS_NONE,
+                "source": STATUS_NONE,
+                "version_file": str(txt_source_path) if txt_source_path else STATUS_NONE,
+                "build_id": STATUS_NONE,
+                "commit": STATUS_NONE,
+                "dirty": STATUS_NONE,
+                "time": STATUS_NONE,
             },
         }
 
@@ -759,8 +775,11 @@ def _build_meta_from_selected(
         "file_version": txt_version or EMPTY_DASH,
     }
 
+    is_broken_zip = selected.get("kind") == "zip" and not selected.get("deferred_zip") and not selected.get("has_exe")
+    exe_path_val = "" if is_broken_zip else str(selected.get("display_path") or "")
+
     result: dict[str, Any] = {
-        "_exe_path": selected["display_path"],
+        "_exe_path": exe_path_val,
         "_source_label": selected["source_label"],
         "_has_deferred_zip": has_deferred_zip,
         "file_size_bytes": selected.get("file_size_bytes"),
@@ -781,11 +800,12 @@ def _build_snapshot_sig(paths: list[Path]) -> tuple[tuple[str, int, int], ...]:
     return tuple(sig)
 
 
-def _rank_candidate(cand: dict[str, Any]) -> tuple[tuple[int, ...], int, float]:
+def _rank_candidate(cand: dict[str, Any]) -> tuple[tuple[int, ...], int, int, float]:
     ver_tuple = _parse_version_tuple(cand.get("version"))
+    has_exe_rank = 1 if cand.get("has_exe", True) and not cand.get("error") else 0
     bucket_rank = 1 if cand.get("bucket") == BUCKET_RELEASE else 0
     mtime = float(cand.get("mtime") or 0.0)
-    return (ver_tuple, bucket_rank, mtime)
+    return (has_exe_rank, ver_tuple, bucket_rank, mtime)
 
 
 def resolve_zip_prev_version_meta(
@@ -864,7 +884,7 @@ def resolve_prev_version_meta(
 ) -> dict[str, Any]:
     """
     이전버전 선택 기준:
-    1) 최신 버전 우선순위
+    1) 정상/실행 가능 후보 우선순위 + 최신 버전 우선순위
     2) 버전이 같으면 release > dist 우선순위
     3) 출처 표기: zip(release), exe(dist)
     4) 변경되지 않은 ZIP/EXE는 캐시를 재사용해 디스크 재읽기/재검사를 피함

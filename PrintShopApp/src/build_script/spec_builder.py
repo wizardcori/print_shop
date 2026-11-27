@@ -98,7 +98,9 @@ class SpecAndPyInstallerBuilder:
         )
 
     def _is_cancelled(self) -> bool:
-        token_set = bool(self.cancel_token is not None and getattr(self.cancel_token, "is_set", False))
+        token_set = bool(
+            self.cancel_token is not None and getattr(self.cancel_token, "is_set", False)
+        )
         event_set = bool(self.cancel_event is not None and self.cancel_event.is_set())
         return token_set or event_set
 
@@ -163,8 +165,10 @@ class SpecAndPyInstallerBuilder:
         target_key: str,
         label: str,
         py_spec: PyInstallerSpec,
+        base_dir: str | None = None,
     ) -> list[tuple[str, str]]:
         """빌드에 포함할 (존재하는_소스_경로, 대상_폴더) 리소스 목록 구성."""
+        rel_base = base_dir or self.project_root
         raw_items: list[str] = list(py_spec.datas or ())
         if not raw_items and (target_key == "print_shop_app" or label == "PrintShopApp"):
             raw_items.extend(PRINTSHOP_DEFAULT_DATAS)
@@ -177,7 +181,7 @@ class SpecAndPyInstallerBuilder:
             if not os.path.exists(abs_src):
                 logd(f"  • [{target_key}] 리소스 경로가 존재하지 않아 제외됨: {abs_src} -> {dest}")
                 continue
-            spec_src = self._to_spec_rel_path(abs_src, self.project_root)
+            spec_src = self._to_spec_rel_path(abs_src, rel_base)
             key = (spec_src, dest)
             if key not in seen:
                 seen.add(key)
@@ -263,10 +267,16 @@ class SpecAndPyInstallerBuilder:
         onefile_flag = bool(getattr(py_spec, "onefile", DEFAULT_ONEFILE))
         uac_admin_flag = bool(getattr(py_spec, "uac_admin", DEFAULT_UAC_ADMIN))
 
+        os.makedirs(work_out, exist_ok=True)
+        generated_spec_path = self.resolve_spec_output_path(
+            target_key, spec_obj, entry_script, work_out
+        )
+        spec_base_dir = os.path.dirname(generated_spec_path) or self.project_root
+
         raw_icon = getattr(py_spec, "icon_path", None)
         resolved_icon = self._resolve_project_rel_path(raw_icon) if raw_icon else None
         spec_icon = (
-            self._to_spec_rel_path(resolved_icon, self.project_root)
+            self._to_spec_rel_path(resolved_icon, spec_base_dir)
             if (resolved_icon and os.path.isfile(resolved_icon))
             else None
         )
@@ -277,7 +287,9 @@ class SpecAndPyInstallerBuilder:
             combined_hidden.extend(spec_obj.hidden_imports)
         if py_spec.hidden_imports:
             combined_hidden.extend(py_spec.hidden_imports)
-        hidden_imports = tuple(dict.fromkeys(str(m).strip() for m in combined_hidden if str(m).strip()))
+        hidden_imports = tuple(
+            dict.fromkeys(str(m).strip() for m in combined_hidden if str(m).strip())
+        )
         hidden_imports_literal = repr(list(hidden_imports))
 
         excludes_list = list(
@@ -285,20 +297,24 @@ class SpecAndPyInstallerBuilder:
         )
         excludes_literal = repr(excludes_list)
 
-        datas_pairs = self._collect_datas_pairs(target_key, label, py_spec)
+        datas_pairs = self._collect_datas_pairs(target_key, label, py_spec, base_dir=spec_base_dir)
         binaries_pairs = [
-            (self._to_spec_rel_path(s, self.project_root), d)
+            (self._to_spec_rel_path(s, spec_base_dir), d)
             for s, d in self._parse_resource_pairs(py_spec.binaries or ())
             if os.path.exists(s)
         ]
 
         datas_literal = "[" + ", ".join(f"(r{repr(s)}, {repr(d)})" for s, d in datas_pairs) + "]"
-        binaries_literal = "[" + ", ".join(f"(r{repr(s)}, {repr(d)})" for s, d in binaries_pairs) + "]"
+        binaries_literal = (
+            "[" + ", ".join(f"(r{repr(s)}, {repr(d)})" for s, d in binaries_pairs) + "]"
+        )
 
-        pathex_entries: list[str] = [
-            self._to_spec_rel_path(self.project_root, self.project_root),
-            self._to_spec_rel_path(self.src_dir, self.project_root),
-        ]
+        pathex_entries: list[str] = []
+        for base_candidate in (spec_base_dir, self.project_root, self.src_dir):
+            rel_base_p = self._to_spec_rel_path(base_candidate, spec_base_dir)
+            if rel_base_p not in pathex_entries:
+                pathex_entries.append(rel_base_p)
+
         raw_pathex_all: list[str] = []
         if spec_obj and getattr(spec_obj, "extra_pathex", None):
             raw_pathex_all.extend(spec_obj.extra_pathex)
@@ -311,13 +327,13 @@ class SpecAndPyInstallerBuilder:
                 continue
             resolved_str = self._resolve_project_rel_path(cleaned)
             if os.path.isdir(resolved_str):
-                rel_p = self._to_spec_rel_path(resolved_str, self.project_root)
+                rel_p = self._to_spec_rel_path(resolved_str, spec_base_dir)
                 if rel_p not in pathex_entries:
                     pathex_entries.append(rel_p)
 
         pathex_literal = "[" + ", ".join(f"r{repr(p)}" for p in pathex_entries) + "]"
 
-        spec_entry_script = self._to_spec_rel_path(entry_script, self.project_root)
+        spec_entry_script = self._to_spec_rel_path(entry_script, spec_base_dir)
 
         app_ver_files = self.version_service.get_version_files(target_key)
         app_rc_path = (
@@ -326,18 +342,14 @@ class SpecAndPyInstallerBuilder:
             else None
         )
         spec_version_path = (
-            self._to_spec_rel_path(app_rc_path, self.project_root)
+            self._to_spec_rel_path(app_rc_path, spec_base_dir)
             if (app_rc_path and os.path.isfile(app_rc_path))
             else None
         )
         version_arg = f"r'{spec_version_path}'" if spec_version_path else "None"
 
-        os.makedirs(work_out, exist_ok=True)
-        generated_spec_path = self.resolve_spec_output_path(target_key, spec_obj, entry_script, work_out)
-
         if onefile_flag:
-            exe_and_collect_block = textwrap.dedent(
-                f"""
+            exe_and_collect_block = textwrap.dedent(f"""
                 exe = EXE(
                     pyz,
                     a.scripts,
@@ -362,11 +374,9 @@ class SpecAndPyInstallerBuilder:
                     icon={icon_arg},
                     version={version_arg},
                 )
-                """
-            ).strip()
+                """).strip()
         else:
-            exe_and_collect_block = textwrap.dedent(
-                f"""
+            exe_and_collect_block = textwrap.dedent(f"""
                 exe = EXE(
                     pyz,
                     a.scripts,
@@ -397,12 +407,9 @@ class SpecAndPyInstallerBuilder:
                     upx_exclude=[],
                     name=f'{exe_stem}',
                 )
-                """
-            ).strip()
+                """).strip()
 
-        spec_content = (
-            textwrap.dedent(
-                f"""
+        spec_content = textwrap.dedent(f"""
                 # -*- mode: python ; coding: utf-8 -*-
 
                 a = Analysis(
@@ -419,11 +426,7 @@ class SpecAndPyInstallerBuilder:
                 )
                 pyz = PYZ(a.pure)
 
-                """
-            ).lstrip()
-            + exe_and_collect_block
-            + "\n"
-        )
+                """).lstrip() + exe_and_collect_block + "\n"
 
         with open(generated_spec_path, "w", encoding=DEFAULT_TEXT_ENCODING) as f:
             f.write(spec_content)
@@ -472,7 +475,9 @@ class SpecAndPyInstallerBuilder:
                     removed_any = True
 
             if not removed_any:
-                logd(f"  • [{target_key}] 삭제할 .spec 파일을 후보 경로에서 찾지 못해 건너뜀: {sorted(candidate_specs)}")
+                logd(
+                    f"  • [{target_key}] 삭제할 .spec 파일을 후보 경로에서 찾지 못해 건너뜀: {sorted(candidate_specs)}"
+                )
 
     def build_target(self, target_key: str, py_exe: str, run_cmd_fn: Callable[..., Any]) -> bool:
         self._check_cancelled(f"대상({target_key}) 빌드 시작 전 취소되었습니다.")
@@ -486,10 +491,14 @@ class SpecAndPyInstallerBuilder:
             spec_obj = get_target_spec(target_key)
             entry_script = self.find_entry_script(spec_obj, target_key)
             if entry_script:
-                spec_path = self.generate_default_spec_file(target_key, spec_obj, entry_script, work_out)
+                spec_path = self.generate_default_spec_file(
+                    target_key, spec_obj, entry_script, work_out
+                )
 
         if not spec_path:
-            logd(f"  ⚠️ [{target_key}] .spec 파일 및 진입점 스크립트를 찾지 못해 빌드를 건너뜁니다.")
+            logd(
+                f"  ⚠️ [{target_key}] .spec 파일 및 진입점 스크립트를 찾지 못해 빌드를 건너뜁니다."
+            )
             return False
 
         self._check_cancelled(f"PyInstaller 실행 전 취소되었습니다 ({target_key}).")

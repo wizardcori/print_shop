@@ -1,10 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 a = Analysis(
-    [r'C:\1print_shop\PrintShopApp\src\PrintShopApp\main_app.py'],
-    pathex=[r'C:\\1print_shop\\PrintShopApp', r'C:\\1print_shop\\PrintShopApp\\src'],
+    [r'main_app.py'],
+    pathex=[r'.', r'C:/1a/PrintShopApp', r'C:/1a/PrintShopApp/src'],
     binaries=[],
-    datas=[],
+    datas=[(r'C:/1a/PrintShopApp/src/LinkBox/templates', 'LinkBox/templates'), (r'C:/1a/PrintShopApp/src/LinkShare/web/templates', 'LinkShare/web/templates'), (r'C:/1a/PrintShopApp/.env.feature.runtime', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -34,5 +34,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    version=r'C:\1print_shop\PrintShopApp\src\PrintShopApp\version_info.txt',
+    uac_admin=False,
+    icon=None,
+    version=r'version_info.txt',
 )

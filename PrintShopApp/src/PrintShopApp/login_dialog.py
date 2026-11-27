@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 
 from Common.current_user_session import CurrentUserSession
 from Common.log import logd
-from setting.general_settings import GeneralSettingsConfig
+from setting.general_settings import GeneralConfig
 from setting.operator_settings import OperatorConfig
 
 
@@ -26,7 +26,9 @@ def verify_operator_credentials(
     """DB(operators 테이블)에서 활성 사용자 정보 검색 및 자격 증명 일치 여부 확인"""
     items = operator_config.get_items(active_only=True)
     for item in items:
-        if item.get("user_name") == username and str(item.get("user_password", "")) == str(password):
+        if item.get("user_name") == username and str(item.get("user_password", "")) == str(
+            password
+        ):
             return item
     return None
 
@@ -35,7 +37,7 @@ class LoginDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("로그인")
-        self.general_config = GeneralSettingsConfig()
+        self.general_config = GeneralConfig()
         self.operator_config = OperatorConfig()
 
         logd(f"LoginDialog config filepath: {self.general_config.filepath}")
@@ -92,8 +94,12 @@ class LoginDialog(QDialog):
             self.general_config.set("auto_login", auto_login)
             self.general_config.save()
 
-            logd(f"[LoginSave] filepath={self.general_config.filepath}, exists={os.path.exists(self.general_config.filepath)}")
-            logd(f"[LoginSave] readback auto_login={self.general_config.get('auto_login')}, user={self.general_config.get('login_user_name')}")
+            logd(
+                f"[LoginSave] filepath={self.general_config.filepath}, exists={os.path.exists(self.general_config.filepath)}"
+            )
+            logd(
+                f"[LoginSave] readback auto_login={self.general_config.get('auto_login')}, user={self.general_config.get('login_user_name')}"
+            )
 
             session = CurrentUserSession()
             session.login(
@@ -107,7 +113,7 @@ class LoginDialog(QDialog):
 
 
 def check_login() -> bool:
-    config = GeneralSettingsConfig()
+    config = GeneralConfig()
     operator_config = OperatorConfig()
 
     logd(f"config.filepath: {config.filepath}")
@@ -138,6 +144,3 @@ def check_login() -> bool:
         if login_dialog.exec() == LoginDialog.DialogCode.Accepted:
             return True
         sys.exit(0)
-# ```
-
-# 로그인 흐름이 정상 동작한 뒤에는 `PrintShopApp()` 생성 및 각 탭(`LinkBoxManager`, `LinkShareManager`) 초기화 단계에서도 경로나 설정 참조가 어긋나는 곳이 있는지 이어서 확인해 볼까요?

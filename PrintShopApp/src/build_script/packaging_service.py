@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from Common.Version.exe_version_crypto import sign_exe_authenticode
-from Common.log import logd
+from Common.log import logd, loge
 from build_script.artifact_signing import write_sha256_file
 from build_script.target_config import (
     AppTargetSpec,
@@ -160,6 +160,34 @@ class PackagingService:
             defines.append(f"/DInstallerTasks={','.join(all_tasks)}")
         return defines
 
+    @staticmethod
+    def _find_exe_in_dist_dir(spec: AppTargetSpec, app_dist_dir: str) -> str | None:
+        """압축 전 app_dist_dir 내에 대상 앱의 실행파일(.exe)이 존재하는지 확인."""
+        expected_name = (getattr(spec, "exe_name", None) or "").strip()
+        dist_path = Path(app_dist_dir)
+
+        if expected_name:
+            direct_candidate = dist_path / expected_name
+            if direct_candidate.is_file():
+                return str(direct_candidate)
+
+            target_lower = expected_name.lower()
+            for root, _, files in os.walk(app_dist_dir):
+                for fn in files:
+                    if fn.lower() == target_lower:
+                        full_p = os.path.join(root, fn)
+                        if os.path.isfile(full_p):
+                            return full_p
+            return None
+
+        for root, _, files in os.walk(app_dist_dir):
+            for fn in files:
+                if fn.lower().endswith(EXE_EXTENSION.lower()):
+                    full_p = os.path.join(root, fn)
+                    if os.path.isfile(full_p):
+                        return full_p
+        return None
+
     def create_release_archives(
         self,
         specs: list[AppTargetSpec],
@@ -168,6 +196,7 @@ class PackagingService:
         self._check_cancelled("릴리스 패키지 생성 시작 전 취소되었습니다.")
         dist_root = TargetConfig.get_dist_root(self.project_root)
         if not os.path.isdir(dist_root):
+            loge(f"  ❌ [릴리스 압축 실패] dist 디렉터리가 존재하지 않습니다: {dist_root}")
             return []
 
         created_releases: list[str] = []
@@ -182,11 +211,22 @@ class PackagingService:
             )
 
             if not os.path.isdir(app_dist_dir):
-                logd(
-                    f"  • [{spec.label}] {self.dir_config.dist_dir_name}/"
-                    f"{TargetConfig.get_folder_name(spec.key)} 폴더가 없어 릴리스 생성을 건너뜀"
+                loge(
+                    f"  ❌ [{spec.label}] 릴리스 압축 실패: 빌드 산출물 폴더가 없습니다 "
+                    f"({app_dist_dir})"
                 )
-                continue
+                return []
+
+            exe_path = self._find_exe_in_dist_dir(spec, app_dist_dir)
+            if not exe_path:
+                expected_exe = getattr(spec, "exe_name", None) or f"*{EXE_EXTENSION}"
+                loge(
+                    f"  ❌ [{spec.label}] 릴리스 압축 실패: 앱 실행파일({expected_exe})이 존재하지 않습니다 "
+                    f"(검색 폴더: {app_dist_dir})"
+                )
+                return []
+
+            logd(f"  • [{spec.label}] 실행파일 확인 완료: {exe_path}")
 
             app_release_dir = TargetConfig.get_release_dir(spec.key, self.project_root, create=True)
             TargetConfig.validate_app_artifact_layout(

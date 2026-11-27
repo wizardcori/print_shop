@@ -7,12 +7,12 @@ from __future__ import annotations
 
 import importlib
 import os
+from pathlib import Path
 import shutil
 import subprocess
 import sys
 import threading
 import time
-from pathlib import Path
 from typing import Any, Callable
 
 from Common.log import set_file_tag
@@ -30,9 +30,6 @@ for p in (str(PROJECT_ROOT), str(SRC_DIR), str(CURRENT_DIR)):
 
 from Common.log import logd, loge  # noqa: E402
 from Common.step_timer import BuildStepTimer  # noqa: E402
-
-# from Common.Version.exe_version_crypto import BuildStepTimer  # noqa: E402
-# from Common.Version.generate_public_key_module import BuildStepTimer  # noqa: E402
 
 from build_script.artifact_signing import inject_and_verify_exe  # noqa: E402
 from build_script.build_archive_manager import BuildArchiveManager  # noqa: E402
@@ -71,6 +68,7 @@ from build_script.test_source_gen import generate_app_pytest_scripts  # noqa: E4
 from build_script.version_service import VersionService  # noqa: E402
 
 from Common.app_control import AppControlSender  # noqa: E402
+from Common.python_venv_setup import PythonLibManager  # noqa: E402
 
 ensure_default_targets_injected()
 
@@ -92,6 +90,7 @@ except Exception:
 
 STEP_UI: str = "step1_ui"
 STEP_ENV: str = "step2_env"
+STEP_LIB_INSTALL: str = "step2_1_lib_install"
 STEP_PUBKEY: str = "step3_pubkey"
 STEP_VERSION: str = "step4_version"
 STEP_BUILD: str = "step5_build"
@@ -104,9 +103,10 @@ STEP_INSTALLER: str = "step9_installer"
 PIPELINE_STEP_WEIGHTS: tuple[tuple[str, float], ...] = (
     (STEP_UI, 0.05),
     (STEP_ENV, 0.04),
+    (STEP_LIB_INSTALL, 0.04),
     (STEP_PUBKEY, 0.03),
     (STEP_VERSION, 0.08),
-    (STEP_BUILD, 0.35),
+    (STEP_BUILD, 0.31),
     (STEP_EOF_CRYPTO, 0.10),
     (STEP_TEST_SYNC, 0.05),
     (STEP_APP_TEST, 0.06),
@@ -124,11 +124,17 @@ DEFAULT_CMD_TIMEOUT_SEC: int = 600
 PUBKEY_REVERIFY_ATTEMPTS: int = 2
 SETUP_SUFFIX: str = "Setup"
 
-DEFAULT_SELF_CONTROL_KEYS: frozenset[str] = frozenset({
-    "BuildManagerApp",
-    "BuildManager",
-    "BUILD_MGR",
-})
+DEFAULT_AUTO_INSTALL_LIBS: bool = True
+DEFAULT_LIB_VENV_DIR_NAME: str = ".venv"
+DEFAULT_LIB_CONFIRM: bool = False
+
+DEFAULT_SELF_CONTROL_KEYS: frozenset[str] = frozenset(
+    {
+        "BuildManagerApp",
+        "BuildManager",
+        "BUILD_MGR",
+    }
+)
 
 PUBKEY_MODULE_CANDIDATES: tuple[str, ...] = (
     "Common.Version.exe_version_public_key",
@@ -148,7 +154,10 @@ PUBKEY_GEN_SCRIPT_REL_PARTS: tuple[str, ...] = (
 __all__ = [
     "BuildApp",
     "CRYPTO_MODULE_CANDIDATES",
+    "DEFAULT_AUTO_INSTALL_LIBS",
     "DEFAULT_CMD_TIMEOUT_SEC",
+    "DEFAULT_LIB_CONFIRM",
+    "DEFAULT_LIB_VENV_DIR_NAME",
     "DEFAULT_SELF_CONTROL_KEYS",
     "ENV_BUILD_MODE",
     "ENV_PYTHONUNBUFFERED",
@@ -167,6 +176,7 @@ __all__ = [
     "STEP_ENV",
     "STEP_EOF_CRYPTO",
     "STEP_INSTALLER",
+    "STEP_LIB_INSTALL",
     "STEP_PUBKEY",
     "STEP_RELEASE",
     "STEP_TEST_SYNC",
@@ -211,6 +221,7 @@ def parse_targets(raw_targets: list[str] | str | None) -> list[str]:
 
 
 class BuildApp:
+
     def __init__(
         self,
         project_root: str = str(PROJECT_ROOT),
@@ -254,6 +265,10 @@ class BuildApp:
         control_namespace: str = "Local",
         control_fallback_dir: str | Path | None = None,
         control_secret_key: bytes | str | None = None,
+        auto_install_libs: bool = DEFAULT_AUTO_INSTALL_LIBS,
+        lib_venv_root: str | Path | None = None,
+        lib_venv_dir_name: str = DEFAULT_LIB_VENV_DIR_NAME,
+        lib_confirm: bool = DEFAULT_LIB_CONFIRM,
     ):
         self.project_root = os.path.abspath(project_root)
         self.src_dir = os.path.join(self.project_root, SRC_DIR_NAME)
@@ -347,6 +362,13 @@ class BuildApp:
         self.control_sender_key = (control_sender_key or "BuildManagerApp").strip()
         self.stop_settle_sec = max(0.0, float(stop_settle_sec))
 
+        self.auto_install_libs: bool = bool(auto_install_libs)
+        self.lib_venv_root: str | Path | None = lib_venv_root
+        self.lib_venv_dir_name: str = (
+            str(lib_venv_dir_name or DEFAULT_LIB_VENV_DIR_NAME).strip() or DEFAULT_LIB_VENV_DIR_NAME
+        )
+        self.lib_confirm: bool = bool(lib_confirm)
+
         excluded: set[str] = {k.strip() for k in DEFAULT_SELF_CONTROL_KEYS if k.strip()}
         if self_app_key and str(self_app_key).strip():
             excluded.add(str(self_app_key).strip())
@@ -367,10 +389,74 @@ class BuildApp:
                     fallback_dir=control_fallback_dir,
                 )
             except Exception as exc:
-                logd(f"  • [CtrlSignal] AppControlSender 초기화 실패 (무시하고 계속): {exc}")
+                logd("  • [CtrlSignal] AppControlSender 초기화 실패 (무시하고 계속):" f" {exc}")
                 self._control_sender = None
 
-    def _init_bump_units(self, explicit_bump_units: dict[str, str | None] | None) -> dict[str, str | None]:
+    def install_python_libraries(self) -> None:
+        """[Step 2-1] 소스 루트의 import를 검사하고 가상환경에 미설치 라이브러리를 설치."""
+        step_key = STEP_LIB_INSTALL
+        step_name = "Step 2-1: Python Library Install"
+        self._begin_step(step_key, detail="Python 의존성 스캔 및 설치")
+
+        if not self.auto_install_libs:
+            msg = "auto_install_libs=False 로 라이브러리 설치 건너뜀"
+            logd(f"  • [{step_name}] {msg}")
+            self._end_step(step_key, detail=msg)
+            self._record_result(step_name, STATUS_SKIPPED, msg, step_key=step_key)
+            return
+
+        logd(f"[{step_name}] 의존성 스캔 및 설치 시작...")
+        try:
+            self._check_cancelled("라이브러리 설치 전 빌드가 취소되었습니다.")
+            resolved_venv_root = (
+                Path(self.lib_venv_root).resolve()
+                if self.lib_venv_root
+                else Path(self.project_root).resolve()
+            )
+
+            logd(
+                f"  • [LibManager] source_root={self.src_dir} |"
+                f" venv_root={resolved_venv_root} |"
+                f" venv_dir_name={self.lib_venv_dir_name}"
+            )
+            lib_mgr = PythonLibManager(
+                source_root=self.src_dir,
+                venv_root=resolved_venv_root,
+                venv_dir_name=self.lib_venv_dir_name,
+                debug=True,
+            )
+            target_py = lib_mgr.ensure_venv(
+                create_if_missing=True,
+                confirm=self.lib_confirm,
+            )
+            self._check_cancelled("가상환경 준비 후 빌드가 취소되었습니다.")
+            lib_mgr.scan_imports()
+            _, missing = lib_mgr.check_packages(python_exe=target_py)
+
+            if missing:
+                self._check_cancelled("미설치 패키지 설치 전 빌드가 취소되었습니다.")
+                ok = lib_mgr.install_missing(
+                    python_exe=target_py,
+                    confirm=self.lib_confirm,
+                )
+                if not ok:
+                    raise RuntimeError(f"미설치 라이브러리 설치 실패/취소: {missing}")
+                msg = f"Installed missing packages: {missing}"
+            else:
+                msg = "설치할 미설치 라이브러리가 없습니다."
+                logd(f"  • [LibManager] {msg}")
+
+            self._end_step(step_key, detail=msg)
+            self._record_result(step_name, STATUS_SUCCESS, msg, step_key=step_key)
+        except Exception as exc:
+            msg = f"실패: {exc}"
+            self._end_step(step_key, detail=msg)
+            self._record_result(step_name, STATUS_FAILED, msg, step_key=step_key)
+            raise
+
+    def _init_bump_units(
+        self, explicit_bump_units: dict[str, str | None] | None
+    ) -> dict[str, str | None]:
         resolved: dict[str, str | None] = {}
         app_overrides_map = TargetConfig.get_app_overrides()
         for app_key, ov in app_overrides_map.items():
@@ -466,10 +552,10 @@ class BuildApp:
     ) -> None:
         """지정된 종료 상황(reason)과 함께 제어 대상 앱에 STOP 신호를 발송하고 로그를 남깁니다."""
         if not self.enable_app_control:
-            logd(f"[CtrlSignal] STOP 건너뜀 | 상황(reason)={reason} | enable_app_control=False")
+            logd(f"[CtrlSignal] STOP 건너뜀 | 상황(reason)={reason} |" " enable_app_control=False")
             return
         if self._control_sender is None:
-            logd(f"[CtrlSignal] STOP 건너뜀 | 상황(reason)={reason} | _control_sender 미초기화")
+            logd(f"[CtrlSignal] STOP 건너뜀 | 상황(reason)={reason} |" " _control_sender 미초기화")
             return
 
         candidate_keys = (
@@ -479,7 +565,7 @@ class BuildApp:
         )
         targets = self._get_safe_control_targets(candidate_keys)
         if not targets:
-            logd(f"[CtrlSignal] STOP 대상 없음 | 상황(reason)={reason} | 후보={candidate_keys}")
+            logd(f"[CtrlSignal] STOP 대상 없음 | 상황(reason)={reason} |" f" 후보={candidate_keys}")
             return
 
         logd(
@@ -490,7 +576,10 @@ class BuildApp:
             try:
                 self._control_sender.clear_signals(target_key)
                 self._control_sender.stop_app(target_key)
-                logd(f"  • [CtrlSignal] STOP 발송 완료 | 상황(reason)={reason} | 대상={target_key}")
+                logd(
+                    "  • [CtrlSignal] STOP 발송 완료 | 상황(reason)="
+                    f"{reason} | 대상={target_key}"
+                )
             except Exception as exc:
                 loge(
                     f"  ❌ [CtrlSignal] STOP 발송 실패 | 상황(reason)={reason} | "
@@ -506,7 +595,10 @@ class BuildApp:
 
     def _send_stop_to_build_targets(self) -> None:
         if not self.stop_before_build:
-            logd("[CtrlSignal] 빌드 시작 전 STOP 건너뜀 | 상황(reason)=before_build | stop_before_build=False")
+            logd(
+                "[CtrlSignal] 빌드 시작 전 STOP 건너뜀 | 상황(reason)=before_build |"
+                " stop_before_build=False"
+            )
             return
         self._send_stop_to_targets(reason="before_build", settle_after=True)
 
@@ -555,7 +647,9 @@ class BuildApp:
         self._emit_progress(payload)
         return float(rec.get("elapsed") or 0.0)
 
-    def _record_result(self, step: str, status: str, detail: str, step_key: str | None = None) -> None:
+    def _record_result(
+        self, step: str, status: str, detail: str, step_key: str | None = None
+    ) -> None:
         timing = self.timer.get_step_timing(step_key) if step_key else {}
         self.results.append(
             {
@@ -667,7 +761,10 @@ class BuildApp:
 
         return sorted(
             matched,
-            key=lambda s: (int(s.order) if str(s.order).isdigit() else UNKNOWN_ORDER_SORT_KEY, s.key),
+            key=lambda s: (
+                int(s.order) if str(s.order).isdigit() else UNKNOWN_ORDER_SORT_KEY,
+                s.key,
+            ),
         )
 
     def get_full_combo_tag(self) -> str:
@@ -678,7 +775,10 @@ class BuildApp:
                 for spec in TargetConfig.TARGET_SPECS
                 if not spec.is_installer and spec.include_in_installer
             ],
-            key=lambda s: (int(s.order) if str(s.order).isdigit() else UNKNOWN_ORDER_SORT_KEY, s.key),
+            key=lambda s: (
+                int(s.order) if str(s.order).isdigit() else UNKNOWN_ORDER_SORT_KEY,
+                s.key,
+            ),
         )
         if not all_includable:
             return NONE_COMBO_TAG
@@ -712,7 +812,7 @@ class BuildApp:
             default_exe_name=spec.exe_name,
         )
         if not resolved_exe or not os.path.isfile(resolved_exe):
-            logd(f"  • [{spec.label}] test 동기화 대상 EXE 미존재 (건너뜀): {spec.exe_name}")
+            logd(f"  • [{spec.label}] test 동기화 대상 EXE 미존재 (건너뜀):" f" {spec.exe_name}")
             return None
 
         test_app_dir = Path(TargetConfig.get_test_dir(spec.key, self.project_root, create=True))
@@ -770,9 +870,10 @@ class BuildApp:
             TargetConfig.ensure_all_app_dirs(self.project_root, targets=self.targets)
             msg = (
                 f"mode={self.mode}, python={py_exe}, "
-                f"dirs=(work={self.dir_config.work_dir_name}, dist={self.dir_config.dist_dir_name}, "
-                f"release={self.dir_config.release_dir_name}, install={self.dir_config.install_dir_name}, "
-                f"test={TEST_DIR_NAME})"
+                f"dirs=(work={self.dir_config.work_dir_name},"
+                f" dist={self.dir_config.dist_dir_name},"
+                f" release={self.dir_config.release_dir_name},"
+                f" install={self.dir_config.install_dir_name}, test={TEST_DIR_NAME})"
             )
             logd(f"  • {msg}")
             self._end_step(step_key, detail=msg)
@@ -793,20 +894,25 @@ class BuildApp:
 
         primary_script = os.path.join(self.project_root, *PUBKEY_GEN_SCRIPT_REL_PARTS)
         fallback_script = os.path.join(CURRENT_DIR, PUBKEY_GEN_SCRIPT_REL_PARTS[-1])
-        src_version_script = os.path.join(self.src_dir, "Common", "Version", PUBKEY_GEN_SCRIPT_REL_PARTS[-1])
+        src_version_script = os.path.join(
+            self.src_dir, "Common", "Version", PUBKEY_GEN_SCRIPT_REL_PARTS[-1]
+        )
 
         logd(
             f"  • [step3][경로확인] project_root={self.project_root} | "
             f"SRC_DIR={self.src_dir} | CURRENT_DIR={CURRENT_DIR} | cwd={os.getcwd()}"
         )
         logd(
-            f"  • [step3][후보1-primary] {primary_script} (exists={os.path.isfile(primary_script)})"
+            f"  • [step3][후보1-primary] {primary_script}"
+            f" (exists={os.path.isfile(primary_script)})"
         )
         logd(
-            f"  • [step3][후보2-fallback] {fallback_script} (exists={os.path.isfile(fallback_script)})"
+            f"  • [step3][후보2-fallback] {fallback_script}"
+            f" (exists={os.path.isfile(fallback_script)})"
         )
         logd(
-            f"  • [step3][후보3-src_version] {src_version_script} (exists={os.path.isfile(src_version_script)})"
+            f"  • [step3][후보3-src_version] {src_version_script}"
+            f" (exists={os.path.isfile(src_version_script)})"
         )
 
         gen_script = primary_script
@@ -823,14 +929,18 @@ class BuildApp:
             self._check_cancelled()
             if not os.path.isfile(gen_script):
                 loge(
-                    f"  ❌ [step3][미발견] 공개키 생성 스크립트를 찾을 수 없습니다. "
+                    "  ❌ [step3][미발견] 공개키 생성 스크립트를 찾을 수 없습니다. "
                     f"primary={primary_script} ({os.path.isfile(primary_script)}), "
                     f"fallback={fallback_script} ({os.path.isfile(fallback_script)}), "
-                    f"src_version={src_version_script} ({os.path.isfile(src_version_script)})"
+                    f"src_version={src_version_script}"
+                    f" ({os.path.isfile(src_version_script)})"
                 )
                 raise FileNotFoundError(f"공개키 생성 스크립트를 찾을 수 없습니다: {gen_script}")
 
-            logd(f"  • [step3][선택됨] source={selected_source} | path={os.path.abspath(gen_script)}")
+            logd(
+                f"  • [step3][선택됨] source={selected_source} |"
+                f" path={os.path.abspath(gen_script)}"
+            )
 
             gen_dir = str(Path(gen_script).resolve().parent)
             if gen_dir not in sys.path:
@@ -849,8 +959,10 @@ class BuildApp:
             self.public_key_status = info
 
             logd(
-                f"  • [step3] 생성={info['generated']} | 파일존재={info['file_exists']} | "
-                f"변수({info['var_name']})로딩={info['loaded_to_var']} | path={info['py_path']}"
+                f"  • [step3] 생성={info['generated']} |"
+                f" 파일존재={info['file_exists']} | "
+                f"변수({info['var_name']})로딩={info['loaded_to_var']} |"
+                f" path={info['py_path']}"
             )
             for item in info.get("attempts", []):
                 logd(
@@ -859,7 +971,9 @@ class BuildApp:
                 )
 
             if info.get("error") or not info.get("sample_verified"):
-                raise RuntimeError(info.get("error") or info.get("last_reason") or "공개키 모듈 검증 실패")
+                raise RuntimeError(
+                    info.get("error") or info.get("last_reason") or "공개키 모듈 검증 실패"
+                )
 
             self._check_cancelled()
             reloaded_mods = reload_pubkey_and_crypto_modules()
@@ -880,7 +994,9 @@ class BuildApp:
             self._record_result(step_name, STATUS_FAILED, msg, step_key=step_key)
             raise
 
-    def step4_sync_version_and_resources(self) -> tuple[dict[str, str], dict[str, str]]:
+    def step4_sync_version_and_resources(
+        self,
+    ) -> tuple[dict[str, str], dict[str, str]]:
         """[Step 4] 선택된 앱별 개별 version.txt 조회/증가 및 앱별 version_info.txt 생성."""
         step_key = STEP_VERSION
         step_name = "Step 4: Version & Resources"
@@ -1057,9 +1173,7 @@ class BuildApp:
             testable_specs = [
                 spec
                 for spec in selected_specs
-                if not spec.is_installer
-                and spec.copy_to_test
-                and getattr(spec, "run_test", True)
+                if not spec.is_installer and spec.copy_to_test and getattr(spec, "run_test", True)
             ]
 
             if not testable_specs:
@@ -1100,14 +1214,20 @@ class BuildApp:
                 )
 
                 if not generated_files:
-                    logd(f"  • [{step_name}] [{target_spec.label}] 생성된 pytest 스크립트가 없어 건너뜀")
+                    logd(
+                        f"  • [{step_name}] [{target_spec.label}] 생성된 pytest 스크립트가"
+                        " 없어 건너뜀"
+                    )
                     continue
 
                 generated_script = str(generated_files[0])
                 generated_scripts.append(generated_script)
 
                 if not getattr(self, "run_tests", False):
-                    logd(f"  • [{step_name}] [{target_spec.label}] 스크립트 생성 완료 (run_tests=False)")
+                    logd(
+                        f"  • [{step_name}] [{target_spec.label}] 스크립트 생성 완료"
+                        " (run_tests=False)"
+                    )
                     continue
 
                 extra_args = list(getattr(self, "pytest_args", None) or ["-v"])
@@ -1138,7 +1258,9 @@ class BuildApp:
                             else f"after_app_test_exception:{target_spec.key}"
                         )
                     elif proc_res is not None and proc_res.returncode != 0:
-                        post_reason = f"after_app_test_failed:{target_spec.key}(exit={proc_res.returncode})"
+                        post_reason = (
+                            f"after_app_test_failed:{target_spec.key}(exit={proc_res.returncode})"
+                        )
                     else:
                         post_reason = f"after_app_test_passed:{target_spec.key}"
 
@@ -1149,10 +1271,13 @@ class BuildApp:
                     )
 
                 if proc_res is not None and proc_res.returncode != 0:
-                    tail_lines = [ln for ln in (proc_res.stdout or "").splitlines() if ln.strip()][-5:]
+                    tail_lines = [ln for ln in (proc_res.stdout or "").splitlines() if ln.strip()][
+                        -5:
+                    ]
                     tail_summary = " | ".join(tail_lines)
                     fail_msg = (
-                        f"[{target_spec.label}] pytest 실패 또는 미실행 (exit={proc_res.returncode})"
+                        f"[{target_spec.label}] pytest 실패 또는 미실행"
+                        f" (exit={proc_res.returncode})"
                         + (f" - {tail_summary}" if tail_summary else "")
                     )
                     loge(f"  ❌ [{step_name}] {fail_msg}")
@@ -1169,12 +1294,19 @@ class BuildApp:
                 return []
 
             if failed_labels:
-                msg = f"pytest 완료 (일부 실패: {failed_labels}, scripts={len(generated_scripts)})"
+                msg = (
+                    f"pytest 완료 (일부 실패: {failed_labels},"
+                    f" scripts={len(generated_scripts)})"
+                )
                 self._end_step(step_key, detail=msg)
                 self._record_result(step_name, STATUS_FAILED, msg, step_key=step_key)
                 return generated_scripts
 
-            mode_note = "실행 생략(run_tests=False)" if not getattr(self, "run_tests", False) else "통과 완료"
+            mode_note = (
+                "실행 생략(run_tests=False)"
+                if not getattr(self, "run_tests", False)
+                else "통과 완료"
+            )
             msg = f"pytest 스크립트 {len(generated_scripts)}건 생성 및 {mode_note}"
             logd(f"  • [{step_name}] {msg}")
             self._end_step(step_key, detail=msg)
@@ -1209,7 +1341,7 @@ class BuildApp:
                 default_exe_name=spec.exe_name,
             )
             if not resolved_exe or not os.path.isfile(resolved_exe):
-                logd(f"  • [{spec.label}] 아카이빙 대상 EXE 미존재 (건너뜀): {spec.exe_name}")
+                logd(f"  • [{spec.label}] 아카이빙 대상 EXE 미존재 (건너뜀):" f" {spec.exe_name}")
                 continue
 
             app_ver = self.version_service.get_target_version(spec.key, target_versions)
@@ -1245,7 +1377,7 @@ class BuildApp:
             self._check_cancelled()
             dist_root = TargetConfig.get_dist_root(self.project_root)
             if not os.path.isdir(dist_root):
-                msg = f"{self.dir_config.dist_dir_name} 디렉터리가 없어 릴리스 생성을 건너뜀"
+                msg = f"{self.dir_config.dist_dir_name} 디렉터리가 없어 릴리스 생성을" " 건너뜀"
                 logd(f"  • {msg}")
                 self._end_step(step_key, detail=msg)
                 self._record_result(step_name, STATUS_SKIPPED, msg, step_key=step_key)
@@ -1306,7 +1438,8 @@ class BuildApp:
         self._begin_step(step_key, detail=f"Windows 인스톨러 생성 ({combo_tag})")
         logd(
             f"\n[{step_name}] Windows 인스톨러 생성 "
-            f"(combo={combo_tag}, targets={ordered_labels}, artifact={artifact_name}, v{main_app_version})..."
+            f"(combo={combo_tag}, targets={ordered_labels},"
+            f" artifact={artifact_name}, v{main_app_version})..."
         )
         try:
             self._check_cancelled()
@@ -1350,22 +1483,18 @@ class BuildApp:
                 py_exe = resolve_python_executable(self.project_root)
                 installer_specs = self.get_installer_specs_sorted()
                 fallback_specs = [s for s in TargetConfig.TARGET_SPECS if not s.is_installer]
-                version_source_key = (
-                    self.installer_config.version_source_id
-                    or (
-                        installer_specs[0].key
-                        if installer_specs
-                        else (fallback_specs[0].key if fallback_specs else MAIN_APP_OVERRIDE_NAME)
-                    )
+                version_source_key = self.installer_config.version_source_id or (
+                    installer_specs[0].key
+                    if installer_specs
+                    else (fallback_specs[0].key if fallback_specs else MAIN_APP_OVERRIDE_NAME)
                 )
                 version_map = self.version_service.sync_targets(
                     targets=[s.key for s in installer_specs] or self.targets,
                     bump_unit=None,
                 )[0]
-                main_app_version = (
-                    version_map.get(version_source_key)
-                    or self.version_service.get_main_app_version(version_map)
-                )
+                main_app_version = version_map.get(
+                    version_source_key
+                ) or self.version_service.get_main_app_version(version_map)
                 self.step9_create_windows_installer(py_exe, main_app_version, is_final=True)
                 self._check_cancelled()
                 return True
@@ -1375,6 +1504,9 @@ class BuildApp:
 
             self.step1_convert_ui_files()
             py_exe, mode = self.step2_setup_environment_and_config()
+
+            self.install_python_libraries()
+
             self.step3_prepare_public_key_module()
             target_versions, previous_versions = self.step4_sync_version_and_resources()
             main_app_version = self.version_service.get_main_app_version(target_versions)

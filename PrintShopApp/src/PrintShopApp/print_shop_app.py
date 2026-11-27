@@ -8,12 +8,15 @@ import shutil
 import logging
 from dotenv import load_dotenv
 
-from Common.log import logd,loge
-from Common.log import set_file_tag ;set_file_tag("MAIN")
+from Common.log import logd, loge
+from Common.log import set_file_tag
+
+set_file_tag("MAIN")
 
 from PrintShopApp.print_shop_log_setting_tab import PrintShopLogSettingsTab
 
 from setting import env_settings, general_settings, operator_settings
+
 # 사용하지 않는 경고를 숨기기 위한 더미 참조
 _ = (env_settings, general_settings, operator_settings)
 
@@ -30,8 +33,8 @@ from setting.general_settings import *
 from setting.env_settings import *
 from setting.operator_settings import *
 
-general_config = GeneralSettingsConfig()
-env_config = EnvSettingsConfig()
+general_config = GeneralConfig()
+env_config = EnvConfig()
 
 project_dir = os.path.dirname(os.path.abspath(__file__))
 if project_dir not in sys.path:
@@ -43,55 +46,62 @@ from Common.geometry_manager import GeometryManager
 
 # [추가] LinkShare 내부의 설정들도 레지스트리에 등록될 수 있도록 임포트
 # [추가] 각 설정 모듈들을 직접 임포트
-from LinkBox.setting import zone_settings, sound_settings, color_settings, print_fare_settings
-# 사용하지 않는 경고를 숨기기 위한 더미 참조
-_ = (zone_settings, sound_settings, color_settings, print_fare_settings)
-
-from LinkShare.setting import hotspot_settings, storage_settings, internet_rates_settings
-# 사용하지 않는 경고를 숨기기 위한 더미 참조
-_ = (hotspot_settings, storage_settings, internet_rates_settings)
 
 from LinkBox.linkbox import LinkBoxManager
-
 from LinkShare.linkshare import LinkShareManager
 
-#from Common.order_service import OrderService
+# from Common.order_service import OrderService
 from Common.order_ui_controller import OrderUiController
 from LinkBox.print_log_writer import (
-    play_notification_sound, stop_notification_sound,
+    play_notification_sound,
+    stop_notification_sound,
 )
+
 try:
     import winsound
 except ImportError:
     winsound = None
 
-from PySide6.QtWidgets import QApplication, QMainWindow, QTabWidget, QMessageBox, QWidget, QVBoxLayout
+from PySide6.QtWidgets import (
+    QApplication,
+    QMainWindow,
+    QTabWidget,
+    QMessageBox,
+    QWidget,
+    QVBoxLayout,
+)
 from PySide6.QtCore import Qt, Signal, Slot, QTimer, QFile
 from PySide6.QtGui import QAction
 from PySide6.QtUiTools import QUiLoader
 
-from ui.ui_print_shop_app import Ui_PrintShopApp
+from ui.print_shop_app_ui import Ui_PrintShopApp
 
 # 각 탭 모듈 임포트
-#from LinkBox.linkbox import create_tab as create_linkbox_tab
-#from LinkShare.linkshare import create_tab as create_linkshare_tab
+# from LinkBox.linkbox import create_tab as create_linkbox_tab
+# from LinkShare.linkshare import create_tab as create_linkshare_tab
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
-application_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else project_dir
-resource_dir = getattr(sys, '_MEIPASS', current_dir)
+application_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else project_dir
+resource_dir = getattr(sys, "_MEIPASS", current_dir)
 
-data_dir = os.path.join(project_root, 'data') if not getattr(sys, 'frozen', False) else os.path.join(
-    os.environ.get('LOCALAPPDATA') or os.path.expanduser('~'),
-    'PrintShopApp',
-    'data',
+data_dir = (
+    os.path.join(project_root, "data")
+    if not getattr(sys, "frozen", False)
+    else os.path.join(
+        os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"),
+        "PrintShopApp",
+        "data",
+    )
 )
 os.makedirs(data_dir, exist_ok=True)
-os.chdir(project_dir if not getattr(sys, 'frozen', False) else application_dir)
+os.chdir(project_dir if not getattr(sys, "frozen", False) else application_dir)
+
 
 class PrintShopAppGeometryConfig(GeometryManager):
     schema: Dict[str, Dict[str, Any]] = {
         "window_geometry": {"type": ConfigType.LIST, "default": [200, 200, 800, 600]}
     }
+
 
 class PrintShopApp(QMainWindow):
     file_signal = Signal(list, str, str)
@@ -101,20 +111,22 @@ class PrintShopApp(QMainWindow):
 
     def update_window_title(self, privilege_label=None):
         privilege_label = privilege_label or (
-            "Administrator privileges" if env_config.get('is_admin') else "Standard privileges"
+            "Administrator privileges" if env_config.get("is_admin") else "Standard privileges"
         )
         parts = ["PrintShop Integrated Manager (HTTPS)"]
         if self.show_mode_in_title:
-            parts.append("DevMode" if env_config.get('runtime_mode') == 'development' else "OpMode")
+            parts.append("DevMode" if env_config.get("runtime_mode") == "development" else "OpMode")
         parts.append(privilege_label)
         self.setWindowTitle(" - ".join(parts))
 
     def __init__(self):
         super().__init__()
 
-        self.show_mode_in_title = env_config.get('show_mode_in_title')
-        self.show_feature_in_title = env_config.get('show_feature_in_title')
-        privilege_label = "Administrator privileges" if env_config.get('is_admin') else "Standard privileges"
+        self.show_mode_in_title = env_config.get("show_mode_in_title")
+        self.show_feature_in_title = env_config.get("show_feature_in_title")
+        privilege_label = (
+            "Administrator privileges" if env_config.get("is_admin") else "Standard privileges"
+        )
         self.update_window_title(privilege_label)
 
         # [수정] 1. 변환된 파이썬 UI 모듈(Ui_PrintShopApp)을 메인 윈도우(self)에 먼저 적용
@@ -134,11 +146,10 @@ class PrintShopApp(QMainWindow):
             layout.addWidget(self.main_tabs)
 
         # UI 파일에 정의된 actionSetting 버튼 클릭 시 설정 다이얼로그 연결
-        if hasattr(self, 'actionSetting'):
+        if hasattr(self, "actionSetting"):
             self.actionSetting.triggered.connect(self.open_settings_dialog)
-        elif hasattr(ui_instance, 'actionSetting'):
+        elif hasattr(ui_instance, "actionSetting"):
             ui_instance.actionSetting.triggered.connect(self.open_settings_dialog)
-
 
         # # [수정] UI 파일이 만든 드롭다운 메뉴(menusetting)를 제거하고, 바로 클릭되는 단독 버튼 추가
         # menubar = self.menuBar()
@@ -155,7 +166,7 @@ class PrintShopApp(QMainWindow):
         #     menubar.addAction(self.settings_action)
 
         # 3. UI 파일 내에 정의된 main_tabs 찾기 (setupUi가 성공했으면 이미 존재함)
-        if not hasattr(self, 'main_tabs') or self.main_tabs is None:
+        if not hasattr(self, "main_tabs") or self.main_tabs is None:
             self.main_tabs = self.findChild(QTabWidget, "main_tabs")
             if self.main_tabs is None:
                 central_widget = QWidget(self)
@@ -167,21 +178,21 @@ class PrintShopApp(QMainWindow):
 
         # LinkBox 및 LinkShare 탭 등록
         self.linkbox_manager = LinkBoxManager(self)
-        self.main_tabs.addTab(self.linkbox_manager, self.linkbox_manager.title)        
+        self.main_tabs.addTab(self.linkbox_manager, self.linkbox_manager.title)
 
-        self.linkshare_manager = LinkShareManager(self)        
-        self.main_tabs.addTab(self.linkshare_manager, self.linkshare_manager.title)        
-        
+        self.linkshare_manager = LinkShareManager(self)
+        self.main_tabs.addTab(self.linkshare_manager, self.linkshare_manager.title)
+
         # 저장된 active_main_tab 값을 불러와 초기 탭으로 설정
-        if hasattr(self, 'main_tabs') and self.main_tabs.count() > 0:
-            saved_tab_index = general_config.get('active_main_tab')
+        if hasattr(self, "main_tabs") and self.main_tabs.count() > 0:
+            saved_tab_index = general_config.get("active_main_tab")
             if 0 <= saved_tab_index < self.main_tabs.count():
                 self.main_tabs.setCurrentIndex(saved_tab_index)
             else:
-                self.main_tabs.setCurrentIndex(0)            
+                self.main_tabs.setCurrentIndex(0)
 
         # 초기 탭 세팅이 모두 끝난 후에 시그널을 연결
-        self.main_tabs.currentChanged.connect(self.on_main_tab_changed)                
+        self.main_tabs.currentChanged.connect(self.on_main_tab_changed)
 
         # 윈도우 크기 및 설정 로드
         self.geo_config = PrintShopAppGeometryConfig()
@@ -199,7 +210,7 @@ class PrintShopApp(QMainWindow):
     def on_main_tab_changed(self, index):
         logd(f"[UI] Main tab changed to index: {index}")
         if index >= 0:
-            general_config.set('active_main_tab', index)
+            general_config.set("active_main_tab", index)
 
     def set_hotspot_state(self, enable: bool):
         logd(f"[Hotspot] State change requested: {enable}")
@@ -214,7 +225,7 @@ class PrintShopApp(QMainWindow):
         logd("[QR] Print Captive Portal QR dialog")
 
     def handle_linkshare_splitter_moved(self, pos, index):
-        if hasattr(self, 'linkshare_splitter_save_timer'):
+        if hasattr(self, "linkshare_splitter_save_timer"):
             self.linkshare_splitter_save_timer.start()
 
     def persist_settings(self):
@@ -246,10 +257,10 @@ class PrintShopApp(QMainWindow):
 
         # 5. 윈도우 종료 시점 자동 저장
         self.geo_config.save_window_geometry(self)
-        #self.geo_config.save_splitters_by_name(self)
+        # self.geo_config.save_splitters_by_name(self)
 
         # [추가] 앱이 종료될 때 메모리에 남아있는 세팅 다이얼로그가 있다면 완전히 닫고 해제
-        if hasattr(SettingsDialog, '_instance') and SettingsDialog._instance is not None:
+        if hasattr(SettingsDialog, "_instance") and SettingsDialog._instance is not None:
             SettingsDialog._instance.setAttribute(Qt.WA_DeleteOnClose, True)
             SettingsDialog._instance.close()
             SettingsDialog._instance = None
@@ -257,6 +268,7 @@ class PrintShopApp(QMainWindow):
         """메인 매니저 창이 닫힐 때 싱글톤 승인 다이얼로그도 함께 닫기"""
         try:
             from LinkShare.ui.internet_share_approval_dialog import InternetShareApprovalDialog
+
             # 싱글톤 인스턴스가 존재하면 닫기 및 삭제 수행
             if InternetShareApprovalDialog in InternetShareApprovalDialog._instances:
                 dialog = InternetShareApprovalDialog._instances[InternetShareApprovalDialog]
@@ -290,5 +302,3 @@ def initialize_all_configurations():
             logd(
                 f"{_config_load_count:02d} : [Config Initialized] 파일이 없어 기본값으로 생성됨 - Section: '{instance.section}' -> File: {resolved_filepath}"
             )
-
-

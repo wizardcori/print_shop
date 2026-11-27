@@ -42,6 +42,8 @@ KEY_RELEASE_DIR_NAME: str = "release_dir_name"
 KEY_INSTALL_DIR_NAME: str = "install_dir_name"
 
 KEY_APP_OVERRIDES: str = "app_overrides"
+KEY_SCANNED_LIBS: str = "scanned_libs"
+KEY_EXCLUDE_LIBS: str = "exclude_libs"
 
 KEY_TARGETS: str = "targets"
 KEY_NAME: str = "name"
@@ -76,6 +78,7 @@ __all__ = [
     "KEY_CLEAN_SPEC",
     "KEY_CLEAN_WORK_OUT",
     "KEY_DIST_DIR_NAME",
+    "KEY_EXCLUDE_LIBS",
     "KEY_EXTRA",
     "KEY_INSTALLER_ONLY",
     "KEY_INSTALL_DIR_NAME",
@@ -83,6 +86,7 @@ __all__ = [
     "KEY_NAME",
     "KEY_PROJECT_ROOT",
     "KEY_RELEASE_DIR_NAME",
+    "KEY_SCANNED_LIBS",
     "KEY_SELECTED_TARGETS",
     "KEY_SKIP_INSTALLER",
     "KEY_TARGETS",
@@ -97,6 +101,15 @@ __all__ = [
     "SECTION_ORDER_INSTALLER",
     "SECTION_ORDER_MANAGER",
 ]
+
+
+def _normalize_str_list(val: Any) -> list[str]:
+    if isinstance(val, (list, tuple, set)):
+        return sorted({str(x).strip() for x in val if str(x).strip()})
+    if isinstance(val, str) and val.strip():
+        sep = "|" if "|" in val and "," not in val else ","
+        return sorted({part.strip() for part in val.split(sep) if part.strip()})
+    return []
 
 
 class BuildManagerConfig(FileConfigManager):
@@ -244,25 +257,33 @@ class BuildManagerIniStore:
 
     def load_target_sections(self) -> dict[str, Any]:
         self.reload_all(self.ini_dir)
-        dirs = {
-            k: str(self.dirs_cfg.get(k) or "").strip()
-            for k in DIR_CONFIG_KEYS
-        }
+        dirs = {k: str(self.dirs_cfg.get(k) or "").strip() for k in DIR_CONFIG_KEYS}
         raw_apps = self.apps_cfg.get(KEY_APP_OVERRIDES)
         app_overrides: dict[str, dict[str, Any]] = {}
         if isinstance(raw_apps, dict):
             for k, v in raw_apps.items():
                 if isinstance(v, dict):
-                    app_overrides[str(k)] = dict(v)
+                    entry = dict(v)
+                    if KEY_SCANNED_LIBS in entry:
+                        scanned = _normalize_str_list(entry[KEY_SCANNED_LIBS])
+                        if scanned:
+                            entry[KEY_SCANNED_LIBS] = scanned
+                        else:
+                            entry.pop(KEY_SCANNED_LIBS, None)
+                    if KEY_EXCLUDE_LIBS in entry:
+                        excluded = _normalize_str_list(entry[KEY_EXCLUDE_LIBS])
+                        if excluded:
+                            entry[KEY_EXCLUDE_LIBS] = excluded
+                        else:
+                            entry.pop(KEY_EXCLUDE_LIBS, None)
+                    app_overrides[str(k)] = entry
 
         has_targets_key = self.installer_cfg.config.has_option(
             self.installer_cfg.section, KEY_TARGETS
         )
         raw_targets = self.installer_cfg.get(KEY_TARGETS)
         if isinstance(raw_targets, list):
-            inst_targets: list[str] | None = [
-                str(x).strip() for x in raw_targets if str(x).strip()
-            ]
+            inst_targets: list[str] | None = [str(x).strip() for x in raw_targets if str(x).strip()]
         elif has_targets_key:
             inst_targets = []
         else:
@@ -302,11 +323,25 @@ class BuildManagerIniStore:
             self.dirs_cfg.save()
 
         if app_overrides is not None:
-            cleaned_apps = {
-                str(k): dict(v)
-                for k, v in app_overrides.items()
-                if isinstance(v, dict) and v
-            }
+            cleaned_apps: dict[str, dict[str, Any]] = {}
+            for k, v in app_overrides.items():
+                if not isinstance(v, dict) or not v:
+                    continue
+                entry = dict(v)
+                if KEY_SCANNED_LIBS in entry:
+                    scanned = _normalize_str_list(entry[KEY_SCANNED_LIBS])
+                    if scanned:
+                        entry[KEY_SCANNED_LIBS] = scanned
+                    else:
+                        entry.pop(KEY_SCANNED_LIBS, None)
+                if KEY_EXCLUDE_LIBS in entry:
+                    excluded = _normalize_str_list(entry[KEY_EXCLUDE_LIBS])
+                    if excluded:
+                        entry[KEY_EXCLUDE_LIBS] = excluded
+                    else:
+                        entry.pop(KEY_EXCLUDE_LIBS, None)
+                if entry:
+                    cleaned_apps[str(k)] = entry
             self.apps_cfg.set(KEY_APP_OVERRIDES, cleaned_apps)
             self.apps_cfg.save()
 
@@ -314,9 +349,11 @@ class BuildManagerIniStore:
             targets = installer_values.get(KEY_TARGETS)
             self.installer_cfg.set(
                 KEY_TARGETS,
-                [str(x).strip() for x in targets if str(x).strip()]
-                if isinstance(targets, (list, tuple))
-                else [],
+                (
+                    [str(x).strip() for x in targets if str(x).strip()]
+                    if isinstance(targets, (list, tuple))
+                    else []
+                ),
             )
             self.installer_cfg.set(KEY_NAME, str(installer_values.get(KEY_NAME) or "").strip())
             self.installer_cfg.set(

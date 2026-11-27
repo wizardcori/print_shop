@@ -49,6 +49,7 @@ class BuildAppTabGroupBox(QGroupBox):
 
     target_selection_changed = Signal(str, bool)  # (target_key, checked)
     target_bump_changed = Signal(str, bool)       # (target_key, checked)
+    prev_log_emitted = Signal(str, str)           # (target_key, log_message)
 
     def __init__(self, title: str = DEFAULT_TAB_GROUP_TITLE, parent: QWidget | None = None):
         super().__init__(title, parent)
@@ -125,6 +126,39 @@ class BuildAppTabGroupBox(QGroupBox):
         )
         layout.addWidget(self.tab_widget)
 
+    def _apply_card_meta(
+        self,
+        card: AppTargetCardWidget,
+        key: str,
+        target_name: str,
+        label_text: str,
+        display_name: str,
+        loc_path: Any,
+        bump_checked: bool,
+        prev_meta: Any,
+        is_installer: bool,
+    ) -> None:
+        card.label_text = label_text
+        card.display_name = display_name
+        card.checkbox.setToolTip(f"{label_text} 빌드 대상 선택")
+        card.btn_open_prev_dir.setText(label_text)
+
+        if is_installer:
+            card.chk_bump.setVisible(False)
+            card.prev_box.setTitle("인스톨러 대상")
+            card.next_box.setTitle("인스톨러 산출물")
+            card.prev_box.clear_info(label_text)
+        else:
+            card.chk_bump.setVisible(True)
+            card.set_bump_checked(bump_checked, block_signals=True)
+
+        loc_str = str(loc_path).strip() if loc_path else ""
+        card.set_location_tooltip(loc_str or None)
+        card.setProperty(PROP_LOCATION_PATH, loc_str)
+
+        if not is_installer and (isinstance(prev_meta, dict) or prev_meta is None):
+            card.set_prev_meta(prev_meta)
+
     def sync_selected_targets(
         self,
         ordered_selected_keys: list[str],
@@ -172,14 +206,8 @@ class BuildAppTabGroupBox(QGroupBox):
                 )
                 card.checkbox.setChecked(True)
                 if is_installer:
-                    card.chk_bump.setVisible(False)
-                    card.prev_box.setTitle("인스톨러 대상")
                     card.next_box.setTitle("인스톨러 산출물")
-                    card.prev_box.clear_info(label_text)
                     card.next_box.clear_info(LABEL_WAITING_DEFAULT)
-                else:
-                    card.chk_bump.setVisible(True)
-                    card.set_bump_checked(bump_checked, block_signals=True)
 
                 card.checkbox.stateChanged.connect(
                     lambda state, k=key: self.target_selection_changed.emit(
@@ -192,33 +220,37 @@ class BuildAppTabGroupBox(QGroupBox):
                     )
                 )
                 card.open_location_requested.connect(self._on_open_location)
+                card.prev_log_emitted.connect(self.prev_log_emitted.emit)
+                self._apply_card_meta(
+                    card=card,
+                    key=key,
+                    target_name=target_name,
+                    label_text=label_text,
+                    display_name=display_name,
+                    loc_path=loc_path,
+                    bump_checked=bump_checked,
+                    prev_meta=prev_meta,
+                    is_installer=is_installer,
+                )
                 self._cards_by_key[key] = card
                 self.tab_widget.insertTab(target_pos, card, display_name)
             else:
-                card.label_text = label_text
-                card.display_name = display_name
-                card.checkbox.setText(label_text)
-                card.btn_open_loc.setText(display_name)
-                if is_installer:
-                    card.chk_bump.setVisible(False)
-                    card.prev_box.setTitle("인스톨러 대상")
-                    card.next_box.setTitle("인스톨러 산출물")
-                    card.prev_box.clear_info(label_text)
-                else:
-                    card.chk_bump.setVisible(True)
-                    card.set_bump_checked(bump_checked, block_signals=True)
-
+                self._apply_card_meta(
+                    card=card,
+                    key=key,
+                    target_name=target_name,
+                    label_text=label_text,
+                    display_name=display_name,
+                    loc_path=loc_path,
+                    bump_checked=bump_checked,
+                    prev_meta=prev_meta,
+                    is_installer=is_installer,
+                )
                 cur_idx = self.tab_widget.indexOf(card)
                 if cur_idx >= 0:
                     self.tab_widget.setTabText(cur_idx, display_name)
                     if cur_idx != target_pos:
                         self.tab_widget.tabBar().moveTab(cur_idx, target_pos)
-
-            card.set_location_tooltip(str(loc_path) if loc_path else None)
-            card.setProperty(PROP_LOCATION_PATH, str(loc_path) if loc_path else "")
-
-            if not is_installer and (isinstance(prev_meta, dict) or prev_meta is None):
-                card.set_prev_meta(prev_meta)
 
         self._ordered_keys = list(desired_keys)
 
@@ -343,5 +375,10 @@ class BuildAppTabGroupBox(QGroupBox):
             return
         p = Path(raw_path)
         target_dir = p.parent if p.is_file() else p
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            self.prev_log_emitted.emit(key, f"[{key}] 폴더 생성 실패({target_dir}): {exc}")
+            return
         if target_dir.exists():
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(target_dir)))

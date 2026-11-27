@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import re
 from pathlib import Path
+import re
 from typing import Any
 
 from PySide6.QtCore import Qt, Signal
@@ -10,6 +10,8 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFormLayout,
+    QFrame,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -22,7 +24,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from BuildManagerApp.build_manager_config import BUILD_MANAGER_INI_NAME, BuildManagerIniStore
+from BuildManagerApp.build_manager_config import (
+    BUILD_MANAGER_INI_NAME,
+    BuildManagerIniStore,
+    KEY_EXCLUDE_LIBS,
+    KEY_SCANNED_LIBS,
+)
+from Common.prio_worker_queue import TaskListenerBase, TaskManager, TaskPriority
+from Common.python_app_library_scan import AppLibraryScanner
 from build_script.target_config import (
     APP_OVERRIDE_FIELDS,
     TargetConfig,
@@ -37,6 +46,7 @@ WINDOW_DEFAULT_WIDTH: int = 760
 WINDOW_DEFAULT_HEIGHT: int = 680
 
 SRC_DIR_NAME: str = "src"
+ENTRY_FILE_NAME: str = "main_app.py"
 VERSION_FILE_NAME: str = "version.txt"
 VERSION_FILE_ENCODING: str = "utf-8-sig"
 LEGACY_SETUP_NAME: str = "PrintShopSetup"
@@ -70,6 +80,8 @@ CLEAN_OPTION_FIELDS: tuple[str, ...] = (
 )
 
 TEST_OPTION_FIELD: str = "run_test"
+EXCLUDE_LIBS_FIELD: str = KEY_EXCLUDE_LIBS
+SCANNED_LIBS_FIELD: str = KEY_SCANNED_LIBS
 
 LIST_FIELDS: tuple[str, ...] = (
     "dir_hints",
@@ -132,6 +144,19 @@ def _compute_next_version_str(current_ver: str | None, bump_unit: str | None) ->
     return None
 
 
+class _AppScanQueueListener(TaskListenerBase):
+    """BuildTargetConfigTab의 앱별 라이브러리 지연 스캔 결과를 수신하는 리스너."""
+
+    def __init__(self, tab_widget: "BuildTargetConfigTab") -> None:
+        super().__init__(owner_widget=tab_widget)
+        self._tab = tab_widget
+
+    def on_task_finished(self, task_key: str, task_name: str, status: str, data: Any) -> None:
+        if not self.is_owner_alive():
+            return
+        self._tab._handle_queued_scan_finished(task_key, status, data)
+
+
 class BuildTargetConfigTab(QWidget):
     config_changed = Signal(dict)
     paths_changed = Signal(Path, Path)  # (project_root, ini_path)
@@ -164,6 +189,7 @@ class BuildTargetConfigTab(QWidget):
         self.general_tab: Any | None = general_tab
         self._ini_store = BuildManagerIniStore(self.config_path.parent)
 
+        # _app_overrides 단일 원본
         self._app_overrides: dict[str, dict[str, Any]] = {}
         self._app_bump_units: dict[str, str | None] = {}
         self._app_clean_options: dict[str, dict[str, bool]] = {}
@@ -174,6 +200,23 @@ class BuildTargetConfigTab(QWidget):
         self._app_spec_labels: dict[str, QLabel] = {}
         self._app_tab_index_to_key: dict[int, str] = {}
         self._app_key_to_tab_index: dict[str, int] = {}
+
+        # 개별 앱 탭별 exclude 헤더 체크박스/컨테이너 및 라이브러리 체크박스 상태
+        self._app_exclude_groups: dict[str, QWidget] = {}
+        self._app_exclude_enable_checks: dict[str, QCheckBox] = {}
+        self._app_exclude_body_containers: dict[str, QWidget] = {}
+        self._app_exclude_layouts: dict[str, QGridLayout] = {}
+        self._app_exclude_all_checkboxes: dict[str, QCheckBox] = {}
+        self._app_exclude_checkboxes: dict[str, dict[str, QCheckBox]] = {}
+        self._app_scanned_libs: dict[str, list[str]] = {}
+        self._app_checked_exclude_libs: dict[str, set[str]] = {}
+
+        # prio_worker_queue 지연 스캔 상태 관리
+        self._scan_listener = _AppScanQueueListener(self)
+        self._app_scan_in_progress: set[str] = set()
+        self._scan_task_to_app: dict[str, str] = {}
+        self.destroyed.connect(lambda *_: TaskManager().on_window_closing(self._scan_listener))
+
         self._installer_tab_widget: QWidget | None = None
         self._installer_tab_index: int = -1
         self._installer_inputs: dict[str, Any] = {}
@@ -207,7 +250,19 @@ class BuildTargetConfigTab(QWidget):
         self._allow_close = True
         self.close()
 
+    def showEvent(self, event: Any) -> None:
+        super().showEvent(event)
+        active_idx = self.sub_tabs.currentIndex()
+        active_key = self._app_tab_index_to_key.get(active_idx)
+        if active_key and not self._has_saved_exclude_data(active_key):
+            self.request_lazy_app_scan(active_key, priority=TaskPriority.LOW, show_warning=False)
+
     def closeEvent(self, event: QCloseEvent) -> None:
+        self._stage_all_tabs_state()
+        TaskManager().on_window_closing(
+            self._scan_listener,
+            reason="BuildTarget 설정 창 종료로 앱 스캔이 취소되었습니다.",
+        )
         if self._allow_close or not self.isWindow():
             super().closeEvent(event)
             return
@@ -312,7 +367,9 @@ class BuildTargetConfigTab(QWidget):
         auto_name = f"{first_key}{SETUP_NAME_SUFFIX}" if first_key else ""
 
         spec_id = getattr(spec, "id", None) if spec else None
-        auto_ver_src = str(spec_id).strip() if spec_id is not None and str(spec_id).strip() else first_key
+        auto_ver_src = (
+            str(spec_id).strip() if spec_id is not None and str(spec_id).strip() else first_key
+        )
         return auto_name, auto_ver_src
 
     def _sync_installer_modes_when_empty(self) -> None:
@@ -353,7 +410,12 @@ class BuildTargetConfigTab(QWidget):
         edit_ver_src: QLineEdit = self._installer_inputs["version_source_id"]
 
         cur_name = edit_name.text().strip()
-        if force or not cur_name or cur_name == self._auto_generated_name or cur_name == LEGACY_SETUP_NAME:
+        if (
+            force
+            or not cur_name
+            or cur_name == self._auto_generated_name
+            or cur_name == LEGACY_SETUP_NAME
+        ):
             edit_name.setText(auto_name)
         self._auto_generated_name = auto_name
 
@@ -403,7 +465,9 @@ class BuildTargetConfigTab(QWidget):
         if self._installer_all_checkbox is None:
             return
         total = len(self._installer_target_checkboxes)
-        checked_cnt = sum(1 for chk in self._installer_target_checkboxes.values() if chk.isChecked())
+        checked_cnt = sum(
+            1 for chk in self._installer_target_checkboxes.values() if chk.isChecked()
+        )
         self._installer_all_checkbox.blockSignals(True)
         self._installer_all_checkbox.setChecked(total > 0 and checked_cnt == total)
         self._installer_all_checkbox.blockSignals(False)
@@ -465,7 +529,9 @@ class BuildTargetConfigTab(QWidget):
             auto_name if (not raw_cfg_name or raw_cfg_name == LEGACY_SETUP_NAME) else raw_cfg_name
         )
         self._installer_inputs["name"].setText(resolved_name)
-        self._installer_inputs["version_source_id"].setText(str(cfg.version_source_id or auto_ver_src))
+        self._installer_inputs["version_source_id"].setText(
+            str(cfg.version_source_id or auto_ver_src)
+        )
         if not selected_ordered:
             self._installer_inputs["installer_only"].setChecked(False)
             self._installer_inputs["skip_installer"].setChecked(False)
@@ -530,6 +596,55 @@ class BuildTargetConfigTab(QWidget):
                 updated[key] = bool(getattr(spec, TEST_OPTION_FIELD, False)) if spec else False
         self._app_test_options = updated
 
+    @staticmethod
+    def _extract_str_list(raw_val: Any) -> list[str]:
+        if isinstance(raw_val, (list, tuple, set)):
+            return sorted({str(x).strip() for x in raw_val if str(x).strip()})
+        if isinstance(raw_val, str) and raw_val.strip():
+            return sorted(set(_split_list_field(raw_val)))
+        return []
+
+    def _get_saved_scanned_libs(self, target_key: str) -> list[str]:
+        ov = self._app_overrides.get(target_key, {})
+        return self._extract_str_list(ov.get(SCANNED_LIBS_FIELD))
+
+    def _get_saved_exclude_libs(self, target_key: str) -> list[str]:
+        ov = self._app_overrides.get(target_key, {})
+        return self._extract_str_list(ov.get(EXCLUDE_LIBS_FIELD))
+
+    def _has_saved_exclude_data(self, target_key: str) -> bool:
+        return bool(
+            self._get_saved_scanned_libs(target_key)
+            or self._get_saved_exclude_libs(target_key)
+            or self._app_scanned_libs.get(target_key)
+            or self._app_checked_exclude_libs.get(target_key)
+        )
+
+    def _sync_exclude_libs_from_overrides(self) -> None:
+        for key in TargetConfig.ordered_keys():
+            saved_scanned = self._get_saved_scanned_libs(key)
+            saved_excluded = self._get_saved_exclude_libs(key)
+            checked_set = set(saved_excluded)
+            self._app_checked_exclude_libs[key] = checked_set
+
+            merged_libs = sorted(
+                set(saved_scanned) | set(self._app_scanned_libs.get(key, [])) | checked_set
+            )
+            if merged_libs:
+                self._app_scanned_libs[key] = merged_libs
+
+            has_saved_data = bool(merged_libs or checked_set)
+            has_checked = len(checked_set) > 0
+            if key in self._app_exclude_enable_checks:
+                chk = self._app_exclude_enable_checks[key]
+                chk.blockSignals(True)
+                chk.setChecked(has_checked)
+                chk.blockSignals(False)
+                self._refresh_exclude_header_state(key, has_checked)
+
+            if has_saved_data and key in self._app_exclude_layouts:
+                self._populate_exclude_checkboxes(key, merged_libs)
+
     def set_app_bump_units(self, bump_units: dict[str, Any] | None) -> None:
         src = bump_units or {}
         for key in TargetConfig.ordered_keys():
@@ -551,9 +666,7 @@ class BuildTargetConfigTab(QWidget):
         src = clean_options or {}
         for key in TargetConfig.ordered_keys():
             current = dict(
-                self._app_clean_options.get(
-                    key, {field: False for field in CLEAN_OPTION_FIELDS}
-                )
+                self._app_clean_options.get(key, {field: False for field in CLEAN_OPTION_FIELDS})
             )
             incoming = src.get(key)
             if isinstance(incoming, dict):
@@ -567,9 +680,7 @@ class BuildTargetConfigTab(QWidget):
         result: dict[str, dict[str, bool]] = {}
         for key in TargetConfig.ordered_keys():
             current = self._app_clean_options.get(key, {})
-            result[key] = {
-                field: bool(current.get(field, False)) for field in CLEAN_OPTION_FIELDS
-            }
+            result[key] = {field: bool(current.get(field, False)) for field in CLEAN_OPTION_FIELDS}
         return result
 
     def set_app_test_options(self, test_options: dict[str, Any] | None) -> None:
@@ -583,9 +694,428 @@ class BuildTargetConfigTab(QWidget):
 
     def get_app_test_options(self) -> dict[str, bool]:
         return {
-            key: bool(self._app_test_options.get(key, False))
-            for key in TargetConfig.ordered_keys()
+            key: bool(self._app_test_options.get(key, False)) for key in TargetConfig.ordered_keys()
         }
+
+    # ------------------------------------------------------------------
+    # 개별 앱 탭 exclude 영역, prio_worker_queue 지연 스캔 및 체크박스 관리
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _format_exclude_header_text(checked: bool) -> str:
+        state_str = "ENABLE" if checked else "DISABLE"
+        return f"exclude [{state_str}]"
+
+    def _refresh_exclude_header_state(self, target_key: str, checked: bool) -> None:
+        chk = self._app_exclude_enable_checks.get(target_key)
+        if chk is not None:
+            chk.setText(self._format_exclude_header_text(checked))
+        body = self._app_exclude_body_containers.get(target_key)
+        if body is not None:
+            body.setEnabled(checked)
+
+    def _resolve_source_root(self) -> Path:
+        src_dir = self.project_root / SRC_DIR_NAME
+        return src_dir.resolve() if src_dir.is_dir() else self.project_root
+
+    def _resolve_app_entry_point(self, target_key: str) -> Path | None:
+        spec = TargetConfig.get_spec(target_key)
+        ov = self._app_overrides.get(target_key, {})
+        src_root = self._resolve_source_root()
+
+        candidates: list[Path] = []
+        raw_entry = ov.get("entry_file")
+        if raw_entry:
+            p = Path(str(raw_entry))
+            candidates.append(p if p.is_absolute() else (self.project_root / p))
+
+        raw_hints = ov.get("entry_hints")
+        if not raw_hints and spec:
+            raw_hints = getattr(spec, "entry_hints", None)
+
+        if isinstance(raw_hints, (list, tuple)):
+            for hint in raw_hints:
+                if hint:
+                    p = Path(str(hint))
+                    candidates.append(p if p.is_absolute() else (self.project_root / p))
+        elif isinstance(raw_hints, str) and raw_hints.strip():
+            for hint in _split_list_field(raw_hints):
+                p = Path(hint)
+                candidates.append(p if p.is_absolute() else (self.project_root / p))
+
+        dir_hints: list[str] = []
+        raw_dirs = ov.get("dir_hints")
+        if isinstance(raw_dirs, (list, tuple)):
+            dir_hints.extend(str(d).strip() for d in raw_dirs if str(d).strip())
+        elif isinstance(raw_dirs, str) and raw_dirs.strip():
+            dir_hints.extend(_split_list_field(raw_dirs))
+        elif spec and getattr(spec, "dir_hints", None):
+            dir_hints.extend(str(d).strip() for d in spec.dir_hints if str(d).strip())
+
+        for d_name in dir_hints:
+            candidates.append(src_root / d_name / ENTRY_FILE_NAME)
+            candidates.append(self.project_root / d_name / ENTRY_FILE_NAME)
+
+        candidates.extend(
+            [
+                src_root / target_key / ENTRY_FILE_NAME,
+                self.project_root / target_key / ENTRY_FILE_NAME,
+                src_root / ENTRY_FILE_NAME,
+            ]
+        )
+
+        seen: set[Path] = set()
+        for cand in candidates:
+            resolved = cand.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            if resolved.is_file():
+                return resolved
+        return None
+
+    def _run_scanner_for_app(self, target_key: str, *, only_used: bool = True) -> list[str]:
+        entry_point = self._resolve_app_entry_point(target_key)
+        if entry_point is None:
+            return []
+
+        src_root = self._resolve_source_root()
+        scanner = AppLibraryScanner.create(
+            app_name=target_key,
+            source_root=src_root,
+            entry_point=entry_point,
+            only_used=only_used,
+        )
+        entries = scanner.get_library_by_appname(target_key)
+        return sorted(
+            {
+                entry.get_library_name().strip()
+                for entry in entries
+                if entry.get_library_name().strip()
+            }
+        )
+
+    def _fetch_scanner_libraries(self, target_key: str, *, auto_scan: bool = False) -> list[str]:
+        try:
+            scanner = AppLibraryScanner(source_root=self._resolve_source_root())
+            entries = scanner.get_library_by_appname(target_key)
+            libs = sorted(
+                {
+                    entry.get_library_name().strip()
+                    for entry in entries
+                    if entry.get_library_name().strip()
+                }
+            )
+            if libs or not auto_scan:
+                return libs
+            return self._run_scanner_for_app(target_key)
+        except Exception:
+            return []
+
+    def _build_scan_task_key(self, target_key: str) -> str:
+        return f"app_lib_scan::{id(self)}::{target_key}"
+
+    @staticmethod
+    def _run_scanner_job_in_worker(
+        target_key: str,
+        entry_point_str: str,
+        source_root_str: str,
+        only_used: bool,
+        progress_cb: Any = None,
+        cancel_event: Any = None,
+        cancel_token: Any = None,
+    ) -> list[str]:
+        """prio_worker_queue 워커 스레드에서 실행되는 앱별 라이브러리 스캔 작업."""
+        if cancel_event is not None and cancel_event.is_set():
+            raise InterruptedError("앱 라이브러리 스캔이 취소되었습니다.")
+        if callable(progress_cb):
+            progress_cb(20, f"{target_key} 스캔 준비 중")
+
+        scanner = AppLibraryScanner.create(
+            app_name=target_key,
+            source_root=source_root_str,
+            entry_point=entry_point_str,
+            only_used=only_used,
+        )
+
+        if cancel_event is not None and cancel_event.is_set():
+            raise InterruptedError("앱 라이브러리 스캔이 취소되었습니다.")
+        if callable(progress_cb):
+            progress_cb(85, f"{target_key} 라이브러리 목록 정리 중")
+
+        entries = scanner.get_library_by_appname(target_key)
+        libs = sorted(
+            {
+                entry.get_library_name().strip()
+                for entry in entries
+                if entry.get_library_name().strip()
+            }
+        )
+        if callable(progress_cb):
+            progress_cb(100, f"{target_key} 스캔 완료")
+        return libs
+
+    def request_lazy_app_scan(
+        self,
+        target_key: str,
+        *,
+        only_used: bool = True,
+        columns: int = 3,
+        force: bool = False,
+        priority: int = TaskPriority.LOW,
+        show_warning: bool = False,
+    ) -> bool:
+        """
+        Config 탭에서 해당 앱에 저장된 exclude/scan 목록이 없을 때만 스캔을 실행합니다.
+        저장된 목록이 있으면 자동 스캔을 하지 않고 저장된 목록만 표시합니다.
+        """
+        if not target_key:
+            return False
+
+        saved_scanned = self._get_saved_scanned_libs(target_key)
+        saved_excluded = self._get_saved_exclude_libs(target_key)
+        saved_checked = set(saved_excluded) | set(
+            self._app_checked_exclude_libs.get(target_key, set())
+        )
+        if saved_checked:
+            self._app_checked_exclude_libs[target_key] = saved_checked
+
+        cached_libs = list(self._app_scanned_libs.get(target_key) or [])
+        known_libs = sorted(set(saved_scanned) | set(cached_libs) | saved_checked)
+
+        if not force and (saved_scanned or saved_excluded or cached_libs):
+            self._app_scanned_libs[target_key] = known_libs
+            self._populate_exclude_checkboxes(target_key, known_libs, columns=columns)
+            return False
+
+        if target_key in self._app_scan_in_progress:
+            return False
+
+        entry_point = self._resolve_app_entry_point(target_key)
+        if entry_point is None:
+            self.on_app_scan_finished(target_key, list(saved_checked), columns=columns)
+            if show_warning:
+                QMessageBox.warning(
+                    self,
+                    "진입점 없음",
+                    f"'{target_key}' 앱의 진입점 파일({ENTRY_FILE_NAME})을 찾을 수 없습니다.",
+                )
+            return False
+
+        src_root = self._resolve_source_root()
+        task_key = self._build_scan_task_key(target_key)
+        self._app_scan_in_progress.add(target_key)
+        self._scan_task_to_app[task_key] = target_key
+
+        try:
+            TaskManager().submit(
+                self._scan_listener,
+                priority,
+                task_key,
+                f"앱 라이브러리 스캔 ({target_key})",
+                self._run_scanner_job_in_worker,
+                target_key,
+                str(entry_point),
+                str(src_root),
+                only_used,
+                cancel_on_close=True,
+            )
+            return True
+        except Exception:
+            self._app_scan_in_progress.discard(target_key)
+            self._scan_task_to_app.pop(task_key, None)
+            libs = self._run_scanner_for_app(target_key, only_used=only_used)
+            self.on_app_scan_finished(target_key, libs, columns=columns)
+            return False
+
+    def _handle_queued_scan_finished(self, task_key: str, status: str, data: Any) -> None:
+        target_key = self._scan_task_to_app.pop(task_key, None)
+        if not target_key and "::" in task_key:
+            target_key = task_key.split("::", 2)[-1]
+        if not target_key:
+            return
+
+        self._app_scan_in_progress.discard(target_key)
+        if status == "SUCCESS" and isinstance(data, list):
+            libs = sorted({str(x).strip() for x in data if str(x).strip()})
+            self.on_app_scan_finished(target_key, libs)
+
+    def scan_app_libraries(
+        self,
+        target_key: str,
+        *,
+        only_used: bool = True,
+        columns: int = 3,
+        show_warning: bool = True,
+    ) -> list[str]:
+        """RESCAN 버튼이나 명시적 호출 시 우선순위를 높여 스캔 큐에 제출합니다."""
+        submitted = self.request_lazy_app_scan(
+            target_key,
+            only_used=only_used,
+            columns=columns,
+            force=True,
+            priority=TaskPriority.NORMAL,
+            show_warning=show_warning,
+        )
+        if not submitted and target_key in self._app_scanned_libs:
+            return list(self._app_scanned_libs[target_key])
+        return list(self._app_scanned_libs.get(target_key, []))
+
+    def is_exclude_enabled(self, target_key: str) -> bool:
+        """상단 exclude 체크박스 체크 여부(exclude 기능 사용 여부)."""
+        chk = self._app_exclude_enable_checks.get(target_key)
+        return bool(chk.isChecked()) if chk is not None else False
+
+    def _clear_exclude_checkboxes(self, target_key: str, *, keep_checked: bool = True) -> None:
+        if keep_checked:
+            prev = self._get_checked_names_from_widgets(target_key)
+            if prev:
+                self._app_checked_exclude_libs[target_key] = set(prev)
+
+        grid = self._app_exclude_layouts.get(target_key)
+        chk_map = self._app_exclude_checkboxes.get(target_key)
+        if grid is not None:
+            while grid.count():
+                item = grid.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
+        self._app_exclude_all_checkboxes.pop(target_key, None)
+        if chk_map is not None:
+            chk_map.clear()
+
+    def _get_checked_names_from_widgets(self, target_key: str) -> set[str]:
+        chk_map = self._app_exclude_checkboxes.get(target_key) or {}
+        return {name for name, chk in chk_map.items() if chk.isChecked()}
+
+    def _sync_exclude_all_checkbox(self, target_key: str) -> None:
+        chk_all = self._app_exclude_all_checkboxes.get(target_key)
+        chk_map = self._app_exclude_checkboxes.get(target_key) or {}
+        if chk_all is None:
+            return
+        total = len(chk_map)
+        checked_cnt = sum(1 for chk in chk_map.values() if chk.isChecked())
+        chk_all.blockSignals(True)
+        chk_all.setChecked(total > 0 and checked_cnt == total)
+        chk_all.blockSignals(False)
+
+    def _on_exclude_all_toggled(self, target_key: str, checked: bool) -> None:
+        chk_map = self._app_exclude_checkboxes.get(target_key) or {}
+        for chk in chk_map.values():
+            chk.blockSignals(True)
+            chk.setChecked(checked)
+            chk.blockSignals(False)
+        if checked:
+            self._app_checked_exclude_libs[target_key] = set(chk_map.keys())
+        else:
+            self._app_checked_exclude_libs[target_key] = set()
+        self._sync_exclude_all_checkbox(target_key)
+
+    def _populate_exclude_checkboxes(
+        self,
+        target_key: str,
+        lib_names: list[str],
+        *,
+        columns: int = 3,
+    ) -> None:
+        """하단 exclude 영역 제일 앞에 All 체크박스를 두고 스캔된 라이브러리 체크박스들을 채웁니다."""
+        checked_set = set(self._app_checked_exclude_libs.get(target_key, set()))
+        self._clear_exclude_checkboxes(target_key, keep_checked=False)
+
+        parent_widget = self._app_exclude_body_containers.get(target_key)
+        grid = self._app_exclude_layouts.get(target_key)
+        chk_map = self._app_exclude_checkboxes.get(target_key)
+        if parent_widget is None or grid is None or chk_map is None:
+            return
+
+        cols = max(1, int(columns))
+
+        chk_all = QCheckBox("All", parent_widget)
+        chk_all.setToolTip("제외 라이브러리 전체 선택 / 해제")
+        chk_all.toggled.connect(
+            lambda checked, k=target_key: self._on_exclude_all_toggled(k, checked)
+        )
+        grid.addWidget(chk_all, 0, 0)
+        self._app_exclude_all_checkboxes[target_key] = chk_all
+
+        ordered_names = sorted({str(x).strip() for x in lib_names if str(x).strip()})
+        for idx, lib_name in enumerate(ordered_names, start=1):
+            chk = QCheckBox(lib_name, parent_widget)
+            chk.setChecked(lib_name in checked_set)
+            chk.stateChanged.connect(
+                lambda _state, k=target_key, name=lib_name: self._on_exclude_lib_toggled(k, name)
+            )
+            row, col = divmod(idx, cols)
+            grid.addWidget(chk, row, col)
+            chk_map[lib_name] = chk
+
+        self._sync_exclude_all_checkbox(target_key)
+
+    def _on_exclude_lib_toggled(self, target_key: str, lib_name: str) -> None:
+        chk_map = self._app_exclude_checkboxes.get(target_key) or {}
+        chk = chk_map.get(lib_name)
+        if chk is None:
+            return
+        bucket = self._app_checked_exclude_libs.setdefault(target_key, set())
+        if chk.isChecked():
+            bucket.add(lib_name)
+        else:
+            bucket.discard(lib_name)
+        self._sync_exclude_all_checkbox(target_key)
+
+    def on_app_scan_finished(
+        self,
+        target_key: str,
+        libraries: list[str] | None = None,
+        *,
+        columns: int = 3,
+    ) -> None:
+        """해당 앱(target_key)의 scan 완료 시 호출. 하단 exclude 영역에 라이브러리 체크박스를 채웁니다."""
+        if libraries is not None:
+            scanned = {str(x).strip() for x in libraries if str(x).strip()}
+        else:
+            scanned = set(self._fetch_scanner_libraries(target_key, auto_scan=False))
+
+        saved_checked = set(self._app_checked_exclude_libs.get(target_key, set()))
+        lib_names = sorted(scanned | saved_checked)
+
+        self._app_scanned_libs[target_key] = lib_names
+        bucket = dict(self._app_overrides.get(target_key, {}))
+        if lib_names:
+            bucket[SCANNED_LIBS_FIELD] = lib_names
+            self._app_overrides[target_key] = bucket
+
+        if target_key in self._app_exclude_layouts:
+            self._populate_exclude_checkboxes(target_key, lib_names, columns=columns)
+
+    def _on_exclude_group_toggled(self, target_key: str, checked: bool) -> None:
+        """상단 exclude 체크박스는 ENABLE/DISABLE 표시 및 exclude 기능 사용 여부만 결정."""
+        self._refresh_exclude_header_state(target_key, checked)
+        if not checked:
+            self._app_checked_exclude_libs[target_key] = self._get_checked_names_from_widgets(
+                target_key
+            )
+            return
+
+        libs = self._app_scanned_libs.get(target_key) or self._get_saved_scanned_libs(target_key)
+        if libs:
+            self._app_scanned_libs[target_key] = libs
+            self._populate_exclude_checkboxes(target_key, libs)
+        elif not self._has_saved_exclude_data(target_key):
+            self.request_lazy_app_scan(
+                target_key,
+                force=True,
+                priority=TaskPriority.LOW,
+                show_warning=False,
+            )
+
+    def get_excluded_libraries(self, target_key: str) -> list[str]:
+        """상단 exclude 체크박스가 켜져 있을 때만 선택된 제외 라이브러리 목록을 반환."""
+        if not self.is_exclude_enabled(target_key):
+            return []
+        chk_map = self._app_exclude_checkboxes.get(target_key) or {}
+        if chk_map:
+            return sorted([name for name, chk in chk_map.items() if chk.isChecked()])
+        return sorted(self._app_checked_exclude_libs.get(target_key, set()))
 
     def load_from_ini(
         self,
@@ -613,13 +1143,29 @@ class BuildTargetConfigTab(QWidget):
             if self.general_tab is not None:
                 self.general_tab.set_dir_values(dcfg)
 
-            self._app_overrides = TargetConfig.get_app_overrides()
+            merged_apps: dict[str, dict[str, Any]] = {
+                k: dict(v) for k, v in TargetConfig.get_app_overrides().items()
+            }
+            if isinstance(app_ov, dict):
+                for k, raw_ov in app_ov.items():
+                    if isinstance(raw_ov, dict):
+                        bucket = dict(merged_apps.get(k, {}))
+                        for extra_key in (SCANNED_LIBS_FIELD, EXCLUDE_LIBS_FIELD):
+                            if extra_key in raw_ov:
+                                bucket[extra_key] = list(raw_ov[extra_key])
+                        merged_apps[k] = bucket
+
+            self._app_overrides = merged_apps
             self._sync_bump_units_from_overrides()
             self._sync_clean_options_from_overrides()
             self._sync_test_options_from_overrides()
 
             self._installer_config = InstallerBuildConfig(
-                targets=normalize_target_id_list(inst_dict.get("targets")) if inst_dict.get("targets") else None,
+                targets=(
+                    normalize_target_id_list(inst_dict.get("targets"))
+                    if inst_dict.get("targets")
+                    else None
+                ),
                 installer_only=bool(inst_dict.get("installer_only", False)),
                 skip_installer=bool(inst_dict.get("skip_installer", False)),
                 name=inst_dict.get("name"),
@@ -628,6 +1174,7 @@ class BuildTargetConfigTab(QWidget):
             )
 
             self._rebuild_app_tabs()
+            self._sync_exclude_libs_from_overrides()
             self._load_installer_form(self._installer_config)
             for key in TargetConfig.ordered_keys():
                 self._load_app_form(key)
@@ -682,7 +1229,9 @@ class BuildTargetConfigTab(QWidget):
             return None
 
     # 하위 호환 별칭
-    def load_from_json(self, json_path: str | Path | None = None, *, show_error: bool = True) -> bool:
+    def load_from_json(
+        self, json_path: str | Path | None = None, *, show_error: bool = True
+    ) -> bool:
         return self.load_from_ini(json_path, show_error=show_error)
 
     def save_to_json(
@@ -712,7 +1261,9 @@ class BuildTargetConfigTab(QWidget):
         self.btn_apply_all.clicked.connect(self._on_apply_all_tabs)
 
         self.btn_reload = QPushButton("다시 불러오기")
-        self.btn_reload.clicked.connect(lambda: self.load_from_ini(self.config_path, show_error=True))
+        self.btn_reload.clicked.connect(
+            lambda: self.load_from_ini(self.config_path, show_error=True)
+        )
 
         self.btn_reset_all = QPushButton("전체 기본값 복원")
         self.btn_reset_all.clicked.connect(self.reset_all_defaults)
@@ -872,6 +1423,73 @@ class BuildTargetConfigTab(QWidget):
         app_form.addRow("Spec 힌트 (spec_hints)", edit_spec_hints)
         app_form.addRow("Entry 경로 (entry_hints)", edit_entry_hints)
         app_form.addRow("버전 경로 목록 (version_rel_paths)", edit_version_rel_paths)
+
+        saved_scanned = self._get_saved_scanned_libs(target_key)
+        saved_excluded = self._get_saved_exclude_libs(target_key)
+        initial_checked = bool(saved_excluded) or bool(
+            self._app_checked_exclude_libs.get(target_key)
+        )
+        exclude_container = QWidget()
+        exclude_main_layout = QVBoxLayout(exclude_container)
+        exclude_main_layout.setContentsMargins(0, 4, 0, 4)
+        exclude_main_layout.setSpacing(6)
+
+        exclude_header_row = QHBoxLayout()
+        exclude_header_row.setContentsMargins(0, 0, 0, 0)
+        exclude_header_row.setSpacing(8)
+
+        chk_exclude_enable = QCheckBox(self._format_exclude_header_text(initial_checked))
+        chk_exclude_enable.setChecked(initial_checked)
+        chk_exclude_enable.setToolTip("제외 라이브러리 기능 활성화 여부 (ENABLE / DISABLE)")
+
+        btn_rescan = QPushButton("RESCAN")
+        btn_rescan.setToolTip("앱 사용 라이브러리를 다시 스캔합니다.")
+        btn_rescan.clicked.connect(
+            lambda _checked=False, k=target_key: self.scan_app_libraries(k, show_warning=True)
+        )
+
+        header_line = QFrame()
+        header_line.setFrameShape(QFrame.Shape.HLine)
+        header_line.setFrameShadow(QFrame.Shadow.Sunken)
+
+        exclude_header_row.addWidget(chk_exclude_enable)
+        exclude_header_row.addWidget(btn_rescan)
+        exclude_header_row.addWidget(header_line, stretch=1)
+
+        exclude_body = QWidget()
+        exclude_body.setEnabled(initial_checked)
+        exclude_grid = QGridLayout(exclude_body)
+        exclude_grid.setContentsMargins(16, 4, 2, 2)
+        exclude_grid.setHorizontalSpacing(14)
+        exclude_grid.setVerticalSpacing(6)
+
+        exclude_main_layout.addLayout(exclude_header_row)
+        exclude_main_layout.addWidget(exclude_body)
+
+        app_form.addRow(exclude_container)
+
+        self._app_exclude_groups[target_key] = exclude_container
+        self._app_exclude_enable_checks[target_key] = chk_exclude_enable
+        self._app_exclude_body_containers[target_key] = exclude_body
+        self._app_exclude_layouts[target_key] = exclude_grid
+        self._app_exclude_checkboxes[target_key] = {}
+        self._app_scanned_libs.setdefault(target_key, [])
+        self._app_checked_exclude_libs.setdefault(target_key, set(saved_excluded))
+
+        chk_exclude_enable.toggled.connect(
+            lambda checked, k=target_key: self._on_exclude_group_toggled(k, checked)
+        )
+
+        merged_initial = sorted(
+            set(self._app_scanned_libs.get(target_key, []))
+            | set(saved_scanned)
+            | set(saved_excluded)
+            | set(self._app_checked_exclude_libs.get(target_key, set()))
+        )
+        if merged_initial:
+            self._app_scanned_libs[target_key] = merged_initial
+            self._populate_exclude_checkboxes(target_key, merged_initial)
+
         app_form.addRow("빌드 테스트", chk_run_test)
         app_form.addRow("산출물 정리", clean_row)
 
@@ -903,6 +1521,14 @@ class BuildTargetConfigTab(QWidget):
         )
         prev_inst_targets = self._get_checked_installer_targets()
 
+        prev_group_checked: dict[str, bool] = {
+            k: chk.isChecked() for k, chk in self._app_exclude_enable_checks.items()
+        }
+        for k in list(self._app_exclude_checkboxes.keys()):
+            cur_checked = self._get_checked_names_from_widgets(k)
+            if cur_checked:
+                self._app_checked_exclude_libs[k] = cur_checked
+
         self.sub_tabs.blockSignals(True)
         while self.sub_tabs.count() > 0:
             widget = self.sub_tabs.widget(self.sub_tabs.count() - 1)
@@ -914,9 +1540,22 @@ class BuildTargetConfigTab(QWidget):
         self._app_spec_labels.clear()
         self._app_tab_index_to_key.clear()
         self._app_key_to_tab_index.clear()
+        self._app_exclude_groups.clear()
+        self._app_exclude_enable_checks.clear()
+        self._app_exclude_body_containers.clear()
+        self._app_exclude_layouts.clear()
+        self._app_exclude_all_checkboxes.clear()
+        self._app_exclude_checkboxes.clear()
 
         for key in TargetConfig.ordered_keys():
             tab_widget = self._create_single_app_tab(key)
+            if key in prev_group_checked and key in self._app_exclude_enable_checks:
+                chk = self._app_exclude_enable_checks[key]
+                is_checked = prev_group_checked[key]
+                chk.blockSignals(True)
+                chk.setChecked(is_checked)
+                chk.blockSignals(False)
+                self._refresh_exclude_header_state(key, is_checked)
             idx = self.sub_tabs.addTab(tab_widget, self._format_app_tab_title(key))
             self._app_tab_index_to_key[idx] = key
             self._app_key_to_tab_index[key] = idx
@@ -930,7 +1569,9 @@ class BuildTargetConfigTab(QWidget):
 
         if self._installer_target_checkboxes:
             self._rebuild_installer_target_checkboxes(
-                prev_inst_targets if prev_inst_targets is not None else self._installer_config.targets
+                prev_inst_targets
+                if prev_inst_targets is not None
+                else self._installer_config.targets
             )
 
         if prev_key and prev_key in self._app_key_to_tab_index:
@@ -940,6 +1581,14 @@ class BuildTargetConfigTab(QWidget):
         elif self.sub_tabs.count() > 0:
             self.sub_tabs.setCurrentIndex(0)
         self.sub_tabs.blockSignals(False)
+
+        if self.isVisible():
+            active_idx = self.sub_tabs.currentIndex()
+            active_key = self._app_tab_index_to_key.get(active_idx)
+            if active_key and not self._has_saved_exclude_data(active_key):
+                self.request_lazy_app_scan(
+                    active_key, priority=TaskPriority.LOW, show_warning=False
+                )
 
     def _refresh_app_tab_titles(self) -> None:
         for idx, key in self._app_tab_index_to_key.items():
@@ -994,8 +1643,9 @@ class BuildTargetConfigTab(QWidget):
         if spec:
             if summary_label is not None:
                 summary_label.setText(
-                    f"현재 스펙: order={spec.order}, label={spec.label}, exe={spec.exe_name}, "
-                    f"console={spec.console}, dirs={_join_list_field(spec.dir_hints)}"
+                    f"현재 스펙: order={spec.order}, label={spec.label},"
+                    f" exe={spec.exe_name}, console={spec.console},"
+                    f" dirs={_join_list_field(spec.dir_hints)}"
                 )
             inputs["label"].setText(str(ov.get("label") or spec.label))
             inputs["exe_name"].setText(str(ov.get("exe_name") or spec.exe_name))
@@ -1090,7 +1740,11 @@ class BuildTargetConfigTab(QWidget):
             elif not items and list_field in self._app_overrides.get(target_key, {}):
                 patch[list_field] = None
 
-        allowed = set(APP_OVERRIDE_FIELDS) | set(CLEAN_OPTION_FIELDS) | {TEST_OPTION_FIELD}
+        allowed = (
+            set(APP_OVERRIDE_FIELDS)
+            | set(CLEAN_OPTION_FIELDS)
+            | {TEST_OPTION_FIELD, EXCLUDE_LIBS_FIELD, SCANNED_LIBS_FIELD}
+        )
         filtered = {k: v for k, v in patch.items() if k in allowed}
 
         default_test = bool(getattr(spec, TEST_OPTION_FIELD, False)) if spec else False
@@ -1105,6 +1759,32 @@ class BuildTargetConfigTab(QWidget):
             if val != default_clean or field in self._app_overrides.get(target_key, {}):
                 filtered[field] = val
 
+        chk_map = self._app_exclude_checkboxes.get(target_key) or {}
+        if chk_map:
+            excluded = self.get_excluded_libraries(target_key)
+            scanned = sorted(
+                set(chk_map.keys())
+                | set(self._app_scanned_libs.get(target_key, []))
+                | set(excluded)
+            )
+        else:
+            excluded = (
+                sorted(self._app_checked_exclude_libs.get(target_key, set()))
+                if self.is_exclude_enabled(target_key)
+                else []
+            )
+            scanned = sorted(set(self._app_scanned_libs.get(target_key, [])) | set(excluded))
+
+        if scanned:
+            filtered[SCANNED_LIBS_FIELD] = scanned
+        elif SCANNED_LIBS_FIELD in self._app_overrides.get(target_key, {}):
+            filtered[SCANNED_LIBS_FIELD] = []
+
+        if excluded:
+            filtered[EXCLUDE_LIBS_FIELD] = excluded
+        elif EXCLUDE_LIBS_FIELD in self._app_overrides.get(target_key, {}):
+            filtered[EXCLUDE_LIBS_FIELD] = []
+
         return filtered
 
     def _stage_app_state(self, target_key: str) -> None:
@@ -1117,6 +1797,29 @@ class BuildTargetConfigTab(QWidget):
         clean_opts = self._collect_app_clean_options(target_key)
         self._app_clean_options[target_key] = clean_opts
 
+        chk_map = self._app_exclude_checkboxes.get(target_key) or {}
+        if chk_map:
+            self._app_checked_exclude_libs[target_key] = self._get_checked_names_from_widgets(
+                target_key
+            )
+            merged_scanned = sorted(
+                set(chk_map.keys())
+                | set(self._app_scanned_libs.get(target_key, []))
+                | set(self._app_checked_exclude_libs.get(target_key, set()))
+            )
+            self._app_scanned_libs[target_key] = merged_scanned
+        else:
+            merged_scanned = sorted(
+                set(self._app_scanned_libs.get(target_key, []))
+                | set(self._app_checked_exclude_libs.get(target_key, set()))
+            )
+
+        excluded = (
+            sorted(self._app_checked_exclude_libs.get(target_key, set()))
+            if self.is_exclude_enabled(target_key)
+            else []
+        )
+
         patch = self._collect_app_patch(target_key)
         bucket = dict(self._app_overrides.get(target_key, {}))
         for k, v in patch.items():
@@ -1124,6 +1827,17 @@ class BuildTargetConfigTab(QWidget):
                 bucket.pop(k, None)
             else:
                 bucket[k] = v
+
+        if merged_scanned:
+            bucket[SCANNED_LIBS_FIELD] = merged_scanned
+        else:
+            bucket.pop(SCANNED_LIBS_FIELD, None)
+
+        if excluded:
+            bucket[EXCLUDE_LIBS_FIELD] = excluded
+        else:
+            bucket.pop(EXCLUDE_LIBS_FIELD, None)
+
         if bump_unit is not None:
             bucket["bump_unit"] = bump_unit
         else:
@@ -1159,9 +1873,12 @@ class BuildTargetConfigTab(QWidget):
         if emit_signal:
             self.config_changed.emit(self.get_current_config_payload())
 
-    def _on_sub_tab_changed(self, _index: int) -> None:
+    def _on_sub_tab_changed(self, index: int) -> None:
         self._stage_all_tabs_state()
         self._refresh_app_tab_titles()
+        target_key = self._app_tab_index_to_key.get(index)
+        if target_key and not self._has_saved_exclude_data(target_key):
+            self.request_lazy_app_scan(target_key, priority=TaskPriority.LOW, show_warning=False)
 
     def _on_apply_installer(self) -> None:
         self.mark_installer_configured()
@@ -1179,9 +1896,16 @@ class BuildTargetConfigTab(QWidget):
         self._app_overrides.pop(target_key, None)
         self._app_bump_units[target_key] = None
         self._app_test_options[target_key] = False
-        self._app_clean_options[target_key] = {
-            field: False for field in CLEAN_OPTION_FIELDS
-        }
+        self._app_clean_options[target_key] = {field: False for field in CLEAN_OPTION_FIELDS}
+        self._app_checked_exclude_libs[target_key] = set()
+        if target_key in self._app_exclude_enable_checks:
+            chk = self._app_exclude_enable_checks[target_key]
+            chk.blockSignals(True)
+            chk.setChecked(False)
+            chk.blockSignals(False)
+            self._refresh_exclude_header_state(target_key, False)
+        if target_key in self._app_scanned_libs:
+            self._populate_exclude_checkboxes(target_key, self._app_scanned_libs[target_key])
         self.save_to_ini(self.config_path, silent=True, emit_signal=True)
 
     def reload_from_targets(self) -> None:
@@ -1196,6 +1920,8 @@ class BuildTargetConfigTab(QWidget):
             key: {field: False for field in CLEAN_OPTION_FIELDS}
             for key in TargetConfig.ordered_keys()
         }
+        self._app_scanned_libs = {key: [] for key in TargetConfig.ordered_keys()}
+        self._app_checked_exclude_libs = {key: set() for key in TargetConfig.ordered_keys()}
         self._installer_config = InstallerBuildConfig()
         TargetConfig.configure(project_root=self.project_root, reset=True)
         dcfg = TargetConfig.get_dir_config(self.project_root)
@@ -1215,6 +1941,12 @@ class BuildTargetConfigTab(QWidget):
             "app_bump_units": self.get_app_bump_units(),
             "app_test_options": self.get_app_test_options(),
             "app_clean_options": self.get_app_clean_options(),
+            "app_scanned_libs": {
+                k: list(self._app_scanned_libs.get(k, [])) for k in TargetConfig.ordered_keys()
+            },
+            "app_excluded_libs": {
+                k: self.get_excluded_libraries(k) for k in TargetConfig.ordered_keys()
+            },
             "installer_config": self._collect_installer_config().to_dict(),
         }
 
@@ -1377,10 +2109,12 @@ class BuildTargetConfigTab(QWidget):
                 p = Path(str(rel))
                 candidates.append(p if p.is_absolute() else (self.project_root / p))
 
-        candidates.extend([
-            self.project_root / SRC_DIR_NAME / target_key / VERSION_FILE_NAME,
-            self.project_root / target_key / VERSION_FILE_NAME,
-        ])
+        candidates.extend(
+            [
+                self.project_root / SRC_DIR_NAME / target_key / VERSION_FILE_NAME,
+                self.project_root / target_key / VERSION_FILE_NAME,
+            ]
+        )
 
         seen: set[Path] = set()
         for cand in candidates:

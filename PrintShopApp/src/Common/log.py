@@ -30,12 +30,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-#from Common.log_config import LogConfig, log_config_instance
+# from Common.log_config import LogConfig, log_config_instance
 from Common.path_mgr import PathMgr
 
 try:
     from shiboken6 import isValid as _qt_is_valid  # type: ignore
 except Exception:
+
     def _qt_is_valid(_obj: Any) -> bool:
         return True
 
@@ -43,7 +44,7 @@ except Exception:
 DEFAULT_LOG_FILE = "system.log"
 DEFAULT_LOG_ALL_FILE = "log_all.log"
 DEFAULT_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
-DEFAULT_TAG_WIDTH = 10  # [PRIO_QUEUE] 기준 10자 + 여유 2자
+DEFAULT_TAG_WIDTH = 12  # [PRIO_QUEUE] 기준 10자 + 여유 2자
 DEFAULT_LOG_COLORS = {
     "DEBUG": "cyan",
     "INFO": "green",
@@ -51,24 +52,27 @@ DEFAULT_LOG_COLORS = {
     "ERROR": "red",
     "CRITICAL": "bold_red",
 }
-FALLBACK_LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(fixed_path)s | [%(fixed_tag)s] | %(message)s"
+FALLBACK_LOG_FORMAT = (
+    "%(asctime)s | %(levelname)-8s | %(fixed_path)s | [%(fixed_tag)s] | %(message)s"
+)
 
-_COLOR_NAME_TO_QCOLOR: dict[str, QColor] = {
-    "black": QColor("#343a40"),
-    "red": QColor("#ff6b6b"),
-    "green": QColor("#51cf66"),
-    "yellow": QColor("#fcc419"),
-    "blue": QColor("#4dabf7"),
-    "purple": QColor("#cc5de8"),
-    "magenta": QColor("#cc5de8"),
-    "cyan": QColor("#3bc9db"),
-    "white": QColor("#f8f9fa"),
-    "light_gray": QColor("#adb5bd"),
-    "dark_gray": QColor("#868e96"),
+COLOR_NAME_TO_HEX: dict[str, str] = {
+    "black": "#343a40",
+    "red": "#ff6b6b",
+    "green": "#51cf66",
+    "yellow": "#fcc419",
+    "blue": "#4dabf7",
+    "purple": "#cc5de8",
+    "magenta": "#cc5de8",
+    "cyan": "#3bc9db",
+    "white": "#f8f9fa",
+    "light_gray": "#adb5bd",
+    "dark_gray": "#868e96",
 }
 
-def _build_format_from_color_spec(color_spec: str) -> QTextCharFormat:
-    fmt = QTextCharFormat()
+
+def parse_color_spec(color_spec: str) -> tuple[str | None, bool]:
+    """'bold_red', 'cyan' 등을 (hex_str, is_bold)로 파싱합니다."""
     raw = (color_spec or "").strip().lower()
     is_bold = False
 
@@ -76,12 +80,53 @@ def _build_format_from_color_spec(color_spec: str) -> QTextCharFormat:
         is_bold = True
         raw = raw[len("bold_") :]
 
-    qcolor = _COLOR_NAME_TO_QCOLOR.get(raw)
-    if qcolor is not None:
-        fmt.setForeground(qcolor)
+    hex_color = COLOR_NAME_TO_HEX.get(raw)
+    return hex_color, is_bold
+
+
+from PySide6.QtGui import QColor, QFont, QTextCharFormat
+
+
+def _build_format_from_color_spec(color_spec: str) -> QTextCharFormat:
+    fmt = QTextCharFormat()
+    hex_color, is_bold = parse_color_spec(color_spec)
+
+    if hex_color is not None:
+        fmt.setForeground(QColor(hex_color))
     if is_bold:
         fmt.setFontWeight(QFont.Weight.Bold)
     return fmt
+
+
+# _COLOR_NAME_TO_QCOLOR: dict[str, QColor] = {
+#     "black": QColor("#343a40"),
+#     "red": QColor("#ff6b6b"),
+#     "green": QColor("#51cf66"),
+#     "yellow": QColor("#fcc419"),
+#     "blue": QColor("#4dabf7"),
+#     "purple": QColor("#cc5de8"),
+#     "magenta": QColor("#cc5de8"),
+#     "cyan": QColor("#3bc9db"),
+#     "white": QColor("#f8f9fa"),
+#     "light_gray": QColor("#adb5bd"),
+#     "dark_gray": QColor("#868e96"),
+# }
+
+# def _build_format_from_color_spec(color_spec: str) -> QTextCharFormat:
+#     fmt = QTextCharFormat()
+#     raw = (color_spec or "").strip().lower()
+#     is_bold = False
+
+#     if raw.startswith("bold_"):
+#         is_bold = True
+#         raw = raw[len("bold_") :]
+
+#     qcolor = _COLOR_NAME_TO_QCOLOR.get(raw)
+#     if qcolor is not None:
+#         fmt.setForeground(qcolor)
+#     if is_bold:
+#         fmt.setFontWeight(QFont.Weight.Bold)
+#     return fmt
 
 
 # ==============================================================================
@@ -204,6 +249,7 @@ def _populate_record_location_and_tag(record: logging.LogRecord) -> None:
     if not hasattr(record, "tag") or not getattr(record, "tag"):
         record.tag = LogTag.DEFAULT
     from Common.log_config import log_config_instance
+
     path_style = log_config_instance.get("path_style")
     fixed_width = log_config_instance.get("fixed_width_size")
     do_tabular = bool(log_config_instance.get("enable_tabular_alignment"))
@@ -252,6 +298,7 @@ def _resolve_safe_format_string() -> str:
     """log_config_instance에서 포맷 문자열을 조회하고 비어 있으면 기본 포맷을 반환."""
     try:
         from Common.log_config import log_config_instance
+
         fmt = log_config_instance.build_format_string()
         if isinstance(fmt, str) and fmt.strip():
             return fmt
@@ -641,7 +688,9 @@ class WindowLogColorHandlerBase(WindowLogHandlerBase):
                     merged[k.strip().upper()] = v.strip()
         return merged
 
-    def set_log_colors(self, extra_colors: dict[str, str], *, reset_to_default: bool = False) -> None:
+    def set_log_colors(
+        self, extra_colors: dict[str, str], *, reset_to_default: bool = False
+    ) -> None:
         """기존 색상을 유지하거나 초기화한 뒤 추가/재정의 색상을 반영."""
         base = dict(DEFAULT_LOG_COLORS) if reset_to_default else dict(self._log_colors)
         for k, v in extra_colors.items():
@@ -799,6 +848,7 @@ class LoggerManager:
         self.file_handler_color: PeriodicFlushFileHandler | None = None
 
         from Common.log_config import log_config_instance
+
         default_fmt = log_config_instance.build_format_string()
         self.default_individual_format = individual_format or default_fmt
         self.default_global_format = global_format or default_fmt
@@ -831,6 +881,7 @@ class LoggerManager:
             return
 
         from Common.log_config import log_config_instance
+
         initial_global_fmt = log_config_instance.build_format_string()
         enable_global = log_config_instance.get("enable_global_log")
         enable_global_color = log_config_instance.get("enable_global_color_file")
@@ -1101,6 +1152,7 @@ class LoggerManager:
     @classmethod
     def update_all_logger_formats(cls) -> None:
         from Common.log_config import log_config_instance
+
         new_fmt = log_config_instance.build_format_string()
 
         if cls._global_normal_handler:
@@ -1232,6 +1284,7 @@ def logd(message: str, mod: Any = None, level: str = "debug") -> None:
     if _shared_logger is None:
         setup_global_log()
     from Common.log_config import log_config_instance
+
     if not log_config_instance.is_level_enabled(level):
         return
 
@@ -1291,6 +1344,7 @@ def loge(message: str, tag: Any = None, level: str = "error", sound: bool = True
     if sound and level in ("error", "critical"):
         try:
             from Common.sound import play_error_alert_sound
+
             play_error_alert_sound()
         except Exception:
             pass

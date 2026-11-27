@@ -1,5 +1,5 @@
 """
-빌드 환경(Python, pyside6-uic) 탐색, .ui -> .py 변환 및 빌드된 EXE 경로 해석 모듈 (env_ui_helper.py)
+빌드 환경(Python, pyside6-uic) 탐색, .ui -> *_ui.py 변환 및 빌드된 EXE 경로 해석 모듈 (env_ui_helper.py)
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ UIC_MODULE_NAME: str = "PySide6.scripts.uic"
 
 UI_FILE_EXTENSION: str = ".ui"
 PY_FILE_EXTENSION: str = ".py"
+UI_GENERATED_SUFFIX: str = "_ui"
 
 IGNORE_UI_WALK_DIRS: frozenset[str] = frozenset(
     {
@@ -48,13 +49,20 @@ __all__ = [
     "UIC_MODULE_NAME",
     "UIC_WINDOWS_EXE_NAME",
     "UI_FILE_EXTENSION",
+    "UI_GENERATED_SUFFIX",
     "VENV_DIR_NAMES",
     "WINDOWS_SCRIPTS_DIR_NAME",
     "convert_ui_files",
     "find_pyside6_uic",
     "resolve_built_exe_path",
     "resolve_python_executable",
+    "resolve_ui_output_py_path",
 ]
+
+
+def resolve_ui_output_py_path(ui_path: Path) -> Path:
+    """원본 .ui 경로를 기준으로 `<stem>_ui.py` 출력 경로를 반환합니다."""
+    return ui_path.with_name(f"{ui_path.stem}{UI_GENERATED_SUFFIX}{PY_FILE_EXTENSION}")
 
 
 def resolve_python_executable(project_root: str) -> str:
@@ -121,11 +129,11 @@ def convert_ui_files(
     for ui_path in ui_files:
         if any(part in IGNORE_UI_WALK_DIRS for part in ui_path.parts):
             continue
-        py_path = ui_path.with_suffix(PY_FILE_EXTENSION)
+        py_path = resolve_ui_output_py_path(ui_path)
         if not py_path.exists() or ui_path.stat().st_mtime > py_path.stat().st_mtime:
             if not uic_cmd:
                 if not skipped_tool:
-                    logd("  ⚠️ pyside6-uic 도구를 찾지 못해 .ui -> .py 자동 변환을 건너뜁니다.")
+                    logd("  ⚠️ pyside6-uic 도구를 찾지 못해 .ui -> *_ui.py 자동 변환을 건너뜁니다.")
                     skipped_tool = True
                 continue
             cmd = [*uic_cmd, str(ui_path), "-o", str(py_path)]
